@@ -16,10 +16,14 @@ tiers:
   # ---------------------------------------------------------------- T1
   t1_local_small:
     kind: ollama
-    model: qwen2.5:3b-instruct-q4_K_M
+    # Chosen by measurement, not reputation: run `specalive models` and use the winner.
+    # ~2.6 GB quantised, so it fits entirely on a 4 GB card with room for an 8K KV cache.
+    # Fitting fully in VRAM matters more than parameter count here -- a 7B that spills to
+    # CPU runs ~4x slower, and our workload is hundreds of short batched extractions.
+    model: qwen3:4b
+    fallback_models: [qwen2.5:3b-instruct-q4_K_M, llama3.2:3b]
     base_url: http://localhost:11434
     context: 8192
-    # ~2.0 GB quantised; fits entirely on a 4 GB Quadro T1000.
     structured_output: json_schema
     max_tokens: 2048
     timeout_s: 120

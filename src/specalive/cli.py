@@ -221,14 +221,19 @@ def bench(
     provider: str = typer.Option("auto"),
     only: Optional[str] = typer.Option(None, help="Run just this benchmark"),
 ) -> None:
-    """Run every benchmark packet and print the pass-rate matrix.
+    """Run every benchmark packet and check it against its own declared expectations.
 
-    This is the evidence that the system is domain-general rather than tuned to one packet.
+    This is the evidence that the system is domain-general rather than tuned to one packet,
+    so the matrix has to be trustworthy. An empty packet directory is reported as NO PACKET,
+    never as a pass: a model built from nothing compiles trivially, and a green cell that
+    means nothing is worse than a red one.
     """
     import yaml
 
-    rows = []
-    for d in sorted(p for p in root.iterdir() if p.is_dir()):
+    rows: list[list[str]] = []
+    failures: list[str] = []
+
+    for d in sorted(x for x in root.iterdir() if x.is_dir()):
         if only and d.name != only:
             continue
         spec_path = d / "expectations.yaml"
@@ -236,10 +241,12 @@ def bench(
             con.print(f"[dim]skip[/] {d.name} (no expectations.yaml)")
             continue
         spec = yaml.safe_load(spec_path.read_text(encoding="utf-8")) or {}
-        packet = d / spec.get("packet", "sources")
-        if not packet.exists():
-            con.print(f"[yellow]skip[/] {d.name}: packet path {packet} does not exist")
-            rows.append([d.name, "-", "-", "-", "packet missing"])
+        expect = spec.get("expect") or {}
+        packet = (d / spec.get("packet", "sources")).resolve()
+
+        if not packet.exists() or not any(p.is_file() for p in packet.rglob("*")):
+            con.print(f"[yellow]--[/] {d.name}: no packet yet at {packet}")
+            rows.append([d.name, "-", "-", "-", "[yellow]NO PACKET[/]", spec.get("domain", "")])
             continue
 
         con.print(f"\n[bold]{d.name}[/]")
@@ -254,24 +261,157 @@ def bench(
         )
         res = Pipeline(cfg, _router(provider)).run(on_event=_print)
         card = res.scorecard
+
+        problems = _check_expectations(d.name, expect, res, card)
+        failures.extend(problems)
         rows.append([
             d.name,
             "yes" if res.gate.get("compiled") else "no",
             "yes" if res.gate.get("simulated") else "no",
             f"{card.passed}/{card.total}" if card else "-",
+            "[green]PASS[/]" if not problems else "[red]FAIL[/]",
             spec.get("domain", ""),
         ])
 
     t = Table(title="Benchmark matrix")
-    for c in ("Packet", "Compiles", "Simulates", "Acceptance", "Domain"):
-        t.add_column(c)
+    for c in ("Packet", "Compiles", "Simulates", "Acceptance", "Verdict", "Domain"):
+        t.add_column(c, overflow="fold")
     for r in rows:
-        style = "green" if r[1] == "yes" and r[2] == "yes" else "red"
-        t.add_row(f"[{style}]{r[0]}[/]", *[str(x) for x in r[1:]])
+        t.add_row(*r)
     con.print()
     con.print(t)
-    if any(r[1] != "yes" or r[2] != "yes" for r in rows):
+
+    if failures:
+        con.print("\n[red]Benchmark failures:[/]")
+        for f in failures:
+            con.print(f"  - {f}")
         raise typer.Exit(1)
+
+    ready = sum(1 for r in rows if "NO PACKET" not in r[4])
+    if ready < len(rows):
+        con.print(
+            f"\n[yellow]{len(rows) - ready} of {len(rows)} benchmark(s) have no packet yet.[/] "
+            "Generality is not proven until they do."
+        )
+
+
+def _check_expectations(name, expect, res, card) -> list[str]:
+    """Compare a run against the `expect:` block. Silence means the benchmark held."""
+    out: list[str] = []
+    if expect.get("compiles") and not res.gate.get("compiled"):
+        out.append(f"{name}: expected to compile, did not")
+    if expect.get("simulates") and not res.gate.get("simulated"):
+        out.append(f"{name}: expected to simulate, did not")
+
+    if card is None:
+        return out
+
+    minimum = expect.get("acceptance_min")
+    if minimum is not None and card.passed < minimum:
+        out.append(f"{name}: {card.passed} acceptance checks passed, expected at least {minimum}")
+
+    total = expect.get("acceptance_total")
+    if total is not None and card.total != total:
+        out.append(
+            f"{name}: {card.total} acceptance checks ran, expected {total} "
+            "(a check was lost or added -- update expectations.yaml deliberately)"
+        )
+
+    # A known failure that starts passing is also news: either we fixed something real, or
+    # the check stopped testing what it used to.
+    known = set(expect.get("known_failures") or [])
+    actually_failed = {r.check_id for r in card.results if not r.passed}
+    for unexpected in sorted(actually_failed - known):
+        out.append(f"{name}: unexpected acceptance failure {unexpected}")
+    for fixed in sorted(known - actually_failed):
+        out.append(
+            f"{name}: {fixed} was listed as a known failure but passed -- confirm why, "
+            "then remove it from expectations.yaml"
+        )
+    return out
+
+
+# ---------------------------------------------------------------------------------- models
+
+
+@app.command()
+def models(
+    catalog: Path = typer.Option(Path("out/catalog.jsonl")),
+    base_url: str = typer.Option("http://localhost:11434"),
+    only: Optional[str] = typer.Option(None, help="Bench just this model tag"),
+) -> None:
+    """Measure which installed local model is best on OUR tasks, on THIS machine.
+
+    Public leaderboards rank general ability. We need two narrow things: fill a JSON schema
+    from a paragraph without inventing anything, and pick the right entry from eight
+    candidates. A model that fits entirely in VRAM often beats a larger one that spills to
+    CPU, so the only honest answer is a measurement.
+    """
+    from .llm.bakeoff import CANDIDATES, USABLE_VRAM_GB, bake_off, recommend
+
+    cands = [c for c in CANDIDATES if not only or c["tag"] == only]
+    if not cands:
+        con.print(f"[red]unknown model tag[/] {only}")
+        raise typer.Exit(1)
+
+    probe = __import__("httpx").Client(timeout=2.0)
+    try:
+        probe.get(f"{base_url}/api/tags")
+    except Exception:
+        con.print("[red]Ollama is not reachable[/] at " + base_url)
+        con.print("\nInstall it, then pull a model:\n")
+        con.print("  winget install Ollama.Ollama")
+        con.print("  ollama pull qwen3:4b")
+        con.print("  ollama pull nomic-embed-text")
+        raise typer.Exit(1)
+    finally:
+        probe.close()
+
+    con.print(
+        f"benching {len(cands)} candidate(s) on 5 extraction + up to 6 catalog-pick tasks; "
+        f"usable VRAM assumed {USABLE_VRAM_GB} GB\n"
+    )
+    results = bake_off(
+        cands,
+        catalog_path=catalog,
+        base_url=base_url,
+        on_progress=lambda r: con.print(
+            f"  {'[dim]skip[/]' if not r.installed else '[green]done[/]'} {r.tag:34s} "
+            + ("" if not r.installed else f"{r.verdict():>4}  {r.tokens_per_s:5.0f} tok/s")
+        ),
+    )
+
+    t = Table(title="Local model bake-off")
+    for c in ("Model", "Installed", "Fits 4GB", "Extraction", "Catalog pick", "tok/s", "Latency"):
+        t.add_column(c)
+    for r in sorted(results, key=lambda x: (-x.accuracy, not x.fits_vram)):
+        if not r.installed:
+            t.add_row(r.tag, "[dim]no[/]", "yes" if r.fits_vram else "[yellow]no[/]",
+                      "-", "-", "-", "-")
+            continue
+        t.add_row(
+            r.tag,
+            "yes",
+            "yes" if r.fits_vram else "[yellow]no[/]",
+            f"{r.extract_pass}/{r.extract_total}",
+            f"{r.pick_pass}/{r.pick_total}" if r.pick_total else "[dim]no catalog[/]",
+            f"{r.tokens_per_s:.0f}",
+            f"{r.mean_latency_s:.1f}s",
+        )
+    con.print()
+    con.print(t)
+    con.print(f"\n[bold]{recommend(results)}[/]")
+
+    worst = [r for r in results if r.installed and r.errors]
+    for r in worst[:2]:
+        con.print(f"\n[dim]{r.tag} failures:[/]")
+        for e in r.errors[:4]:
+            con.print(f"  [dim]{e}[/]")
+
+    con.print(
+        "\n[dim]Set the winner as t1_local_small.model in config/models.yaml, "
+        "then re-run `specalive doctor`.[/]"
+    )
 
 
 # ----------------------------------------------------------------------------------- serve
