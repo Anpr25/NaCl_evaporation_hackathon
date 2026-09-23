@@ -1,0 +1,30 @@
+@startuml
+title Legacy Evaporation Plant Architecture - Draft
+component B1
+component B2
+component B3
+component B4
+component B5
+component B6
+component B7
+component K1
+component P1
+component P2
+component Controller
+B1 --> B3 : V8
+B2 --> B3 : V9
+B3 --> B4 : V11
+B4 --> B5 : V12
+B5 --> K1 : vapor
+K1 --> B6 : condensate
+B5 --> B7 : V15
+B7 --> P1
+B6 --> P2
+Controller ..> B3 : LIS301/QI302
+Controller ..> B5 : LIS501/QIS502
+note right of Controller
+  Junction volumes omitted.
+  Cooling-water interfaces omitted.
+  Return-header destinations unresolved.
+end note
+@enduml

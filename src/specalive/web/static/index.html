@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SpecAlive</title>
+<style>
+:root{--bg:#fff;--fg:#14161a;--mut:#5b6472;--line:#e3e6ea;--ok:#10725a;--bad:#a3282d;
+--warn:#8a5a00;--acc:#1d4ed8;--code:#f6f7f9;--card:#fff;}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#0f1115;--fg:#e6e8ec;
+--mut:#9aa3b2;--line:#252a33;--ok:#4ade80;--bad:#f87171;--warn:#fbbf24;--acc:#7aa2ff;
+--code:#161a21;--card:#151921;}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:15px/1.6 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.wrap{max-width:900px;margin:0 auto;padding:36px 16px 80px}
+h1{font-size:1.8rem;margin:0}
+.sub{color:var(--mut);margin:.3em 0 2em}
+.panel{border:1px solid var(--line);border-radius:12px;padding:18px;background:var(--card);
+margin-bottom:18px}
+label{display:block;font-size:.78rem;letter-spacing:.05em;text-transform:uppercase;
+color:var(--mut);margin-bottom:6px}
+input[type=text],input[type=file]{width:100%;padding:9px 11px;border:1px solid var(--line);
+border-radius:8px;background:var(--bg);color:var(--fg);font-size:.9rem;margin-bottom:14px}
+button{background:var(--acc);color:#fff;border:0;border-radius:8px;padding:10px 20px;
+font-size:.92rem;font-weight:600;cursor:pointer}
+button:disabled{opacity:.5;cursor:not-allowed}
+.row{display:flex;gap:14px;flex-wrap:wrap}.row>*{flex:1 1 240px}
+ol.stages{list-style:none;padding:0;margin:0}
+ol.stages li{display:flex;gap:12px;align-items:baseline;padding:7px 0;
+border-bottom:1px solid var(--line)}
+ol.stages li:last-child{border-bottom:0}
+.tag{flex:0 0 78px;font-size:.7rem;letter-spacing:.06em;text-transform:uppercase;
+font-weight:700}
+.name{flex:0 0 96px;font-weight:600;font-size:.9rem}
+.msg{color:var(--mut);font-size:.88rem;word-break:break-word}
+.s-ok{color:var(--ok)}.s-fail{color:var(--bad)}.s-warn{color:var(--warn)}
+.s-skip{color:var(--mut)}.s-start{color:var(--acc)}
+.pending{opacity:.35}
+.links a{display:inline-block;margin:6px 10px 0 0;padding:6px 12px;border:1px solid var(--line);
+border-radius:99px;font-size:.84rem;text-decoration:none;color:var(--acc)}
+.verdict{font-size:1.1rem;font-weight:650;margin-top:8px}
+.health{font-size:.8rem;color:var(--mut)}
+@media(max-width:600px){.name{flex-basis:80px}.tag{flex-basis:60px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>SpecAlive</h1>
+  <p class="sub">From specs to live engineering models. Drop an engineering packet in any
+  mix of formats; get SysML v2, executable Modelica, a simulation and a traceability report.</p>
+
+  <div class="panel">
+    <div class="health" id="health">checking environment...</div>
+  </div>
+
+  <form class="panel" id="form">
+    <div class="row">
+      <div>
+        <label for="files">Upload evidence files</label>
+        <input type="file" id="files" multiple>
+      </div>
+      <div>
+        <label for="packet">...or a packet directory already on this machine</label>
+        <input type="text" id="packet" placeholder="nacl_evaporation_sysmlv2_full_dataset">
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="ir">Reference IR (optional, skips extraction)</label>
+        <input type="text" id="ir" placeholder="benchmarks/nacl_evaporation/reference_ir.json">
+      </div>
+      <div>
+        <label for="trace">Reference trace (optional, screened before use)</label>
+        <input type="text" id="trace" placeholder="path/to/reference.csv">
+      </div>
+    </div>
+    <button type="submit" id="go">Run pipeline</button>
+  </form>
+
+  <div class="panel" id="progress" hidden>
+    <ol class="stages" id="stages"></ol>
+    <div class="verdict" id="verdict"></div>
+    <div class="links" id="links"></div>
+  </div>
+</div>
+
+<script>
+const STAGES = ["ingest","extract","reconcile","validate","sysml","modelica",
+                "compile","simulate","verify","report"];
+const LABEL = {ok:"ok", warn:"warn", fail:"fail", skip:"skip", start:"running"};
+
+const $ = (id) => document.getElementById(id);
+
+fetch("/api/health").then(r => r.json()).then(h => {
+  $("health").textContent =
+    (h.omc_ok ? "OpenModelica " + h.omc : "OpenModelica NOT FOUND - the hard gate cannot pass")
+    + "  |  catalog: " + h.catalog_classes + " classes"
+    + "  |  provider: " + h.provider;
+  $("health").className = "health " + (h.omc_ok ? "" : "s-fail");
+}).catch(() => { $("health").textContent = "backend unreachable"; });
+
+function resetStages() {
+  $("stages").innerHTML = STAGES.map(s =>
+    `<li id="st-${s}" class="pending"><span class="tag" id="tg-${s}">-</span>
+     <span class="name">${s}</span><span class="msg" id="ms-${s}"></span></li>`).join("");
+  $("verdict").textContent = "";
+  $("links").innerHTML = "";
+}
+
+function update(ev) {
+  const li = $("st-" + ev.stage);
+  if (!li) return;
+  li.classList.remove("pending");
+  const tag = $("tg-" + ev.stage);
+  tag.textContent = LABEL[ev.status] || ev.status;
+  tag.className = "tag s-" + ev.status;
+  if (ev.message) $("ms-" + ev.stage).textContent = ev.message;
+}
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("go").disabled = true;
+  $("progress").hidden = false;
+  resetStages();
+
+  const fd = new FormData();
+  for (const f of $("files").files) fd.append("files", f);
+  fd.append("packet_path", $("packet").value.trim());
+  fd.append("reference_ir", $("ir").value.trim());
+  fd.append("reference_trace", $("trace").value.trim());
+
+  let runId;
+  try {
+    const res = await fetch("/api/runs", {method: "POST", body: fd});
+    if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
+    runId = (await res.json()).run_id;
+  } catch (err) {
+    $("verdict").textContent = "Could not start: " + err.message;
+    $("verdict").className = "verdict s-fail";
+    $("go").disabled = false;
+    return;
+  }
+
+  const src = new EventSource(`/api/runs/${runId}/events`);
+  src.onmessage = (m) => {
+    const ev = JSON.parse(m.data);
+    if (ev.stage !== "done") { update(ev); return; }
+
+    src.close();
+    $("go").disabled = false;
+    const ok = ev.status === "ok";
+    const acc = ev.data && ev.data.acceptance;
+    $("verdict").textContent = ok
+      ? "Hard gate met: the model compiles and simulates."
+        + (acc ? `  Acceptance ${acc.passed}/${acc.total}.` : "")
+      : "Hard gate not met.";
+    $("verdict").className = "verdict " + (ok ? "s-ok" : "s-fail");
+
+    const arts = (ev.data && ev.data.artifacts) || {};
+    $("links").innerHTML = Object.entries(arts).map(([k, v]) => {
+      const name = v.replace(/\\/g, "/").split("/").pop();
+      return `<a href="/api/runs/${runId}/artifact/${name}" target="_blank">${k}</a>`;
+    }).join("");
+  };
+  src.onerror = () => {
+    src.close();
+    $("go").disabled = false;
+    if (!$("verdict").textContent) {
+      $("verdict").textContent = "Connection to the run was lost.";
+      $("verdict").className = "verdict s-fail";
+    }
+  };
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+2026-04-01 / simulation bench notes
+- StandardWater topology runs all the way past 2500 s.
+- WaterNaCl still gets ugly when a pump transition becomes active. Do NOT delete pump states.
+- Tiny solver steps around port-level crossing disappeared with hysteresis.
+- Q_up fix stopped B5 boil/no-boil switching.
+- Old notebook says B7 20 C; CR-017 says 25 C.
+- Physical K1 exists; combined B5/K1 is only a simulation abstraction.
+- P&ID shows more valves than the StateGraph. Determine ownership before generating controller ports.

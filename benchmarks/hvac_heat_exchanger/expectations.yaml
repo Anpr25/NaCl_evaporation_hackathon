@@ -1,0 +1,10 @@
+# TODO(D): drop the organisers' HVAC / heat-exchanger packet into sources/ and fill this in.
+# Closest neighbour to the NaCl case: exercises the same fluid + thermal path, so it mostly
+# tests that nothing was hard-coded to NaCl vocabulary.
+name: hvac_heat_exchanger
+domain: thermal + fluid
+packet: sources
+package: GeneratedPlant
+expect:
+  compiles: true
+  simulates: true

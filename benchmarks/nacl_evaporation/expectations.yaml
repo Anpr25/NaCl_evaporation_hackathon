@@ -1,0 +1,35 @@
+# Benchmark spec. `specalive bench` reads one of these per packet directory.
+name: nacl_evaporation
+domain: fluid + thermal + sequential control
+packet: ../../nacl_evaporation_sysmlv2_full_dataset
+
+# Supplying a reference IR exercises emission -> compile -> simulate -> verify without
+# depending on the extractor. Remove this line to run the full pipeline once A's extractor
+# lands; `specalive ir-diff` scores the extracted IR against the same file.
+reference_ir: reference_ir.json
+reference_trace: ../../nacl_evaporation_sysmlv2_full_dataset/09_datasets/10_batch_run_3000s.csv
+
+package: GeneratedPlant
+model: GeneratedPlant.BAT09
+stop_time: 3000
+
+expect:
+  compiles: true
+  simulates: true
+  # BAT09-04 is expected to fail: the 0.18 m B5 charge guard is unreachable from one B3 batch
+  # under a mass-consistent balance. See OPEN-ISSUE-01. A pass here would mean the physics
+  # went wrong, not that the model got better.
+  acceptance_min: 11
+  acceptance_total: 12
+  known_failures: [BAT09-04]
+  binding_tiers: {L0: 1, L1: 15, L2: 0, unbound: 0}
+
+traps:
+  - id: F1
+    fact: B7 cooling completion is 25 degC (CR-017), not the 20 degC in the legacy model
+  - id: F2
+    fact: B6 condensate returns to B1 via P2; B7 concentrate returns to B2 via P1
+  - id: F3
+    fact: K1 remains a distinct architectural part despite the legacy simulation merge
+  - id: F5
+    fact: exactly 15 of the 28 drawn valves are controller-owned

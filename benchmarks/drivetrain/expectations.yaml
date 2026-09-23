@@ -1,0 +1,12 @@
+# TODO(D): drop the organisers' drivetrain packet into sources/ and fill this in.
+# The generality proof: rotational mechanics shares no vocabulary, no connector type and no
+# L1 template with the NaCl case, so every block here must bind at L0 against the harvested
+# Modelica.Mechanics.Rotational catalog. If this one passes, the system is not NaCl-shaped.
+name: drivetrain
+domain: rotational + electrical
+packet: sources
+package: GeneratedPlant
+expect:
+  compiles: true
+  simulates: true
+  binding_tiers: {L0: ">=4"}

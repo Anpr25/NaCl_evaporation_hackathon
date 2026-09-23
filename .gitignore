@@ -1,0 +1,24 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# Generated artifacts. `out/catalog.jsonl` is machine-specific: rebuild with `specalive harvest`.
+out/
+!out/.gitkeep
+
+# omc build products
+*.o
+*.c
+*.h
+*.makefile
+*.libs
+*.log
+*_res.csv
+*_init.xml
+*_info.json
+
+# Keep the warmed replay cache: it is what makes the demo reproducible offline.
+# .specalive_cache/

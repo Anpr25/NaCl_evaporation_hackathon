@@ -1,0 +1,70 @@
+{
+  "coordinate_system": {
+    "origin": "south-west floor datum",
+    "units": "m",
+    "z_positive": "up"
+  },
+  "equipment": [
+    {
+      "tag": "B1",
+      "x": 1.8,
+      "y": 7.8,
+      "z_base": 4.8
+    },
+    {
+      "tag": "B2",
+      "x": 8.4,
+      "y": 7.8,
+      "z_base": 4.8
+    },
+    {
+      "tag": "B3",
+      "x": 5.1,
+      "y": 6.1,
+      "z_base": 3.5
+    },
+    {
+      "tag": "B4",
+      "x": 2.5,
+      "y": 4.5,
+      "z_base": 2.6
+    },
+    {
+      "tag": "B5",
+      "x": 3.2,
+      "y": 2.7,
+      "z_base": 1.5
+    },
+    {
+      "tag": "K1",
+      "x": 6.0,
+      "y": 4.1,
+      "z_base": 2.8
+    },
+    {
+      "tag": "B6",
+      "x": 8.3,
+      "y": 2.7,
+      "z_base": 1.5
+    },
+    {
+      "tag": "B7",
+      "x": 5.2,
+      "y": 1.6,
+      "z_base": 0.7
+    },
+    {
+      "tag": "P1",
+      "x": 1.3,
+      "y": 0.3,
+      "z_base": 0.0
+    },
+    {
+      "tag": "P2",
+      "x": 8.9,
+      "y": 0.3,
+      "z_base": 0.0
+    }
+  ],
+  "derived_modeling_note": "Approximate CAD/BIM export; use relative elevation for gravity pressure-drop constraints."
+}

@@ -1,0 +1,110 @@
+# SpecAlive evidence precedence policy.
+#
+# Domain-agnostic: it ranks *kinds of engineering record*, not NaCl-specific documents.
+# The reconciler applies these rules in order; the first rule that discriminates wins, and the
+# rule id is recorded in the DecisionRecord so every resolution is auditable.
+#
+# Owner: B (IR / reconcile). Consumed by src/specalive/reconcile/precedence.py.
+
+rules:
+
+  - id: P1-explicit-supersession
+    description: >
+      If a record explicitly names another as superseded (a "superseded by" field, a change
+      record that cites the record it replaces, or prose saying "supersedes"/"corrected by"),
+      the superseding record wins outright regardless of any other signal.
+    weight: 1000
+
+  - id: P2-approval-status
+    description: >
+      Approved and released records beat draft, archived, legacy and superseded ones.
+    order: [approved, released, current, effective, final, issued, draft, provisional, legacy, archived, superseded, obsolete]
+    weight: 900
+
+  - id: P3-authority-class
+    description: >
+      Rank by the class of document, not by how recent or polished it looks.
+    order:
+      - change_record        # CR / ECN / deviation notice - the sharpest instrument
+      - approved_review      # design review minutes, gate decisions
+      - interface_control    # ICD, frozen interface definitions
+      - specification        # URS, PRS, design specification
+      - datasheet            # supplier data, nameplate
+      - register             # compiled schedules and registers
+      - test_procedure       # acceptance test definition
+      - drawing              # P&ID, schematic, GA
+      - legacy_model         # existing code or model artefacts
+      - test_result          # measured or simulated data
+      - correspondence       # email, chat, tickets
+      - informal_note        # lab notebook, loose notes, handwriting
+    weight: 800
+
+  - id: P4-revision-then-date
+    description: >
+      Within the same authority class and status, prefer the higher revision; if revisions are
+      equal or absent, prefer the later effective date. Absent both, treat as a tie.
+    weight: 700
+
+  - id: P5-specificity
+    description: >
+      A record that speaks about the exact subject (this tag, this parameter) beats a record
+      that speaks generally about a family.
+    weight: 600
+
+  - id: P6-corroboration
+    description: >
+      Break residual ties by counting independent supporting sources. Two sources that trace
+      to the same origin count once.
+    weight: 500
+
+  - id: P7-escalate
+    description: >
+      If no rule discriminates, do NOT guess. Emit an unresolved DecisionRecord, pick the
+      candidate with the highest weighted score as a provisional value, mark the model element
+      `provisional: true`, and surface it in the report's open-questions section.
+    weight: 0
+
+# Heuristics that map an arbitrary source file to an authority class. The extractor may
+# override these with an explicit classification claim; that claim itself is evidence.
+authority_hints:
+  change_record:    [change request, "cr-", "ecn", change log, deviation, concession, "supersed"]
+  approved_review:  [design review, minutes of meeting, "dr-", gate review, approved decisions]
+  interface_control: [interface control, "icd", signal list, i/o list, bus definition]
+  specification:    [requirement specification, "urs", "prs", functional spec, design basis]
+  datasheet:        [datasheet, data sheet, nameplate, supplier, catalogue, brochure]
+  register:         [register, schedule, list, workbook, index, bill of material, "bom"]
+  test_procedure:   [acceptance test, "fat", "sat", commissioning, test procedure, protocol]
+  drawing:          ["p&id", pid, schematic, general arrangement, layout, one-line, diagram]
+  legacy_model:     [".mo", ".puml", ".slx", legacy, teaching model, archived model]
+  test_result:      [run, trace, log, measurement, "results", ".csv"]
+  correspondence:   [".eml", email, "re:", "fwd:", thread, chat]
+  informal_note:    [notebook, notes, scratch, handwritten, "loose", draft note]
+
+# Status keywords, matched case-insensitively against a record's own status field or prose.
+status_hints:
+  superseded: [superseded, obsolete, replaced by, withdrawn, "do not use"]
+  approved:   [approved, released, issued, final, effective, current, baseline]
+  draft:      [draft, provisional, proposed, "for review", wip]
+  legacy:     [legacy, archived, historical, teaching, "old"]
+
+# Traps this policy exists to survive. Keep this list; it is the regression suite for the
+# reconciler and it is domain-general even though the examples come from the NaCl packet.
+known_failure_modes:
+  - id: F1-recency-bias
+    trap: The newest file is not the authority. A lab notebook written after a change record
+          does not override it.
+  - id: F2-physical-layout-implies-function
+    trap: Physical proximity or position on a drawing does not determine routing, ownership
+          or destination. Check the approved routing record.
+  - id: F3-simulation-abstraction-as-architecture
+    trap: A component that a legacy model merged into another still exists physically.
+          Keep it in the architecture; record the merge as a simulation abstraction.
+  - id: F4-baseline-mistaken-for-intent
+    trap: A configuration described as an integration or debug baseline is not the intended
+          production configuration.
+  - id: F5-drawing-completeness
+    trap: A drawing shows every device; only a subset is under automatic control. Ownership
+          comes from the I/O list or the actuator register, not the drawing.
+  - id: F6-known-defect-as-requirement
+    trap: A documented numerical or implementation defect is not a licence to delete the
+          physical component that exposes it.

@@ -1,0 +1,109 @@
+# SpecAlive model routing.
+#
+# Rule: always attempt the cheapest tier that can do the job, validate the output against a
+# schema, and only escalate on validation failure. Never silently accept an unvalidated answer.
+#
+# Owner: D (platform). Consumed by src/specalive/llm/router.py.
+
+tiers:
+  # ---------------------------------------------------------------- T0
+  t0_deterministic:
+    kind: deterministic
+    description: >
+      No model at all. Parsers, regex, table readers, graph algorithms. Anything that can be
+      done here MUST be done here: it is free, exact, offline and reproducible.
+
+  # ---------------------------------------------------------------- T1
+  t1_local_small:
+    kind: ollama
+    model: qwen2.5:3b-instruct-q4_K_M
+    base_url: http://localhost:11434
+    context: 8192
+    # ~2.0 GB quantised; fits entirely on a 4 GB Quadro T1000.
+    structured_output: json_schema
+    max_tokens: 2048
+    timeout_s: 120
+    good_at: [span_to_claim, catalog_shortlist_pick, field_normalisation, report_prose]
+
+  t1_local_embed:
+    kind: ollama_embed
+    model: nomic-embed-text
+    base_url: http://localhost:11434
+    dim: 768
+    good_at: [catalog_retrieval, claim_dedupe]
+
+  # ---------------------------------------------------------------- T2
+  t2_local_mid:
+    kind: ollama
+    model: qwen2.5:7b-instruct-q4_K_M
+    base_url: http://localhost:11434
+    context: 16384
+    # ~4.7 GB: needs partial CPU offload on 4 GB VRAM. Set num_gpu to taste.
+    options: {num_gpu: 22}
+    structured_output: json_schema
+    max_tokens: 4096
+    timeout_s: 300
+    good_at: [prose_extraction, guard_normalisation]
+
+  # ---------------------------------------------------------------- T3
+  t3_cloud_reasoning:
+    kind: groq
+    model: llama-3.3-70b-versatile
+    fallback_models: [qwen/qwen3-32b, llama-3.1-8b-instant]
+    api_key_env: GROQ_API_KEY
+    structured_output: json_object
+    max_tokens: 8192
+    timeout_s: 120
+    good_at: [conflict_adjudication, equation_synthesis, repair_diff, topology_inference]
+    quota: {rpm: 30, tpm: 12000, rpd: 1000}
+
+  # ---------------------------------------------------------------- T4
+  t4_cloud_vision:
+    kind: gemini
+    model: gemini-2.5-flash
+    fallback_models: [gemini-2.0-flash]
+    api_key_env: GEMINI_API_KEY
+    structured_output: response_schema
+    max_tokens: 8192
+    timeout_s: 180
+    good_at: [diagram_reading, scanned_page_ocr, long_context_crossdoc, repair_diff]
+    quota: {rpm: 10, rpd: 250}
+
+  # ---------------------------------------------------------------- local vision fallback
+  t4_local_vision:
+    kind: ollama
+    model: qwen2-vl:2b
+    base_url: http://localhost:11434
+    good_at: [diagram_reading]
+
+# Task -> ordered escalation chain. First entry is tried first.
+routes:
+  parse_structured:      [t0_deterministic]
+  extract_claim:         [t1_local_small, t2_local_mid, t3_cloud_reasoning]
+  extract_prose:         [t2_local_mid, t3_cloud_reasoning]
+  read_diagram:          [t4_cloud_vision, t4_local_vision]
+  catalog_retrieve:      [t0_deterministic, t1_local_embed]
+  catalog_pick:          [t1_local_small, t3_cloud_reasoning]
+  adjudicate_conflict:   [t3_cloud_reasoning, t2_local_mid]
+  synthesise_equations:  [t3_cloud_reasoning, t4_cloud_vision]
+  repair_modelica:       [t0_deterministic, t3_cloud_reasoning, t4_cloud_vision]
+  write_prose:           [t1_local_small, t0_deterministic]
+
+# Provider selection modes, chosen with `specalive --provider`.
+modes:
+  auto:   {allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid, t3_cloud_reasoning, t4_cloud_vision, t4_local_vision]}
+  local:  {allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid, t4_local_vision]}
+  cloud:  {allow: [t0_deterministic, t3_cloud_reasoning, t4_cloud_vision]}
+  replay: {allow: [t0_deterministic], replay_only: true}   # demo-safe: cache hits or bust
+  none:   {allow: [t0_deterministic]}                      # deterministic-only smoke path
+
+cache:
+  enabled: true
+  dir: .specalive_cache
+  # Cache key = sha256(tier.model + prompt + schema + images). Warm this before demo day
+  # and ship it, so `--provider replay` reproduces a known-good run with no network.
+
+limits:
+  max_escalations_per_task: 2
+  max_retries_same_tier: 1
+  repair_iterations: 6

@@ -1,0 +1,5352 @@
+{
+  "schema_version": "1.0.0",
+  "name": "NaClEvaporationPlant",
+  "description": "Laboratory NaCl evaporation bench: charge, mix, buffer, evaporate, cool, return",
+  "domains": [
+    "fluid",
+    "thermal",
+    "control"
+  ],
+  "sources": [],
+  "claims": [],
+  "decisions": [
+    {
+      "id": "DEC-0001",
+      "subject": "B7",
+      "predicate": "cooling_target",
+      "winner_claim_id": "CLM-SP-B7-COOL",
+      "loser_claim_ids": [
+        "CLM-SP-B7-COOL-OLD"
+      ],
+      "rule_id": "P1-explicit-supersession",
+      "rationale": "CR-017 (approved change record, 2026-03-05) sets B7 cooling completion to 25 degC and explicitly supersedes the 20 degC value carried in the legacy Modelica file, the lab notebook and a handwritten commissioning sheet.",
+      "resolved": true,
+      "provisional": false,
+      "failure_mode": "F1-recency-bias"
+    },
+    {
+      "id": "DEC-0002",
+      "subject": "B6",
+      "predicate": "return_destination",
+      "winner_claim_id": "CLM-REQ-ROU-003",
+      "loser_claim_ids": [
+        "CLM-REQ-ROU-002"
+      ],
+      "rule_id": "P1-explicit-supersession",
+      "rationale": "CR-017 corrects the stream-identity semantics: recovered condensate from B6 returns to B1. The legacy StateGraph extract and the draft PlantUML both state the opposite and are marked superseded.",
+      "resolved": true,
+      "provisional": false,
+      "failure_mode": "F2-physical-layout-implies-function"
+    },
+    {
+      "id": "DEC-0003",
+      "subject": "B7",
+      "predicate": "return_destination",
+      "winner_claim_id": "CLM-REQ-ROU-004",
+      "loser_claim_ids": [
+        "CLM-REQ-ROU-001"
+      ],
+      "rule_id": "P1-explicit-supersession",
+      "rationale": "CR-017: cooled concentrate from B7 returns to B2 via P1. P1 is drawn beside B1 on the P&ID, but the datasheet states the discharge headers are cross-connected, so pump location does not determine destination.",
+      "resolved": true,
+      "provisional": false,
+      "failure_mode": "F2-physical-layout-implies-function"
+    },
+    {
+      "id": "DEC-0004",
+      "subject": "K1",
+      "predicate": "exists_as_part",
+      "winner_claim_id": "CLM-DR07-5",
+      "loser_claim_ids": [
+        "CLM-LEGACY-MERGE"
+      ],
+      "rule_id": "P3-authority-class",
+      "rationale": "DR-07 decision 5 (approved review) states K1 remains a physical condenser even though the legacy Modelica component combines evaporator and condenser equations. The merge is a simulation abstraction, not an architectural fact, so K1 stays a distinct part.",
+      "resolved": true,
+      "provisional": false,
+      "failure_mode": "F3-simulation-abstraction-as-architecture"
+    },
+    {
+      "id": "DEC-0005",
+      "subject": "valves",
+      "predicate": "controller_ownership",
+      "winner_claim_id": "CLM-VALVE-REGISTER",
+      "loser_claim_ids": [
+        "CLM-PID-DRAWING"
+      ],
+      "rule_id": "P3-authority-class",
+      "rationale": "The valve register and the supplier datasheet both name exactly 15 automated tags. The P&ID shows 28 devices, but a drawing does not assign controller ownership; the 13 remaining valves are manual/local and are modelled as architecture-only parts.",
+      "resolved": true,
+      "provisional": false,
+      "failure_mode": "F5-drawing-completeness"
+    },
+    {
+      "id": "DEC-0006",
+      "subject": "medium",
+      "predicate": "intended_model",
+      "winner_claim_id": "CLM-REQ-MOD-002",
+      "loser_claim_ids": [
+        "CLM-REQ-MOD-001"
+      ],
+      "rule_id": "P5-specificity",
+      "rationale": "A single-component water medium is described as an integration baseline for topology and sequence debugging, not as the intended physical medium. The composition-dependent mixture remains the target; the baseline is shipped as Tier 1 and the mixture as Tier 2.",
+      "resolved": true,
+      "provisional": false,
+      "failure_mode": "F4-baseline-mistaken-for-intent"
+    },
+    {
+      "id": "DEC-0007",
+      "subject": "P1,P2",
+      "predicate": "retain_in_model",
+      "winner_claim_id": "CLM-REQ-MOD-003",
+      "loser_claim_ids": [
+        "CLM-NOTEBOOK-DELETE"
+      ],
+      "rule_id": "P2-approval-status",
+      "rationale": "A documented convergence failure at pump start is a numerical defect to be recorded, not grounds to delete the pumps. Both return pumps are retained and the defect is declared as a gap.",
+      "resolved": true,
+      "provisional": false,
+      "failure_mode": "F6-known-defect-as-requirement"
+    }
+  ],
+  "gaps": [
+    {
+      "id": "OPEN-ISSUE-01",
+      "kind": "unreachable_guard",
+      "subject": "REQ-FUN-006",
+      "detail": "The guard 'LIS-501 >= 0.18 m' cannot be met from a single B3 batch under a mass-consistent balance. B3 holds at most ~0.0091 m3 once it reaches the 0.080 kg/kg recipe target from a 0.13 m water prefill, which fills B5 to about 0.145 m against a required 0.18 m. The two setpoints are mutually unsatisfiable as written.",
+      "requirement_ids": [
+        "REQ-FUN-006",
+        "REQ-PER-001",
+        "REQ-FUN-002"
+      ],
+      "severity": "warn",
+      "workaround": "A derived fallback exit on B4 exhaustion was added so the sequence cannot deadlock. Raise with the customer as a source-data defect."
+    },
+    {
+      "id": "OPEN-ISSUE-02",
+      "kind": "inconsistent_reference_data",
+      "subject": "10_batch_run_3000s.csv",
+      "detail": "The supplied reference trace is not mass-consistent: across the B5 evaporation phase the solute inventory (level x concentration) rises 44% while concentration rises 0.080 -> 0.180, so NaCl is created. Signal-level agreement with this trace is therefore not evidence of correctness.",
+      "requirement_ids": [],
+      "severity": "info",
+      "workaround": "Score against BAT-09 event criteria; report signal RMSE as informational only, and only after the conservation screen passes."
+    },
+    {
+      "id": "OPEN-ISSUE-03",
+      "kind": "unimplemented_requirement",
+      "subject": "REQ-MOD-002",
+      "detail": "Tier 1 uses a linear composition-dependent property set (density, specific heat, boiling-point elevation), not a full two-phase mixture medium with saturation pressure and viscosity.",
+      "requirement_ids": [
+        "REQ-MOD-002"
+      ],
+      "severity": "warn",
+      "workaround": "Tier 2 WaterNaCl medium; the viscosity correlation coefficients are supplied in the medium note, the remaining correlations are not."
+    },
+    {
+      "id": "OPEN-ISSUE-04",
+      "kind": "deviation",
+      "subject": "REQ-MOD-004/005/006",
+      "detail": "Tier 1 uses a causal directed-flow abstraction, so there is no pressure network: regularized asymmetric port losses, junction volumes and gravity head have no numerical effect. Junction volumes and elevation deltas are carried in the architecture and as parameters, but are documentation only.",
+      "requirement_ids": [
+        "REQ-MOD-004",
+        "REQ-MOD-005",
+        "REQ-MOD-006"
+      ],
+      "severity": "warn",
+      "workaround": "Tier 2 binds to acausal Modelica.Fluid components where these apply."
+    },
+    {
+      "id": "OPEN-ISSUE-05",
+      "kind": "unimplemented_requirement",
+      "subject": "REQ-MOD-003",
+      "detail": "The known WaterNaCl pump-start convergence failure is recorded but not diagnosed. Pumps P1 and P2 are retained in both architecture and model.",
+      "requirement_ids": [
+        "REQ-MOD-003"
+      ],
+      "severity": "info",
+      "workaround": null
+    }
+  ],
+  "requirements": [
+    {
+      "id": "REQ-FUN-001",
+      "text": "The plant shall prepare a mixed water/NaCl batch in B3 using liquid from B1 and B2.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "ctrl.T0"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-FUN-002",
+      "text": "The controller shall open V8 to transfer B1 liquid to B3 until LIS-301 is at least 0.13 m.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "ctrl.T1"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-FUN-003",
+      "text": "After the B1 fill portion, the controller shall open V9 and continue charging B3 until QI-302 reaches the batch concentration target.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "ctrl.T2"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-PER-001",
+      "text": "The B3 target NaCl mass fraction shall be 0.080 kg/kg.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "ctrl.T2"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-FUN-004",
+      "text": "V11 shall transfer the mixed batch from B3 to B4 until LIS-301 is below 0.01 m.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "ctrl.T3"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-FUN-005",
+      "text": "The controller shall not charge B5 unless B5 is idle, defined by LIS-501 < 0.01 m and V15 closed.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "ctrl.T4"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-FUN-006",
+      "text": "V12 shall transfer B4 contents to B5 until LIS-501 reaches 0.18 m.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "ctrl.T5"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-THM-001",
+      "text": "B5 heating demand shall be 20,000 W when the heater actuator is enabled.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "B5",
+        "C_B5_K1"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-SAF-001",
+      "text": "B5 heating shall be inhibited unless FIS-801 proves condenser cooling-water flow of at least 0.10 kg/s.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "C_CW_K1",
+        "IL-HEATER",
+        "cw"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-FUN-007",
+      "text": "B5 heating/evaporation shall continue until QIS-502 reaches the evaporation concentration target.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "ctrl.T6"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-PER-002",
+      "text": "The B5 evaporation concentration target shall be 0.180 kg/kg NaCl mass fraction.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-FUN-008",
+      "text": "After evaporation completes, the sequence shall split into parallel condensate and concentrate branches.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "ctrl",
+        "ctrl.T6",
+        "ctrl.T7"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-FUN-009",
+      "text": "The condensate branch shall cool B6 to 20 degC or below before return pumping.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "B6",
+        "ctrl.TA1"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-FUN-010",
+      "text": "The concentrate branch shall cool B7 to 25 degC or below before return pumping.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "B7",
+        "ctrl.TB3"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-ROU-001",
+      "text": "The B7/P1 return branch opens V18,V23,V22,V1,V3.",
+      "category": null,
+      "priority": "must",
+      "status": "superseded",
+      "superseded_by": "CR-017",
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-ROU-002",
+      "text": "The B6/P2 return branch opens V20,V24,V25,V5,V6.",
+      "category": null,
+      "priority": "must",
+      "status": "superseded",
+      "superseded_by": "CR-017",
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-ROU-003",
+      "text": "The recovered condensate stream from B6 shall be returned to B1 using P2 and the B1 return valve group.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "C_RET_A_a",
+        "C_RET_A_b",
+        "RET_A",
+        "ctrl.TA2"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-ROU-004",
+      "text": "The cooled concentrated stream from B7 shall be returned to B2 using P1 and the B2 return valve group.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "C_RET_B_a",
+        "C_RET_B_b",
+        "RET_B",
+        "ctrl.TB4"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-CTL-001",
+      "text": "The cycle shall not restart until both parallel return branches are complete and process time exceeds 2500 s.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "ctrl",
+        "ctrl.T8"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-CTL-002",
+      "text": "All automated process valves shall be Boolean, discrete open/closed actuators.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "cmd_V1",
+        "cmd_V11",
+        "cmd_V12",
+        "cmd_V15",
+        "cmd_V18",
+        "cmd_V20",
+        "cmd_V22",
+        "cmd_V23",
+        "cmd_V24",
+        "cmd_V25",
+        "cmd_V3",
+        "cmd_V5",
+        "cmd_V6",
+        "cmd_V8",
+        "cmd_V9"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-SAF-002",
+      "text": "All automated process valves shall fail closed on loss of actuator power.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-SAF-003",
+      "text": "P1 shall be inhibited when LIS-701 <= 0.02 m.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "IL-P1"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-SAF-004",
+      "text": "P2 shall be inhibited when LIS-601 <= 0.02 m.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "IL-P2"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-SAF-005",
+      "text": "The heater shall be inhibited when LIS-501 < 0.05 m.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "IL-HEATER"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-MOD-001",
+      "text": "The baseline integration test shall use a single-component water medium to validate plant topology and control sequence.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-MOD-002",
+      "text": "The intended physical medium model shall represent a water-NaCl mixture with composition-dependent properties.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-MOD-003",
+      "text": "The WaterNaCl implementation shall document the known unresolved pump-start convergence issue separately from plant functional requirements.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-MOD-004",
+      "text": "Tank ports that can cross the liquid level shall use a regularized asymmetric loss-factor approach with hysteresis.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-MOD-005",
+      "text": "Small junction volumes shall be inserted wherever multiple pressure-drop-only elements can be isolated simultaneously.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-MOD-006",
+      "text": "Non-horizontal pipes shall include gravity pressure drop based on relative elevation.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-DAT-001",
+      "text": "Controller sensor inputs shall include LIS-301, QI-302, LIS-501, QIS-502, TIS-602, TIS-702 and FIS-801.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "FIS_801",
+        "LIS_301",
+        "LIS_401",
+        "LIS_501",
+        "LIS_601",
+        "LIS_701",
+        "QIS_502",
+        "QI_302",
+        "TIS_602",
+        "TIS_702",
+        "TI_503"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-DAT-002",
+      "text": "Controller actuator outputs shall include the 15 automated valve commands, P1, P2, B5 heater, B6 cooler and B7 cooler.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "V10",
+        "V13",
+        "V14",
+        "V16",
+        "V17",
+        "V19",
+        "V2",
+        "V21",
+        "V26",
+        "V27",
+        "V29",
+        "V4",
+        "V7",
+        "cmd_P1",
+        "cmd_P2",
+        "cmd_V1",
+        "cmd_V11",
+        "cmd_V12",
+        "cmd_V15",
+        "cmd_V18",
+        "cmd_V20",
+        "cmd_V22",
+        "cmd_V23",
+        "cmd_V24",
+        "cmd_V25",
+        "cmd_V3",
+        "cmd_V5",
+        "cmd_V6",
+        "cmd_V8",
+        "cmd_V9",
+        "cmd_coolB6",
+        "cmd_coolB7",
+        "cmd_heater"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-VV-001",
+      "text": "A complete acceptance simulation shall run through at least one parallel-branch split and rejoin and continue beyond 2500 s.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    },
+    {
+      "id": "REQ-VV-002",
+      "text": "The acceptance run shall demonstrate B3 target concentration, B5 target concentration, B6 cooling target, B7 cooling target and correct return routing.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Requirement register"
+      }
+    }
+  ],
+  "parameters": [
+    {
+      "id": "SP-B3-LVL-WATER",
+      "name": "SP_B3_LVL_WATER",
+      "quantity": {
+        "value": 0.13,
+        "unit": "m",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "B3 water prefill level",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-B3-LVL-WATER"
+      }
+    },
+    {
+      "id": "SP-B3-COMP",
+      "name": "SP_B3_COMP",
+      "quantity": {
+        "value": 0.08,
+        "unit": "kg/kg",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "B3 NaCl target after mixing",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-B3-COMP"
+      }
+    },
+    {
+      "id": "SP-B3-EMPTY",
+      "name": "SP_B3_EMPTY",
+      "quantity": {
+        "value": 0.01,
+        "unit": "m",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "B3 nearly-empty threshold",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-B3-EMPTY"
+      }
+    },
+    {
+      "id": "SP-B5-IDLE",
+      "name": "SP_B5_IDLE",
+      "quantity": {
+        "value": 0.01,
+        "unit": "m",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "B5 idle level threshold",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-B5-IDLE"
+      }
+    },
+    {
+      "id": "SP-B5-BATCH",
+      "name": "SP_B5_BATCH",
+      "quantity": {
+        "value": 0.18,
+        "unit": "m",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "B5 batch fill level",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-B5-BATCH"
+      }
+    },
+    {
+      "id": "SP-B5-COMP",
+      "name": "SP_B5_COMP",
+      "quantity": {
+        "value": 0.18,
+        "unit": "kg/kg",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "B5 NaCl target after evaporation",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-B5-COMP"
+      }
+    },
+    {
+      "id": "SP-B6-COOL",
+      "name": "SP_B6_COOL",
+      "quantity": {
+        "value": 293.15,
+        "unit": "K",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "B6 cooling complete temperature",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-B6-COOL"
+      }
+    },
+    {
+      "id": "SP-B7-COOL-OLD",
+      "name": "SP_B7_COOL_OLD",
+      "quantity": {
+        "value": 293.15,
+        "unit": "K",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "B7 cooling complete temperature (legacy)",
+      "status": "superseded",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-B7-COOL-OLD"
+      }
+    },
+    {
+      "id": "SP-B7-COOL",
+      "name": "SP_B7_COOL",
+      "quantity": {
+        "value": 298.15,
+        "unit": "K",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "B7 cooling complete temperature",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-B7-COOL"
+      }
+    },
+    {
+      "id": "SP-K1-CW",
+      "name": "SP_K1_CW",
+      "quantity": {
+        "value": 0.1,
+        "unit": "kg/s",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "Minimum cooling-water flow for heater permissive",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-K1-CW"
+      }
+    },
+    {
+      "id": "SP-B5-Q",
+      "name": "SP_B5_Q",
+      "quantity": {
+        "value": 20000.0,
+        "unit": "W",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "Heater duty",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-B5-Q"
+      }
+    },
+    {
+      "id": "SP-B6-Q",
+      "name": "SP_B6_Q",
+      "quantity": {
+        "value": 6500.0,
+        "unit": "W",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "B6 nominal cooling duty",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-B6-Q"
+      }
+    },
+    {
+      "id": "SP-B7-Q",
+      "name": "SP_B7_Q",
+      "quantity": {
+        "value": 4500.0,
+        "unit": "W",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "B7 nominal cooling duty",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-B7-Q"
+      }
+    },
+    {
+      "id": "SP-RESTART",
+      "name": "SP_RESTART",
+      "quantity": {
+        "value": 2500.0,
+        "unit": "s",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "Minimum cycle restart time",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-RESTART"
+      }
+    },
+    {
+      "id": "SP-HEATER-LVL",
+      "name": "SP_HEATER_LVL",
+      "quantity": {
+        "value": 0.05,
+        "unit": "m",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "Heater minimum level permissive",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-HEATER-LVL"
+      }
+    },
+    {
+      "id": "SP-PUMP-LVL",
+      "name": "SP_PUMP_LVL",
+      "quantity": {
+        "value": 0.02,
+        "unit": "m",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "global",
+      "description": "Pump dry-run inhibit level",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Setpoint register row SP-PUMP-LVL"
+      }
+    }
+  ],
+  "blocks": [
+    {
+      "id": "B1",
+      "name": "Charging tank",
+      "kind": "tank",
+      "domains": [
+        "fluid",
+        "thermal"
+      ],
+      "ports": [
+        {
+          "id": "in1",
+          "name": "inlet[1]",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "out",
+          "name": "outlet[1]",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "B1.area",
+          "name": "area",
+          "quantity": {
+            "value": 0.07,
+            "unit": "m2",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B1.levelMax",
+          "name": "levelMax",
+          "quantity": {
+            "value": 0.5,
+            "unit": "m",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B1.level_start",
+          "name": "level_start",
+          "quantity": {
+            "value": 0.45,
+            "unit": "m",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B1.w_start",
+          "name": "w_start",
+          "quantity": {
+            "value": 0.0,
+            "unit": "kg/kg",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B1.nIn",
+          "name": "nIn",
+          "quantity": {
+            "value": 1,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B1.nOut",
+          "name": "nOut",
+          "quantity": {
+            "value": 1,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Charging tank",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Vessels.Reservoir",
+      "modelica_modifiers": {
+        "area": "0.07",
+        "levelMax": "0.5",
+        "level_start": "0.45",
+        "w_start": "0.0",
+        "nIn": "1",
+        "nOut": "1"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "matched L1 template from the equipment schedule",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "B2",
+      "name": "Charging tank",
+      "kind": "tank",
+      "domains": [
+        "fluid",
+        "thermal"
+      ],
+      "ports": [
+        {
+          "id": "in1",
+          "name": "inlet[1]",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "out",
+          "name": "outlet[1]",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "B2.area",
+          "name": "area",
+          "quantity": {
+            "value": 0.07,
+            "unit": "m2",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B2.levelMax",
+          "name": "levelMax",
+          "quantity": {
+            "value": 0.5,
+            "unit": "m",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B2.level_start",
+          "name": "level_start",
+          "quantity": {
+            "value": 0.3,
+            "unit": "m",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B2.w_start",
+          "name": "w_start",
+          "quantity": {
+            "value": 0.25,
+            "unit": "kg/kg",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B2.nIn",
+          "name": "nIn",
+          "quantity": {
+            "value": 1,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B2.nOut",
+          "name": "nOut",
+          "quantity": {
+            "value": 1,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Charging tank",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Vessels.Reservoir",
+      "modelica_modifiers": {
+        "area": "0.07",
+        "levelMax": "0.5",
+        "level_start": "0.3",
+        "w_start": "0.25",
+        "nIn": "1",
+        "nOut": "1"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "matched L1 template from the equipment schedule",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "B3",
+      "name": "Mixing tank",
+      "kind": "tank",
+      "domains": [
+        "fluid",
+        "thermal"
+      ],
+      "ports": [
+        {
+          "id": "in1",
+          "name": "inlet[1]",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "in2",
+          "name": "inlet[2]",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "out",
+          "name": "outlet[1]",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "B3.area",
+          "name": "area",
+          "quantity": {
+            "value": 0.05,
+            "unit": "m2",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B3.levelMax",
+          "name": "levelMax",
+          "quantity": {
+            "value": 0.38,
+            "unit": "m",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B3.level_start",
+          "name": "level_start",
+          "quantity": {
+            "value": 0.005,
+            "unit": "m",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B3.w_start",
+          "name": "w_start",
+          "quantity": {
+            "value": 0.0,
+            "unit": "kg/kg",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B3.nIn",
+          "name": "nIn",
+          "quantity": {
+            "value": 2,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B3.nOut",
+          "name": "nOut",
+          "quantity": {
+            "value": 1,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Mixing tank",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Vessels.Reservoir",
+      "modelica_modifiers": {
+        "area": "0.05",
+        "levelMax": "0.38",
+        "level_start": "0.005",
+        "w_start": "0.0",
+        "nIn": "2",
+        "nOut": "1"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "matched L1 template from the equipment schedule",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "B4",
+      "name": "Buffer tank",
+      "kind": "tank",
+      "domains": [
+        "fluid",
+        "thermal"
+      ],
+      "ports": [
+        {
+          "id": "in1",
+          "name": "inlet[1]",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "out",
+          "name": "outlet[1]",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "B4.area",
+          "name": "area",
+          "quantity": {
+            "value": 0.055,
+            "unit": "m2",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B4.levelMax",
+          "name": "levelMax",
+          "quantity": {
+            "value": 0.4,
+            "unit": "m",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B4.level_start",
+          "name": "level_start",
+          "quantity": {
+            "value": 0.005,
+            "unit": "m",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B4.w_start",
+          "name": "w_start",
+          "quantity": {
+            "value": 0.0,
+            "unit": "kg/kg",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B4.nIn",
+          "name": "nIn",
+          "quantity": {
+            "value": 1,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B4.nOut",
+          "name": "nOut",
+          "quantity": {
+            "value": 1,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Buffer tank",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Vessels.Reservoir",
+      "modelica_modifiers": {
+        "area": "0.055",
+        "levelMax": "0.4",
+        "level_start": "0.005",
+        "w_start": "0.0",
+        "nIn": "1",
+        "nOut": "1"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "matched L1 template from the equipment schedule",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "B5",
+      "name": "Evaporator",
+      "kind": "evaporator vessel",
+      "domains": [
+        "fluid",
+        "thermal"
+      ],
+      "ports": [
+        {
+          "id": "in1",
+          "name": "inlet[1]",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "out",
+          "name": "outlet[1]",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "vapor",
+          "name": "vapor",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "B5.area",
+          "name": "area",
+          "quantity": {
+            "value": 0.06,
+            "unit": "m2",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B5.levelMax",
+          "name": "levelMax",
+          "quantity": {
+            "value": 0.4,
+            "unit": "m",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B5.level_start",
+          "name": "level_start",
+          "quantity": {
+            "value": 0.005,
+            "unit": "m",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B5.w_start",
+          "name": "w_start",
+          "quantity": {
+            "value": 0.0,
+            "unit": "kg/kg",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B5.nIn",
+          "name": "nIn",
+          "quantity": {
+            "value": 1,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B5.nOut",
+          "name": "nOut",
+          "quantity": {
+            "value": 1,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B5.Q_heater",
+          "name": "Q_heater",
+          "quantity": {
+            "value": 20000.0,
+            "unit": "W",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Evaporator",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Vessels.Evaporator",
+      "modelica_modifiers": {
+        "area": "0.06",
+        "levelMax": "0.4",
+        "level_start": "0.005",
+        "w_start": "0.0",
+        "nIn": "1",
+        "nOut": "1",
+        "Q_heater": "20000.0"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "matched L1 template from the equipment schedule",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-THM-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "B6",
+      "name": "Condensate cooler",
+      "kind": "cooling tank",
+      "domains": [
+        "fluid",
+        "thermal"
+      ],
+      "ports": [
+        {
+          "id": "in1",
+          "name": "inlet[1]",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "out",
+          "name": "outlet[1]",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "B6.area",
+          "name": "area",
+          "quantity": {
+            "value": 0.05,
+            "unit": "m2",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B6.levelMax",
+          "name": "levelMax",
+          "quantity": {
+            "value": 0.35,
+            "unit": "m",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B6.level_start",
+          "name": "level_start",
+          "quantity": {
+            "value": 0.005,
+            "unit": "m",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B6.w_start",
+          "name": "w_start",
+          "quantity": {
+            "value": 0.0,
+            "unit": "kg/kg",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B6.nIn",
+          "name": "nIn",
+          "quantity": {
+            "value": 1,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B6.nOut",
+          "name": "nOut",
+          "quantity": {
+            "value": 1,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B6.Q_cool",
+          "name": "Q_cool",
+          "quantity": {
+            "value": 6500.0,
+            "unit": "W",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B6.T_floor",
+          "name": "T_floor",
+          "quantity": {
+            "value": 288.15,
+            "unit": "K",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Condensate cooler",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Vessels.CooledVessel",
+      "modelica_modifiers": {
+        "area": "0.05",
+        "levelMax": "0.35",
+        "level_start": "0.005",
+        "w_start": "0.0",
+        "nIn": "1",
+        "nOut": "1",
+        "Q_cool": "6500.0",
+        "T_floor": "288.15"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "matched L1 template from the equipment schedule",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-FUN-009"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "B7",
+      "name": "Concentrate cooler",
+      "kind": "cooling tank",
+      "domains": [
+        "fluid",
+        "thermal"
+      ],
+      "ports": [
+        {
+          "id": "in1",
+          "name": "inlet[1]",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "out",
+          "name": "outlet[1]",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "B7.area",
+          "name": "area",
+          "quantity": {
+            "value": 0.05,
+            "unit": "m2",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B7.levelMax",
+          "name": "levelMax",
+          "quantity": {
+            "value": 0.35,
+            "unit": "m",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B7.level_start",
+          "name": "level_start",
+          "quantity": {
+            "value": 0.005,
+            "unit": "m",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B7.w_start",
+          "name": "w_start",
+          "quantity": {
+            "value": 0.0,
+            "unit": "kg/kg",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B7.nIn",
+          "name": "nIn",
+          "quantity": {
+            "value": 1,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B7.nOut",
+          "name": "nOut",
+          "quantity": {
+            "value": 1,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B7.Q_cool",
+          "name": "Q_cool",
+          "quantity": {
+            "value": 4500.0,
+            "unit": "W",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "B7.T_floor",
+          "name": "T_floor",
+          "quantity": {
+            "value": 288.15,
+            "unit": "K",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Concentrate cooler",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Vessels.CooledVessel",
+      "modelica_modifiers": {
+        "area": "0.05",
+        "levelMax": "0.35",
+        "level_start": "0.005",
+        "w_start": "0.0",
+        "nIn": "1",
+        "nOut": "1",
+        "Q_cool": "4500.0",
+        "T_floor": "288.15"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "matched L1 template from the equipment schedule",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-FUN-010"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "K1",
+      "name": "Condenser",
+      "kind": "condenser",
+      "domains": [
+        "fluid",
+        "thermal"
+      ],
+      "ports": [
+        {
+          "id": "port_a",
+          "name": "port_a",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "port_b",
+          "name": "port_b",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "cw_flow",
+          "name": "cw_flow",
+          "domain": "signal",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "K1.T_out",
+          "name": "T_out",
+          "quantity": {
+            "value": 368.15,
+            "unit": "K",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Total condenser; retained as a distinct part per DR-07 decision 5",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Transport.Condenser",
+      "modelica_modifiers": {
+        "T_out": "368.15"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "physical part kept distinct; the legacy merge into B5 is a simulation abstraction only",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "DR-07 decision 5; trap F3"
+      }
+    },
+    {
+      "id": "L_V8",
+      "name": "B1 to B3 transfer",
+      "kind": "transfer path",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [
+        {
+          "id": "port_a",
+          "name": "port_a",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "port_b",
+          "name": "port_b",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "L_V8.m_flow_nominal",
+          "name": "m_flow_nominal",
+          "quantity": {
+            "value": 0.04,
+            "unit": "kg/s",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "B1 to B3 transfer (series group: V8)",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Transport.Path",
+      "modelica_modifiers": {
+        "m_flow_nominal": "0.04"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "series valve group ['V8'] lowered to one commanded Path",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "L_V9",
+      "name": "B2 to B3 transfer",
+      "kind": "transfer path",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [
+        {
+          "id": "port_a",
+          "name": "port_a",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "port_b",
+          "name": "port_b",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "L_V9.m_flow_nominal",
+          "name": "m_flow_nominal",
+          "quantity": {
+            "value": 0.02,
+            "unit": "kg/s",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "B2 to B3 transfer (series group: V9)",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Transport.Path",
+      "modelica_modifiers": {
+        "m_flow_nominal": "0.02"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "series valve group ['V9'] lowered to one commanded Path",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "L_V11",
+      "name": "B3 to B4 transfer",
+      "kind": "transfer path",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [
+        {
+          "id": "port_a",
+          "name": "port_a",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "port_b",
+          "name": "port_b",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "L_V11.m_flow_nominal",
+          "name": "m_flow_nominal",
+          "quantity": {
+            "value": 0.06,
+            "unit": "kg/s",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "B3 to B4 transfer (series group: V11)",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Transport.Path",
+      "modelica_modifiers": {
+        "m_flow_nominal": "0.06"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "series valve group ['V11'] lowered to one commanded Path",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "L_V12",
+      "name": "B4 to B5 transfer",
+      "kind": "transfer path",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [
+        {
+          "id": "port_a",
+          "name": "port_a",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "port_b",
+          "name": "port_b",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "L_V12.m_flow_nominal",
+          "name": "m_flow_nominal",
+          "quantity": {
+            "value": 0.06,
+            "unit": "kg/s",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "B4 to B5 transfer (series group: V12)",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Transport.Path",
+      "modelica_modifiers": {
+        "m_flow_nominal": "0.06"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "series valve group ['V12'] lowered to one commanded Path",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "L_V15",
+      "name": "B5 to B7 transfer",
+      "kind": "transfer path",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [
+        {
+          "id": "port_a",
+          "name": "port_a",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "port_b",
+          "name": "port_b",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "L_V15.m_flow_nominal",
+          "name": "m_flow_nominal",
+          "quantity": {
+            "value": 0.06,
+            "unit": "kg/s",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "B5 to B7 transfer (series group: V15)",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Transport.Path",
+      "modelica_modifiers": {
+        "m_flow_nominal": "0.06"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "series valve group ['V15'] lowered to one commanded Path",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "RET_A",
+      "name": "Condensate return B6 to B1",
+      "kind": "transfer path",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [
+        {
+          "id": "port_a",
+          "name": "port_a",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "port_b",
+          "name": "port_b",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "RET_A.m_flow_nominal",
+          "name": "m_flow_nominal",
+          "quantity": {
+            "value": 0.3,
+            "unit": "kg/s",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Condensate return B6 to B1 (series group: P2, V20, V24, V25, V1, V3)",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Transport.Pump",
+      "modelica_modifiers": {
+        "m_flow_nominal": "0.3"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "series valve group ['P2', 'V20', 'V24', 'V25', 'V1', 'V3'] lowered to one commanded Path",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-ROU-003"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "RET_B",
+      "name": "Concentrate return B7 to B2",
+      "kind": "transfer path",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [
+        {
+          "id": "port_a",
+          "name": "port_a",
+          "domain": "fluid",
+          "direction": "in",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "port_b",
+          "name": "port_b",
+          "domain": "fluid",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "RET_B.m_flow_nominal",
+          "name": "m_flow_nominal",
+          "quantity": {
+            "value": 0.3,
+            "unit": "kg/s",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Concentrate return B7 to B2 (series group: P1, V18, V22, V23, V5, V6)",
+      "binding_tier": "L1",
+      "modelica_class": "SpecAlive.Transport.Pump",
+      "modelica_modifiers": {
+        "m_flow_nominal": "0.3"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "series valve group ['P1', 'V18', 'V22', 'V23', 'V5', 'V6'] lowered to one commanded Path",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-ROU-004"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cw",
+      "name": "Cooling water flow proof",
+      "kind": "signal source",
+      "domains": [
+        "signal"
+      ],
+      "ports": [
+        {
+          "id": "y",
+          "name": "y",
+          "domain": "signal",
+          "direction": "out",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "cw.k",
+          "name": "k",
+          "quantity": {
+            "value": 0.12,
+            "unit": "kg/s",
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": null,
+      "binding_tier": "L0",
+      "modelica_class": "Modelica.Blocks.Sources.Constant",
+      "modelica_modifiers": {
+        "k": "0.12"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "unambiguous catalog match",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-SAF-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "V2",
+      "name": "Manual valve V2",
+      "kind": "manual isolation valve",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [],
+      "parameters": [],
+      "description": "Shown on the P&ID but not in the controller actuator bundle",
+      "binding_tier": "unbound",
+      "modelica_class": null,
+      "modelica_modifiers": {},
+      "synthesised_equations": null,
+      "binding_rationale": null,
+      "abstracted_into": null,
+      "physical_only": true,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": "trap F5: drawing completeness"
+      }
+    },
+    {
+      "id": "V4",
+      "name": "Manual valve V4",
+      "kind": "manual isolation valve",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [],
+      "parameters": [],
+      "description": "Shown on the P&ID but not in the controller actuator bundle",
+      "binding_tier": "unbound",
+      "modelica_class": null,
+      "modelica_modifiers": {},
+      "synthesised_equations": null,
+      "binding_rationale": null,
+      "abstracted_into": null,
+      "physical_only": true,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": "trap F5: drawing completeness"
+      }
+    },
+    {
+      "id": "V7",
+      "name": "Manual valve V7",
+      "kind": "manual isolation valve",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [],
+      "parameters": [],
+      "description": "Shown on the P&ID but not in the controller actuator bundle",
+      "binding_tier": "unbound",
+      "modelica_class": null,
+      "modelica_modifiers": {},
+      "synthesised_equations": null,
+      "binding_rationale": null,
+      "abstracted_into": null,
+      "physical_only": true,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": "trap F5: drawing completeness"
+      }
+    },
+    {
+      "id": "V10",
+      "name": "Manual valve V10",
+      "kind": "manual isolation valve",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [],
+      "parameters": [],
+      "description": "Shown on the P&ID but not in the controller actuator bundle",
+      "binding_tier": "unbound",
+      "modelica_class": null,
+      "modelica_modifiers": {},
+      "synthesised_equations": null,
+      "binding_rationale": null,
+      "abstracted_into": null,
+      "physical_only": true,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": "trap F5: drawing completeness"
+      }
+    },
+    {
+      "id": "V13",
+      "name": "Manual valve V13",
+      "kind": "manual isolation valve",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [],
+      "parameters": [],
+      "description": "Shown on the P&ID but not in the controller actuator bundle",
+      "binding_tier": "unbound",
+      "modelica_class": null,
+      "modelica_modifiers": {},
+      "synthesised_equations": null,
+      "binding_rationale": null,
+      "abstracted_into": null,
+      "physical_only": true,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": "trap F5: drawing completeness"
+      }
+    },
+    {
+      "id": "V14",
+      "name": "Manual valve V14",
+      "kind": "manual isolation valve",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [],
+      "parameters": [],
+      "description": "Shown on the P&ID but not in the controller actuator bundle",
+      "binding_tier": "unbound",
+      "modelica_class": null,
+      "modelica_modifiers": {},
+      "synthesised_equations": null,
+      "binding_rationale": null,
+      "abstracted_into": null,
+      "physical_only": true,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": "trap F5: drawing completeness"
+      }
+    },
+    {
+      "id": "V16",
+      "name": "Manual valve V16",
+      "kind": "manual isolation valve",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [],
+      "parameters": [],
+      "description": "Shown on the P&ID but not in the controller actuator bundle",
+      "binding_tier": "unbound",
+      "modelica_class": null,
+      "modelica_modifiers": {},
+      "synthesised_equations": null,
+      "binding_rationale": null,
+      "abstracted_into": null,
+      "physical_only": true,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": "trap F5: drawing completeness"
+      }
+    },
+    {
+      "id": "V17",
+      "name": "Manual valve V17",
+      "kind": "manual isolation valve",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [],
+      "parameters": [],
+      "description": "Shown on the P&ID but not in the controller actuator bundle",
+      "binding_tier": "unbound",
+      "modelica_class": null,
+      "modelica_modifiers": {},
+      "synthesised_equations": null,
+      "binding_rationale": null,
+      "abstracted_into": null,
+      "physical_only": true,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": "trap F5: drawing completeness"
+      }
+    },
+    {
+      "id": "V19",
+      "name": "Manual valve V19",
+      "kind": "manual isolation valve",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [],
+      "parameters": [],
+      "description": "Shown on the P&ID but not in the controller actuator bundle",
+      "binding_tier": "unbound",
+      "modelica_class": null,
+      "modelica_modifiers": {},
+      "synthesised_equations": null,
+      "binding_rationale": null,
+      "abstracted_into": null,
+      "physical_only": true,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": "trap F5: drawing completeness"
+      }
+    },
+    {
+      "id": "V21",
+      "name": "Manual valve V21",
+      "kind": "manual isolation valve",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [],
+      "parameters": [],
+      "description": "Shown on the P&ID but not in the controller actuator bundle",
+      "binding_tier": "unbound",
+      "modelica_class": null,
+      "modelica_modifiers": {},
+      "synthesised_equations": null,
+      "binding_rationale": null,
+      "abstracted_into": null,
+      "physical_only": true,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": "trap F5: drawing completeness"
+      }
+    },
+    {
+      "id": "V26",
+      "name": "Manual valve V26",
+      "kind": "manual isolation valve",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [],
+      "parameters": [],
+      "description": "Shown on the P&ID but not in the controller actuator bundle",
+      "binding_tier": "unbound",
+      "modelica_class": null,
+      "modelica_modifiers": {},
+      "synthesised_equations": null,
+      "binding_rationale": null,
+      "abstracted_into": null,
+      "physical_only": true,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": "trap F5: drawing completeness"
+      }
+    },
+    {
+      "id": "V27",
+      "name": "Manual valve V27",
+      "kind": "manual isolation valve",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [],
+      "parameters": [],
+      "description": "Shown on the P&ID but not in the controller actuator bundle",
+      "binding_tier": "unbound",
+      "modelica_class": null,
+      "modelica_modifiers": {},
+      "synthesised_equations": null,
+      "binding_rationale": null,
+      "abstracted_into": null,
+      "physical_only": true,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": "trap F5: drawing completeness"
+      }
+    },
+    {
+      "id": "V29",
+      "name": "Manual valve V29",
+      "kind": "manual isolation valve",
+      "domains": [
+        "fluid"
+      ],
+      "ports": [],
+      "parameters": [],
+      "description": "Shown on the P&ID but not in the controller actuator bundle",
+      "binding_tier": "unbound",
+      "modelica_class": null,
+      "modelica_modifiers": {},
+      "synthesised_equations": null,
+      "binding_rationale": null,
+      "abstracted_into": null,
+      "physical_only": true,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": "trap F5: drawing completeness"
+      }
+    }
+  ],
+  "connections": [
+    {
+      "id": "C_L_V8_a",
+      "source": "B1.out",
+      "target": "L_V8.port_a",
+      "domain": "fluid",
+      "medium": "process liquid",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "C_L_V8_b",
+      "source": "L_V8.port_b",
+      "target": "B3.in1",
+      "domain": "fluid",
+      "medium": "process liquid",
+      "series_elements": [
+        "V8"
+      ],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "C_L_V9_a",
+      "source": "B2.out",
+      "target": "L_V9.port_a",
+      "domain": "fluid",
+      "medium": "process liquid",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "C_L_V9_b",
+      "source": "L_V9.port_b",
+      "target": "B3.in2",
+      "domain": "fluid",
+      "medium": "process liquid",
+      "series_elements": [
+        "V9"
+      ],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "C_L_V11_a",
+      "source": "B3.out",
+      "target": "L_V11.port_a",
+      "domain": "fluid",
+      "medium": "process liquid",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "C_L_V11_b",
+      "source": "L_V11.port_b",
+      "target": "B4.in1",
+      "domain": "fluid",
+      "medium": "process liquid",
+      "series_elements": [
+        "V11"
+      ],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "C_L_V12_a",
+      "source": "B4.out",
+      "target": "L_V12.port_a",
+      "domain": "fluid",
+      "medium": "process liquid",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "C_L_V12_b",
+      "source": "L_V12.port_b",
+      "target": "B5.in1",
+      "domain": "fluid",
+      "medium": "process liquid",
+      "series_elements": [
+        "V12"
+      ],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "C_L_V15_a",
+      "source": "B5.out",
+      "target": "L_V15.port_a",
+      "domain": "fluid",
+      "medium": "process liquid",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "C_L_V15_b",
+      "source": "L_V15.port_b",
+      "target": "B7.in1",
+      "domain": "fluid",
+      "medium": "process liquid",
+      "series_elements": [
+        "V15"
+      ],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "C_RET_A_a",
+      "source": "B6.out",
+      "target": "RET_A.port_a",
+      "domain": "fluid",
+      "medium": "process liquid",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-ROU-003"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "C_RET_A_b",
+      "source": "RET_A.port_b",
+      "target": "B1.in1",
+      "domain": "fluid",
+      "medium": "process liquid",
+      "series_elements": [
+        "P2",
+        "V20",
+        "V24",
+        "V25",
+        "V1",
+        "V3"
+      ],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-ROU-003"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "C_RET_B_a",
+      "source": "B7.out",
+      "target": "RET_B.port_a",
+      "domain": "fluid",
+      "medium": "process liquid",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-ROU-004"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "C_RET_B_b",
+      "source": "RET_B.port_b",
+      "target": "B2.in1",
+      "domain": "fluid",
+      "medium": "process liquid",
+      "series_elements": [
+        "P1",
+        "V18",
+        "V22",
+        "V23",
+        "V5",
+        "V6"
+      ],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-ROU-004"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "C_B5_K1",
+      "source": "B5.vapor",
+      "target": "K1.port_a",
+      "domain": "fluid",
+      "medium": "water vapour",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-THM-001"
+        ],
+        "note": "IF-PROC-09"
+      }
+    },
+    {
+      "id": "C_K1_B6",
+      "source": "K1.port_b",
+      "target": "B6.in1",
+      "domain": "fluid",
+      "medium": "condensate",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "IF-PROC-10"
+      }
+    },
+    {
+      "id": "C_CW_K1",
+      "source": "cw.y",
+      "target": "K1.cw_flow",
+      "domain": "signal",
+      "medium": "cooling-water flow proof",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-SAF-001"
+        ],
+        "note": "IF-UTIL-01"
+      }
+    }
+  ],
+  "signals": [
+    {
+      "id": "LIS_301",
+      "name": "LIS_301",
+      "role": "sensor",
+      "datatype": "real",
+      "unit": "m",
+      "binding": "B3.level",
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "QI_302",
+      "name": "QI_302",
+      "role": "sensor",
+      "datatype": "real",
+      "unit": "kg/kg",
+      "binding": "B3.w",
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "LIS_401",
+      "name": "LIS_401",
+      "role": "sensor",
+      "datatype": "real",
+      "unit": "m",
+      "binding": "B4.level",
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "LIS_501",
+      "name": "LIS_501",
+      "role": "sensor",
+      "datatype": "real",
+      "unit": "m",
+      "binding": "B5.level",
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "QIS_502",
+      "name": "QIS_502",
+      "role": "sensor",
+      "datatype": "real",
+      "unit": "kg/kg",
+      "binding": "B5.w",
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "TI_503",
+      "name": "TI_503",
+      "role": "sensor",
+      "datatype": "real",
+      "unit": "K",
+      "binding": "B5.T",
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "LIS_601",
+      "name": "LIS_601",
+      "role": "sensor",
+      "datatype": "real",
+      "unit": "m",
+      "binding": "B6.level",
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "TIS_602",
+      "name": "TIS_602",
+      "role": "sensor",
+      "datatype": "real",
+      "unit": "K",
+      "binding": "B6.T",
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "LIS_701",
+      "name": "LIS_701",
+      "role": "sensor",
+      "datatype": "real",
+      "unit": "m",
+      "binding": "B7.level",
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "TIS_702",
+      "name": "TIS_702",
+      "role": "sensor",
+      "datatype": "real",
+      "unit": "K",
+      "binding": "B7.T",
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "FIS_801",
+      "name": "FIS_801",
+      "role": "sensor",
+      "datatype": "real",
+      "unit": "kg/s",
+      "binding": "cw.y",
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V1",
+      "name": "cmd_V1",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V3",
+      "name": "cmd_V3",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V5",
+      "name": "cmd_V5",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V6",
+      "name": "cmd_V6",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V8",
+      "name": "cmd_V8",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V9",
+      "name": "cmd_V9",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V11",
+      "name": "cmd_V11",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V12",
+      "name": "cmd_V12",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V15",
+      "name": "cmd_V15",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V18",
+      "name": "cmd_V18",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V20",
+      "name": "cmd_V20",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V22",
+      "name": "cmd_V22",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V23",
+      "name": "cmd_V23",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V24",
+      "name": "cmd_V24",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_V25",
+      "name": "cmd_V25",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002",
+          "REQ-CTL-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_P1",
+      "name": "cmd_P1",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_P2",
+      "name": "cmd_P2",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": null,
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_heater",
+      "name": "cmd_heater",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": "B5.heater",
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_coolB6",
+      "name": "cmd_coolB6",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": "B6.cooler",
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "cmd_coolB7",
+      "name": "cmd_coolB7",
+      "role": "actuator",
+      "datatype": "boolean",
+      "unit": null,
+      "binding": "B7.cooler",
+      "owner": "controller",
+      "range": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DAT-002"
+        ],
+        "note": null
+      }
+    }
+  ],
+  "interlocks": [
+    {
+      "id": "IL-HEATER",
+      "actuator": "cmd_heater",
+      "condition": "LIS_501 >= SP_HEATER_LVL and FIS_801 >= SP_K1_CW",
+      "sense": "permissive",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-SAF-001",
+          "REQ-SAF-005"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "IL-P1",
+      "actuator": "cmd_P1",
+      "condition": "LIS_701 > SP_PUMP_LVL",
+      "sense": "permissive",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-SAF-003"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "IL-P2",
+      "actuator": "cmd_P2",
+      "condition": "LIS_601 > SP_PUMP_LVL",
+      "sense": "permissive",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-SAF-004"
+        ],
+        "note": null
+      }
+    }
+  ],
+  "state_machines": [
+    {
+      "id": "ctrl",
+      "name": "BatchController",
+      "regions": [
+        "main",
+        "A",
+        "B"
+      ],
+      "states": [
+        {
+          "id": "Initial",
+          "name": "Idle / reset",
+          "region": "main",
+          "initial": true,
+          "final": false,
+          "actions": {},
+          "description": "Idle / reset",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "Step1",
+          "name": "Water charge to B3",
+          "region": "main",
+          "initial": false,
+          "final": false,
+          "actions": {
+            "cmd_V8": "true"
+          },
+          "description": "Water charge to B3",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "Step2",
+          "name": "Brine charge and mix",
+          "region": "main",
+          "initial": false,
+          "final": false,
+          "actions": {
+            "cmd_V9": "true"
+          },
+          "description": "Brine charge and mix",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "Step3",
+          "name": "B3 to B4",
+          "region": "main",
+          "initial": false,
+          "final": false,
+          "actions": {
+            "cmd_V11": "true"
+          },
+          "description": "B3 to B4",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "Step4",
+          "name": "Wait for B5 idle",
+          "region": "main",
+          "initial": false,
+          "final": false,
+          "actions": {},
+          "description": "Wait for B5 idle",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "Step5",
+          "name": "B4 to B5",
+          "region": "main",
+          "initial": false,
+          "final": false,
+          "actions": {
+            "cmd_V12": "true"
+          },
+          "description": "B4 to B5",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "Step6",
+          "name": "Heat and evaporate B5",
+          "region": "main",
+          "initial": false,
+          "final": false,
+          "actions": {
+            "cmd_heater": "true"
+          },
+          "description": "Heat and evaporate B5",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "Split",
+          "name": "Parallel branches active",
+          "region": "main",
+          "initial": false,
+          "final": false,
+          "actions": {},
+          "description": "Parallel branches active",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "Join",
+          "name": "Wait for both branches",
+          "region": "main",
+          "initial": false,
+          "final": false,
+          "actions": {},
+          "description": "Wait for both branches",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "IdleA",
+          "name": "Branch A inactive",
+          "region": "A",
+          "initial": true,
+          "final": false,
+          "actions": {},
+          "description": "Branch A inactive",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "Step12",
+          "name": "Cool condensate in B6",
+          "region": "A",
+          "initial": false,
+          "final": false,
+          "actions": {
+            "cmd_coolB6": "true"
+          },
+          "description": "Cool condensate in B6",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "Step13",
+          "name": "Return condensate to B1",
+          "region": "A",
+          "initial": false,
+          "final": false,
+          "actions": {
+            "cmd_P2": "true",
+            "cmd_V20": "true",
+            "cmd_V24": "true",
+            "cmd_V25": "true",
+            "cmd_V1": "true",
+            "cmd_V3": "true"
+          },
+          "description": "Return condensate to B1",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "DoneA",
+          "name": "Branch A complete",
+          "region": "A",
+          "initial": false,
+          "final": false,
+          "actions": {},
+          "description": "Branch A complete",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "IdleB",
+          "name": "Branch B inactive",
+          "region": "B",
+          "initial": true,
+          "final": false,
+          "actions": {},
+          "description": "Branch B inactive",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "Step7",
+          "name": "Wait for B7 idle",
+          "region": "B",
+          "initial": false,
+          "final": false,
+          "actions": {},
+          "description": "Wait for B7 idle",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "Step8",
+          "name": "B5 concentrate to B7",
+          "region": "B",
+          "initial": false,
+          "final": false,
+          "actions": {
+            "cmd_V15": "true"
+          },
+          "description": "B5 concentrate to B7",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "Step9",
+          "name": "Cool concentrate in B7",
+          "region": "B",
+          "initial": false,
+          "final": false,
+          "actions": {
+            "cmd_coolB7": "true"
+          },
+          "description": "Cool concentrate in B7",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "Step10",
+          "name": "Return concentrate to B2",
+          "region": "B",
+          "initial": false,
+          "final": false,
+          "actions": {
+            "cmd_P1": "true",
+            "cmd_V18": "true",
+            "cmd_V22": "true",
+            "cmd_V23": "true",
+            "cmd_V5": "true",
+            "cmd_V6": "true"
+          },
+          "description": "Return concentrate to B2",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "DoneB",
+          "name": "Branch B complete",
+          "region": "B",
+          "initial": false,
+          "final": false,
+          "actions": {},
+          "description": "Branch B complete",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "transitions": [
+        {
+          "id": "T0",
+          "source_state": "Initial",
+          "target_state": "Step1",
+          "guard": "time >= 20",
+          "effect": null,
+          "forks": [],
+          "joins": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [
+              "REQ-FUN-001"
+            ],
+            "note": null
+          }
+        },
+        {
+          "id": "T1",
+          "source_state": "Step1",
+          "target_state": "Step2",
+          "guard": "LIS_301 >= SP_B3_LVL_WATER",
+          "effect": null,
+          "forks": [],
+          "joins": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [
+              "REQ-FUN-002"
+            ],
+            "note": null
+          }
+        },
+        {
+          "id": "T2",
+          "source_state": "Step2",
+          "target_state": "Step3",
+          "guard": "QI_302 >= SP_B3_COMP",
+          "effect": null,
+          "forks": [],
+          "joins": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [
+              "REQ-FUN-003",
+              "REQ-PER-001"
+            ],
+            "note": null
+          }
+        },
+        {
+          "id": "T3",
+          "source_state": "Step3",
+          "target_state": "Step4",
+          "guard": "LIS_301 < SP_B3_EMPTY",
+          "effect": null,
+          "forks": [],
+          "joins": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [
+              "REQ-FUN-004"
+            ],
+            "note": null
+          }
+        },
+        {
+          "id": "T4",
+          "source_state": "Step4",
+          "target_state": "Step5",
+          "guard": "LIS_501 < SP_B5_IDLE",
+          "effect": null,
+          "forks": [],
+          "joins": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [
+              "REQ-FUN-005"
+            ],
+            "note": null
+          }
+        },
+        {
+          "id": "T5",
+          "source_state": "Step5",
+          "target_state": "Step6",
+          "guard": "LIS_501 >= SP_B5_BATCH or LIS_401 < SP_B3_EMPTY",
+          "effect": null,
+          "forks": [],
+          "joins": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [
+              "REQ-FUN-006"
+            ],
+            "note": null
+          }
+        },
+        {
+          "id": "T6",
+          "source_state": "Step6",
+          "target_state": "Split",
+          "guard": "QIS_502 >= SP_B5_COMP",
+          "effect": null,
+          "forks": [
+            "Step12",
+            "Step7"
+          ],
+          "joins": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [
+              "REQ-FUN-007",
+              "REQ-FUN-008"
+            ],
+            "note": null
+          }
+        },
+        {
+          "id": "T7",
+          "source_state": "Split",
+          "target_state": "Join",
+          "guard": "in(DoneA) and in(DoneB)",
+          "effect": null,
+          "forks": [],
+          "joins": [
+            "DoneA",
+            "DoneB"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [
+              "REQ-FUN-008"
+            ],
+            "note": null
+          }
+        },
+        {
+          "id": "T8",
+          "source_state": "Join",
+          "target_state": "Initial",
+          "guard": "time > SP_RESTART",
+          "effect": null,
+          "forks": [],
+          "joins": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [
+              "REQ-CTL-001"
+            ],
+            "note": null
+          }
+        },
+        {
+          "id": "TA1",
+          "source_state": "Step12",
+          "target_state": "Step13",
+          "guard": "TIS_602 <= SP_B6_COOL",
+          "effect": null,
+          "forks": [],
+          "joins": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [
+              "REQ-FUN-009"
+            ],
+            "note": null
+          }
+        },
+        {
+          "id": "TA2",
+          "source_state": "Step13",
+          "target_state": "DoneA",
+          "guard": "LIS_601 <= SP_PUMP_LVL",
+          "effect": null,
+          "forks": [],
+          "joins": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [
+              "REQ-ROU-003"
+            ],
+            "note": null
+          }
+        },
+        {
+          "id": "TB1",
+          "source_state": "Step7",
+          "target_state": "Step8",
+          "guard": "LIS_701 < SP_B5_IDLE",
+          "effect": null,
+          "forks": [],
+          "joins": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "TB2",
+          "source_state": "Step8",
+          "target_state": "Step9",
+          "guard": "LIS_501 < SP_B5_IDLE",
+          "effect": null,
+          "forks": [],
+          "joins": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "TB3",
+          "source_state": "Step9",
+          "target_state": "Step10",
+          "guard": "TIS_702 <= SP_B7_COOL",
+          "effect": null,
+          "forks": [],
+          "joins": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [
+              "REQ-FUN-010"
+            ],
+            "note": null
+          }
+        },
+        {
+          "id": "TB4",
+          "source_state": "Step10",
+          "target_state": "DoneB",
+          "guard": "LIS_701 <= SP_PUMP_LVL",
+          "effect": null,
+          "forks": [],
+          "joins": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [
+              "REQ-ROU-004"
+            ],
+            "note": null
+          }
+        }
+      ],
+      "scan_period": 0.1,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-FUN-008",
+          "REQ-CTL-001"
+        ],
+        "note": null
+      }
+    }
+  ],
+  "scenarios": [
+    {
+      "id": "BAT-09",
+      "name": "BAT09",
+      "stop_time": 3000.0,
+      "interval": 5.0,
+      "tolerance": 1e-6,
+      "solver": "dassl",
+      "initial_conditions": {},
+      "inputs": {},
+      "checks": [
+        {
+          "id": "BAT09-01",
+          "description": "Step1 exits at LIS-301 >= 0.13 m",
+          "kind": "threshold",
+          "expression": "crosses(B3.level, 0.13, rising)",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-FUN-002"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "BAT09-02",
+          "description": "Step2 exits at QI-302 >= 0.080 kg/kg",
+          "kind": "threshold",
+          "expression": "crosses(B3.w, 0.08, rising)",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-PER-001"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "BAT09-03",
+          "description": "Step3 empties B3 below 0.01 m",
+          "kind": "threshold",
+          "expression": "crosses(B3.level, 0.01, falling)",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-FUN-004"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "BAT09-04",
+          "description": "B5 charge reaches 0.18 m",
+          "kind": "threshold",
+          "expression": "crosses(B5.level, 0.18, rising)",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-FUN-006"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "BAT09-05",
+          "description": "Evaporation reaches QIS-502 >= 0.180 kg/kg",
+          "kind": "threshold",
+          "expression": "crosses(B5.w, 0.18, rising)",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-PER-002"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "BAT09-06",
+          "description": "B6 cools to 20 degC or below",
+          "kind": "threshold",
+          "expression": "crosses(B6.T, 293.15, falling)",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-FUN-009"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "BAT09-07",
+          "description": "B7 cools to 25 degC or below (CR-017)",
+          "kind": "threshold",
+          "expression": "crosses(B7.T, 298.15, falling)",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-FUN-010"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "BAT09-08",
+          "description": "B6 cooling completes before B7 return starts",
+          "kind": "threshold",
+          "expression": "before(crosses(B6.T, 293.15, falling), crosses(B7.level, 0.02, falling))",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-FUN-008"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "BAT09-09",
+          "description": "Condensate reaches B1, raising its inventory after the return",
+          "kind": "threshold",
+          "expression": "final(B1.level) >= 0.30",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-ROU-003"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "BAT09-10",
+          "description": "Concentrate reaches B2, diluting it below its 0.25 initial charge",
+          "kind": "threshold",
+          "expression": "final(B2.w) <= 0.25",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-ROU-004"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "BAT09-11",
+          "description": "Cycle restarts only after 2500 s",
+          "kind": "threshold",
+          "expression": "crosses(B3.level, 0.13, rising)",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-CTL-001"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "BAT09-12",
+          "description": "B5 level never goes negative",
+          "kind": "threshold",
+          "expression": "always(B5.level >= 0.0)",
+          "tolerance": null,
+          "requirement_ids": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-VV-001",
+          "REQ-VV-002"
+        ],
+        "note": null
+      }
+    }
+  ]
+}
