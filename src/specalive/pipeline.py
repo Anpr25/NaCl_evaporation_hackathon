@@ -90,7 +90,10 @@ class Pipeline:
 
     # ------------------------------------------------------------------ event plumbing
     def _emit(self, stage: Stage, status: str, message: str = "", **data: Any) -> PipelineEvent:
+        # Stamp wall-clock elapsed on every event. The UI needs it to show a stage actually
+        # taking time rather than a list that redraws instantly and looks fake.
         ev = PipelineEvent(stage, status, message, data)  # type: ignore[arg-type]
+        ev.elapsed_s = round(time.time() - getattr(self, "_t0", time.time()), 2)
         self.result.events.append(ev)
         return ev
 
@@ -103,7 +106,7 @@ class Pipeline:
     # ------------------------------------------------------------------ the pipeline
     def stream(self) -> Iterator[PipelineEvent]:
         cfg = self.cfg
-        t0 = time.time()
+        t0 = self._t0 = time.time()
 
         # ---------------------------------------------------------- 1. ingest
         yield self._emit("ingest", "start", f"reading {cfg.packet}")
@@ -291,6 +294,7 @@ class Pipeline:
             out_dir=cfg.out_dir,
             gate=self.result.gate,
             scorecard=self.result.scorecard,
+            results_csv=(cfg.out_dir / "results.csv"),
             router_stats=self.router.stats() if self.router else None,
             repair_steps=getattr(self, "_repair_steps", None),
             validation=getattr(self, "_validation", None),

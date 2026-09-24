@@ -1,0 +1,12 @@
+{
+  "text": "{\n  \"subject\": \"LIS-501\",\n  \"value\": \"0.05\"\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 170,
+  "completion_tokens": 25,
+  "latency_s": 10.804444551467896,
+  "data": {
+    "subject": "LIS-501",
+    "value": "0.05"
+  }
+}

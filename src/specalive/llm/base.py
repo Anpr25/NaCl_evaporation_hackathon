@@ -30,6 +30,15 @@ class ProviderUnavailable(LLMError):
     """No network, no daemon, no key. Router skips the tier silently."""
 
 
+class ModelUnavailable(LLMError):
+    """This model id is not served to this key. Try the next model in the tier.
+
+    Distinct from ProviderUnavailable on purpose: the account is fine, one model name is
+    stale. Hosted model catalogues churn faster than our config, and a 404 on a retired
+    model should cost us the next name in the list, not the whole tier.
+    """
+
+
 @dataclass
 class LLMRequest:
     task: str = "generic"
@@ -62,6 +71,9 @@ class LLMResponse:
     completion_tokens: int = 0
     latency_s: float = 0.0
     cached: bool = False
+    #: What the call cost the first time, kept when serving from cache so the saving is
+    #: visible. `latency_s` always reports what THIS call actually took.
+    original_latency_s: float = 0.0
     #: Parsed JSON when a schema was requested and the text validated.
     data: Any = None
 
@@ -75,6 +87,7 @@ class LLMResponse:
             "completion_tokens": self.completion_tokens,
             "latency_s": round(self.latency_s, 3),
             "cached": self.cached,
+            "saved_s": round(self.original_latency_s, 3) if self.cached else 0.0,
             "escalated_from": escalated_from,
         }
 
@@ -88,6 +101,10 @@ class Provider(abc.ABC):
         self.name = name
         self.cfg = cfg
         self.model: str = cfg.get("model", "")
+        #: Preferred model first, then declared fallbacks. Tried in order on ModelUnavailable.
+        self.models: list[str] = [self.model, *cfg.get("fallback_models", [])]
+        #: Set once a model has actually answered, so we stop paying for dead names.
+        self.resolved_model: str | None = None
 
     @abc.abstractmethod
     def available(self) -> bool:

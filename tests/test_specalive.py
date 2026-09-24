@@ -404,3 +404,86 @@ def test_partial_classes_are_excluded_by_the_compiler_not_by_their_name():
     keys = {e.key for e in _build_entries(meta, ("model",))}
     assert "Demo.RealThing" in keys
     assert "Demo.PartialThing" not in keys, "a partial class must not reach the catalog"
+# --------------------------------------------------------------- reference-data screens (D4)
+
+
+def _csv(tmp_path, name, header, rows):
+    import csv as _csv_mod
+
+    p = tmp_path / name
+    with p.open("w", newline="", encoding="utf-8") as fh:
+        w = _csv_mod.writer(fh)
+        w.writerow(header)
+        w.writerows(rows)
+    return p
+
+
+def test_screen_rejects_an_impossible_rotational_overshoot(tmp_path):
+    """A constant torque into an inertia with linear damping is first order. It cannot
+    overshoot, so a trace that does is not a solution of the system it claims to describe."""
+    import math as _m
+
+    rows = [[i * 0.05, 12.5 * (1 - _m.exp(-0.5 * i * 0.05) * _m.cos(2.0 * i * 0.05)), 2.0]
+            for i in range(400)]
+    ok, notes = screen_reference(_csv(tmp_path, "over.csv", ["time", "J2.w", "M1.tau"], rows))
+    assert not ok
+    assert any("overshoot" in n for n in notes), notes
+
+
+def test_screen_accepts_a_clean_first_order_spinup(tmp_path):
+    import math as _m
+
+    rows = [[i * 0.05, 12.5 * (1 - _m.exp(-(i * 0.05) / 2)), 2.0] for i in range(400)]
+    ok, _ = screen_reference(_csv(tmp_path, "ok.csv", ["time", "J2.w", "M1.tau"], rows))
+    assert ok
+
+
+def test_screen_catches_energy_flowing_the_wrong_way(tmp_path):
+    rows = [[i * 1.0, 20.0 + i * 0.05, 1] for i in range(60)]
+    ok, notes = screen_reference(
+        _csv(tmp_path, "warm.csv", ["time", "B6_temp_C", "B6_cooler_cmd"], rows)
+    )
+    assert not ok
+    assert any("wrong way" in n for n in notes), notes
+
+
+def test_speed_detection_does_not_mistake_a_mass_fraction_for_a_speed(tmp_path):
+    """`B5_w_NaCl` is a NaCl mass fraction. An earlier pattern matched `_w_` and reported a
+    chemical composition as an impossible rotational overshoot."""
+    rows = [[i * 5.0, 0.08 + 0.1 * (i / 100), 0.18 if i > 50 else 0.08] for i in range(101)]
+    ok, notes = screen_reference(
+        _csv(tmp_path, "conc.csv", ["time", "B5_w_NaCl", "B5_other"], rows)
+    )
+    assert not any("overshoot" in n for n in notes), notes
+
+
+@pytest.mark.skipif(not REF_IR.exists(), reason="reference IR not built")
+def test_screen_consults_the_ir_for_facts_the_columns_do_not_carry(tmp_path):
+    """omc eliminates a constant source torque as a parameter alias, so `M1.tau` never
+    appears in the result. Column-name guessing then concludes there is no constant drive
+    and skips the screen; the IR knows better."""
+    import math as _m
+
+    from specalive.verify.acceptance import _system_facts
+
+    drive_ir = ROOT / "benchmarks" / "drivetrain" / "reference_ir.json"
+    if not drive_ir.exists():
+        pytest.skip("drivetrain IR not built")
+    model = SystemModel.model_validate_json(drive_ir.read_text(encoding="utf-8"))
+    assert _system_facts(model)["constant_drive"] is True
+    assert _system_facts(None)["constant_drive"] is None
+
+    # No torque column at all, so only the IR can say the drive is constant.
+    rows = [[i * 0.05, 12.5 * (1 - _m.exp(-0.5 * i * 0.05) * _m.cos(2.0 * i * 0.05))]
+            for i in range(400)]
+    path = _csv(tmp_path, "notorque.csv", ["time", "J2.w"], rows)
+    ok_with, notes = screen_reference(path, model)
+    assert not ok_with, "with the IR, the overshoot must be caught"
+    assert any("overshoot" in n for n in notes)
+
+
+def test_a_trace_with_nothing_screenable_is_not_silently_endorsed(tmp_path):
+    rows = [[i, i * 2] for i in range(20)]
+    ok, notes = screen_reference(_csv(tmp_path, "opaque.csv", ["time", "some_column"], rows))
+    assert ok, "we cannot reject what we cannot check"
+    assert any("neither endorsed nor rejected" in n for n in notes), notes

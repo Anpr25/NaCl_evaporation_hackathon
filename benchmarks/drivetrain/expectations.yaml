@@ -1,12 +1,36 @@
-# TODO(D): drop the organisers' drivetrain packet into sources/ and fill this in.
-# The generality proof: rotational mechanics shares no vocabulary, no connector type and no
-# L1 template with the NaCl case, so every block here must bind at L0 against the harvested
-# Modelica.Mechanics.Rotational catalog. If this one passes, the system is not NaCl-shaped.
+# The generality proof.
+#
+# Rotational mechanics shares no vocabulary, no connector type and no L1 template with the
+# NaCl evaporation packet, and there is no state machine at all. Every block must bind at
+# L0 against the harvested Modelica catalog. If this passes, the architecture is not
+# NaCl-shaped.
 name: drivetrain
-domain: rotational + electrical
+domain: rotational mechanics
 packet: sources
+
+reference_ir: reference_ir.json
 package: GeneratedPlant
+model: GeneratedPlant.AT22
+stop_time: 20
+
 expect:
   compiles: true
   simulates: true
-  binding_tiers: {L0: ">=4"}
+  acceptance_min: 7
+  acceptance_total: 7
+  known_failures: []
+  # The whole point: zero L1, zero L2. Everything off the shelf.
+  binding_tiers: {L0: 6, L1: 0, L2: 0, unbound: 0}
+
+traps:
+  - id: F1
+    fact: >
+      G1 reduction ratio is 5.0 per approved CR-114, not the 4.0 carried in the archived
+      simulation model. Same shape as the NaCl CR-017 trap, different domain.
+
+physics:
+  note: >
+    Steady state is analytic, so the acceptance numbers are derived rather than fitted.
+    The gear multiplies motor torque by the ratio and the damper balances it:
+      w_load  = ratio * tau / d = 5.0 * 2.0 / 0.8 = 12.5 rad/s
+      w_motor = ratio * w_load                    = 62.5 rad/s

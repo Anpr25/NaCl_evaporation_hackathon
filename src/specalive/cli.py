@@ -22,8 +22,14 @@ from rich.console import Console
 from rich.table import Table
 
 from .pipeline import Pipeline, PipelineConfig, PipelineEvent
+from .settings import load_env
 
-app = typer.Typer(add_completion=False, help="From specs to live engineering models.")
+# Providers read os.getenv in their constructor, so the env file has to be in place before
+# any of them is built. Doing it here means every command gets it, including `doctor`.
+load_env()
+
+app = typer.Typer(add_completion=False,
+                  help="ModelAlchemist - engineering evidence to SysML v2 and running Modelica.")
 con = Console()
 
 _STATUS_STYLE = {"ok": "green", "warn": "yellow", "fail": "red", "skip": "dim", "start": "cyan"}
@@ -56,9 +62,10 @@ def _router(mode: str):
 def doctor() -> None:
     """Check every external dependency and say plainly what is missing."""
     from .llm.router import Router
+    from .settings import key_status
     from .verify.omc import describe_environment
 
-    t = Table(title="SpecAlive environment", show_lines=False)
+    t = Table(title="ModelAlchemist environment", show_lines=False)
     t.add_column("Component")
     t.add_column("Status")
     t.add_column("Detail", overflow="fold")
@@ -71,6 +78,16 @@ def doctor() -> None:
         env.get("omc_version") or env.get("error", ""),
     )
     t.add_row("Python", "[green]ok[/]", sys.version.split()[0])
+
+    loaded = load_env()
+    t.add_row(
+        "Env file",
+        "[green]loaded[/]" if loaded else "[yellow]none[/]",
+        ", ".join(loaded) if loaded else "no .env found; using shell environment only",
+    )
+    for var, state in key_status().items():
+        good = state.startswith("set (")
+        t.add_row(f"  {var}", "[green]ok[/]" if good else "[dim]--[/]", state)
 
     cat = Path("out/catalog.jsonl")
     n = sum(1 for _ in cat.open(encoding="utf-8")) if cat.exists() else 0
@@ -429,7 +446,7 @@ def serve(
     import uvicorn
 
     os.environ["SPECALIVE_PROVIDER"] = provider
-    con.print(f"SpecAlive on http://{host}:{port}  (provider={provider})")
+    con.print(f"ModelAlchemist on http://{host}:{port}  (provider={provider})")
     uvicorn.run("specalive.web.app:app", host=host, port=port, log_level="warning")
 
 

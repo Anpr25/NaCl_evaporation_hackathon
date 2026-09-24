@@ -149,16 +149,22 @@ class Binder:
             shortlist=self.index.render_shortlist(hits),
         )
 
+        offered = {h.entry.key: h for h in hits}
+
         def validate(data: Any) -> tuple[bool, str]:
-            i = data.get("choice_index", -1)
-            if i == -1:
-                return True, ""
-            if not isinstance(i, int) or not 0 <= i < len(hits):
-                return False, f"choice_index {i} is outside 0..{len(hits) - 1}"
-            valid = {p.name for p in hits[i].entry.params}
+            choice = str((data or {}).get("choice", "")).strip()
+            if not choice:
+                return True, ""  # declining is a legitimate answer; we fall through to L1
+            hit = offered.get(choice)
+            if hit is None:
+                # The model named something it was not shown. Reject rather than escalate on
+                # a fabricated class -- this is the check that makes "cannot hallucinate an
+                # API" literally true rather than merely likely.
+                return False, f"'{choice}' was not in the candidate list"
+            valid = {p.name for p in hit.entry.params}
             for src, dst in (data.get("parameter_map") or {}).items():
                 if dst not in valid:
-                    return False, f"parameter '{dst}' does not exist on {hits[i].entry.key}"
+                    return False, f"parameter '{dst}' does not exist on {choice}"
             return True, ""
 
         try:
@@ -166,10 +172,13 @@ class Binder:
         except Exception:
             return None
         data = resp.data or {}
-        i = data.get("choice_index", -1)
-        if i == -1 or data.get("confidence", 0) < 0.5:
+        choice = str(data.get("choice", "")).strip()
+        if not choice or data.get("confidence", 0) < 0.5:
             return None
-        chosen = hits[i].entry
+        hit = offered.get(choice)
+        if hit is None:
+            return None
+        chosen = hit.entry
         mods = self._map_params(block, chosen, data.get("parameter_map") or {})
         return BindingResult("L0", chosen.key, mods, data.get("reason", "")[:300])
 

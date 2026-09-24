@@ -1,0 +1,1051 @@
+{
+  "schema_version": "1.0.0",
+  "name": "GearedDriveBench",
+  "description": "Constant-torque drive through a reduction gear into a damped load inertia",
+  "domains": [
+    "rotational"
+  ],
+  "sources": [],
+  "claims": [],
+  "decisions": [
+    {
+      "id": "DEC-DRV-01",
+      "subject": "G1",
+      "predicate": "ratio",
+      "winner_claim_id": "CLM-CR-114",
+      "loser_claim_ids": [
+        "CLM-LEGACY-RIG"
+      ],
+      "rule_id": "P1-explicit-supersession",
+      "rationale": "CR-114 (approved, 2026-04-18) sets the G1 reduction ratio to 5.0 and explicitly supersedes the 4.0 value carried in the archived simulation model, which was taken from a prototype gearbox that was never fitted.",
+      "resolved": true,
+      "provisional": false,
+      "failure_mode": "F1-recency-bias"
+    }
+  ],
+  "gaps": [],
+  "requirements": [
+    {
+      "id": "REQ-DRV-001",
+      "text": "The rig shall drive a load-side inertia through a single-stage reduction gear.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "C1",
+        "C2",
+        "C3",
+        "C4",
+        "C5",
+        "J2"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Rig datasheet / AT-22"
+      }
+    },
+    {
+      "id": "REQ-DRV-002",
+      "text": "The applied torque shall be 2.0 N.m, constant from t = 0.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "M1"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Rig datasheet / AT-22"
+      }
+    },
+    {
+      "id": "REQ-DRV-003",
+      "text": "The reduction ratio shall be 4.0.",
+      "category": null,
+      "priority": "must",
+      "status": "superseded",
+      "superseded_by": "CR-114",
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Rig datasheet / AT-22"
+      }
+    },
+    {
+      "id": "REQ-DRV-004",
+      "text": "The reduction ratio shall be 5.0.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "AT22-02",
+        "AT22-06",
+        "G1"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Rig datasheet / AT-22"
+      }
+    },
+    {
+      "id": "REQ-DRV-005",
+      "text": "Parasitic load shall be modelled as linear viscous damping of 0.8 N.m.s/rad.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "D1"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Rig datasheet / AT-22"
+      }
+    },
+    {
+      "id": "REQ-DRV-006",
+      "text": "The damper shall react against a fixed mechanical ground.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "F1"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Rig datasheet / AT-22"
+      }
+    },
+    {
+      "id": "REQ-VV-010",
+      "text": "The load-side speed shall settle at 12.5 rad/s within 2%.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "AT22-01",
+        "AT22-02",
+        "AT22-03"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Rig datasheet / AT-22"
+      }
+    },
+    {
+      "id": "REQ-VV-011",
+      "text": "The load-side speed shall not overshoot 13.0 rad/s.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "AT22-04"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Rig datasheet / AT-22"
+      }
+    },
+    {
+      "id": "REQ-VV-012",
+      "text": "The motor-side speed shall be the ratio multiple of the load-side speed.",
+      "category": null,
+      "priority": "must",
+      "status": "active",
+      "superseded_by": null,
+      "authority": null,
+      "verification_method": null,
+      "satisfied_by": [
+        "AT22-06",
+        "AT22-07"
+      ],
+      "verified_by": [],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": "Rig datasheet / AT-22"
+      }
+    }
+  ],
+  "parameters": [
+    {
+      "id": "P-M1-TAU",
+      "name": "tau_constant",
+      "quantity": {
+        "value": 2.0,
+        "unit": "N.m",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "M1",
+      "description": "Applied constant torque",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DRV-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "P-J1-INERTIA",
+      "name": "J",
+      "quantity": {
+        "value": 0.02,
+        "unit": "kg.m2",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "J1",
+      "description": "Motor-side inertia",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "P-G1-RATIO-OLD",
+      "name": "ratio",
+      "quantity": {
+        "value": 4.0,
+        "unit": "1",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "G1",
+      "description": "Reduction ratio (prototype gearbox)",
+      "status": "superseded",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DRV-003"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "P-G1-RATIO",
+      "name": "ratio",
+      "quantity": {
+        "value": 5.0,
+        "unit": "1",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "G1",
+      "description": "Reduction ratio",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DRV-004"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "P-J2-INERTIA",
+      "name": "J",
+      "quantity": {
+        "value": 0.35,
+        "unit": "kg.m2",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "J2",
+      "description": "Load-side inertia",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "P-D1-DAMPING",
+      "name": "d",
+      "quantity": {
+        "value": 0.8,
+        "unit": "N.m.s/rad",
+        "display_unit": null,
+        "tolerance": null
+      },
+      "scope": "D1",
+      "description": "Viscous damping coefficient",
+      "status": "effective",
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DRV-005"
+        ],
+        "note": null
+      }
+    }
+  ],
+  "blocks": [
+    {
+      "id": "M1",
+      "name": "Torque source",
+      "kind": "constant torque drive",
+      "domains": [
+        "rotational"
+      ],
+      "ports": [
+        {
+          "id": "flange",
+          "name": "flange",
+          "domain": "rotational",
+          "direction": "acausal",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "M1.tau_constant",
+          "name": "tau_constant",
+          "quantity": {
+            "value": 2.0,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "M1.useSupport",
+          "name": "useSupport",
+          "quantity": {
+            "value": false,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Torque source",
+      "binding_tier": "L0",
+      "modelica_class": "Modelica.Mechanics.Rotational.Sources.ConstantTorque",
+      "modelica_modifiers": {
+        "tau_constant": "2.0",
+        "useSupport": "false"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "harvested catalog class, verified ports and parameters",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DRV-002"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "J1",
+      "name": "Motor inertia",
+      "kind": "rotational inertia",
+      "domains": [
+        "rotational"
+      ],
+      "ports": [
+        {
+          "id": "flange_a",
+          "name": "flange_a",
+          "domain": "rotational",
+          "direction": "acausal",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "flange_b",
+          "name": "flange_b",
+          "domain": "rotational",
+          "direction": "acausal",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "J1.J",
+          "name": "J",
+          "quantity": {
+            "value": 0.02,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Motor inertia",
+      "binding_tier": "L0",
+      "modelica_class": "Modelica.Mechanics.Rotational.Components.Inertia",
+      "modelica_modifiers": {
+        "J": "0.02"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "harvested catalog class, verified ports and parameters",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [],
+        "note": null
+      }
+    },
+    {
+      "id": "G1",
+      "name": "Reduction gear",
+      "kind": "ideal rotational gear",
+      "domains": [
+        "rotational"
+      ],
+      "ports": [
+        {
+          "id": "flange_a",
+          "name": "flange_a",
+          "domain": "rotational",
+          "direction": "acausal",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "flange_b",
+          "name": "flange_b",
+          "domain": "rotational",
+          "direction": "acausal",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "G1.ratio",
+          "name": "ratio",
+          "quantity": {
+            "value": 5.0,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "G1.useSupport",
+          "name": "useSupport",
+          "quantity": {
+            "value": false,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Reduction gear",
+      "binding_tier": "L0",
+      "modelica_class": "Modelica.Mechanics.Rotational.Components.IdealGear",
+      "modelica_modifiers": {
+        "ratio": "5.0",
+        "useSupport": "false"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "harvested catalog class, verified ports and parameters",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DRV-004"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "J2",
+      "name": "Load inertia",
+      "kind": "rotational inertia",
+      "domains": [
+        "rotational"
+      ],
+      "ports": [
+        {
+          "id": "flange_a",
+          "name": "flange_a",
+          "domain": "rotational",
+          "direction": "acausal",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "flange_b",
+          "name": "flange_b",
+          "domain": "rotational",
+          "direction": "acausal",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "J2.J",
+          "name": "J",
+          "quantity": {
+            "value": 0.35,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Load inertia",
+      "binding_tier": "L0",
+      "modelica_class": "Modelica.Mechanics.Rotational.Components.Inertia",
+      "modelica_modifiers": {
+        "J": "0.35"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "harvested catalog class, verified ports and parameters",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DRV-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "D1",
+      "name": "Viscous damper",
+      "kind": "rotational damper",
+      "domains": [
+        "rotational"
+      ],
+      "ports": [
+        {
+          "id": "flange_a",
+          "name": "flange_a",
+          "domain": "rotational",
+          "direction": "acausal",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "flange_b",
+          "name": "flange_b",
+          "domain": "rotational",
+          "direction": "acausal",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "D1.d",
+          "name": "d",
+          "quantity": {
+            "value": 0.8,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Viscous damper",
+      "binding_tier": "L0",
+      "modelica_class": "Modelica.Mechanics.Rotational.Components.Damper",
+      "modelica_modifiers": {
+        "d": "0.8"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "harvested catalog class, verified ports and parameters",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DRV-005"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "F1",
+      "name": "Frame",
+      "kind": "mechanical ground",
+      "domains": [
+        "rotational"
+      ],
+      "ports": [
+        {
+          "id": "flange",
+          "name": "flange",
+          "domain": "rotational",
+          "direction": "acausal",
+          "connector_type": null,
+          "multiplicity": 1,
+          "description": null,
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "parameters": [
+        {
+          "id": "F1.phi0",
+          "name": "phi0",
+          "quantity": {
+            "value": 0.0,
+            "unit": null,
+            "display_unit": null,
+            "tolerance": null
+          },
+          "scope": null,
+          "description": null,
+          "status": "effective",
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "description": "Frame",
+      "binding_tier": "L0",
+      "modelica_class": "Modelica.Mechanics.Rotational.Components.Fixed",
+      "modelica_modifiers": {
+        "phi0": "0.0"
+      },
+      "synthesised_equations": null,
+      "binding_rationale": "harvested catalog class, verified ports and parameters",
+      "abstracted_into": null,
+      "physical_only": false,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DRV-006"
+        ],
+        "note": null
+      }
+    }
+  ],
+  "connections": [
+    {
+      "id": "C1",
+      "source": "M1.flange",
+      "target": "J1.flange_a",
+      "domain": "rotational",
+      "medium": "shaft torque",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DRV-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "C2",
+      "source": "J1.flange_b",
+      "target": "G1.flange_a",
+      "domain": "rotational",
+      "medium": "motor shaft",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DRV-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "C3",
+      "source": "G1.flange_b",
+      "target": "J2.flange_a",
+      "domain": "rotational",
+      "medium": "output shaft",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DRV-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "C4",
+      "source": "J2.flange_b",
+      "target": "D1.flange_a",
+      "domain": "rotational",
+      "medium": "load shaft",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DRV-001"
+        ],
+        "note": null
+      }
+    },
+    {
+      "id": "C5",
+      "source": "D1.flange_b",
+      "target": "F1.flange",
+      "domain": "rotational",
+      "medium": "reaction to frame",
+      "series_elements": [],
+      "description": null,
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-DRV-001"
+        ],
+        "note": null
+      }
+    }
+  ],
+  "signals": [],
+  "interlocks": [],
+  "state_machines": [],
+  "scenarios": [
+    {
+      "id": "AT-22",
+      "name": "AT22",
+      "stop_time": 20.0,
+      "interval": 0.02,
+      "tolerance": 1e-6,
+      "solver": "dassl",
+      "initial_conditions": {},
+      "inputs": {},
+      "checks": [
+        {
+          "id": "AT22-01",
+          "description": "Load spins up past 12.0 rad/s",
+          "kind": "threshold",
+          "expression": "crosses(J2.w, 12.0, rising)",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-VV-010"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "AT22-02",
+          "description": "Load-side speed settles at 12.5 rad/s within 2%",
+          "kind": "threshold",
+          "expression": "final(J2.w) >= 12.25",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-VV-010",
+            "REQ-DRV-004"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "AT22-03",
+          "description": "Load-side speed does not exceed the 2% upper band",
+          "kind": "threshold",
+          "expression": "final(J2.w) <= 12.75",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-VV-010"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "AT22-04",
+          "description": "No overshoot above 13.0 rad/s",
+          "kind": "threshold",
+          "expression": "always(J2.w <= 13.0)",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-VV-011"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "AT22-05",
+          "description": "Load-side speed is never negative",
+          "kind": "threshold",
+          "expression": "always(J2.w >= 0.0)",
+          "tolerance": null,
+          "requirement_ids": [],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "AT22-06",
+          "description": "Motor-side speed reaches 5x the load-side speed",
+          "kind": "threshold",
+          "expression": "final(J1.w) >= 62.0",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-VV-012",
+            "REQ-DRV-004"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        },
+        {
+          "id": "AT22-07",
+          "description": "Motor-side speed does not exceed 5x plus tolerance",
+          "kind": "threshold",
+          "expression": "final(J1.w) <= 63.0",
+          "tolerance": null,
+          "requirement_ids": [
+            "REQ-VV-012"
+          ],
+          "provenance": {
+            "claim_ids": [],
+            "decision_ids": [],
+            "requirement_ids": [],
+            "note": null
+          }
+        }
+      ],
+      "provenance": {
+        "claim_ids": [],
+        "decision_ids": [],
+        "requirement_ids": [
+          "REQ-VV-010",
+          "REQ-VV-011",
+          "REQ-VV-012"
+        ],
+        "note": null
+      }
+    }
+  ]
+}

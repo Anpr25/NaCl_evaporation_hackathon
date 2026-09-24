@@ -7,9 +7,10 @@ Keep this current. When you finish something, move it from §4 to §2 with the e
 proves it. When you make a call that another person could reasonably have made differently,
 add it to §3 — that is how we avoid re-litigating decisions at 2am on day three.
 
-**Last updated:** after the catalog harvest was made to work at full scale.
-**Verdict:** the hard gate passes, the pipeline runs end to end, the full Modelica catalog
-is built and retrieval works across five domains. Three modules are still stubs. On track.
+**Last updated:** after the drivetrain bench went green (D1, D2, D4, D5, D6 complete).
+**Verdict:** the hard gate passes on **two domains**, all four model tiers are live and
+verified, and the report now carries plots. Two modules still stubbed (A's extraction
+path, B's IR assembly). On track.
 
 ---
 
@@ -20,18 +21,20 @@ is built and retrieval works across five domains. Three modules are still stubs.
 | Hard gate (Modelica compiles) | **PASS** |
 | Simulation runs 3000 s | **PASS** |
 | Acceptance checks | **11/12** (the twelfth is a defect in the source data — see §5) |
-| Tests | **24/24** green (22 fast, 2 gate) |
+| Tests | **53/53** green (51 fast, 2 gate) |
 | Pipeline stages implemented | 10 of 10 wired; 3 have stubbed internals |
 | Modelica catalog | **1,529 classes** harvested from full MSL in **203 s** |
 | Catalog retrieval | **7/8 top-1** across rotational, electrical, fluid, signal, thermal — BM25 only, no model |
-| Domains proven | fluid + thermal + sequential control end to end; catalog retrieval across five domains |
+| Domains proven | **two end to end**: fluid+thermal+control (NaCl, 11/12) and rotational mechanics (drivetrain, **7/7**, all L0) |
 | LLM calls required to reach the above | **zero** |
+| Local model tier | **live** — qwen3:4b, 100% on the task bake-off, 43 tok/s fully on GPU |
+| Cloud tiers | **live** — Groq `openai/gpt-oss-120b`, Gemini vision read the P&ID 15/15 valves |
 
 Reproduce:
 
 ```bash
 pip install -e .
-python -m pytest              # 22 fast
+python -m pytest              # 51 fast
 python -m pytest -m slow      # + 2 compile/simulate gate tests, ~55 s
 specalive harvest             # 1529 classes, ~200 s, once per machine
 specalive run nacl_evaporation_sysmlv2_full_dataset \
@@ -98,13 +101,63 @@ Everything here was executed on the dev machine, not just written.
   The one miss is a partial base class leaking into the results, and the right answer is in
   the shortlist. That is exactly the case the LLM picker exists for. Backlog C7 tightens it.
 - **LLM router**: provider-neutral, five modes, disk cache, quota tracking, schema validation
-  with escalation. Providers written for Ollama, Groq, Gemini and replay. **Not yet exercised
-  against a live endpoint** — no keys and no Ollama on the dev machine.
+  with escalation. **Now exercised against a live Ollama endpoint** and against 19 fault-injection
+  tests covering invalid JSON, schema violation, validator rejection, retry feedback, dead
+  daemon, mid-call disconnect, 429 quota, declared rate limits, cache hit/miss, replay on a warm
+  and a cold cache, total failure, and the stats log. Groq and Gemini remain untested: no keys.
+- **Cloud tiers are up and verified against real endpoints.**
+
+  | Tier | Model | Verified by |
+  |:--|:--|:--|
+  | `t3_cloud_reasoning` | `openai/gpt-oss-120b` | adjudicated the CR-017 vs legacy B7 conflict correctly in 2.2 s |
+  | `t4_cloud_vision` | `gemini-flash-latest` -> `gemini-3.5-flash` | read the P&ID: **10/10 equipment, 15/15 automated valves**, 17 instruments |
+
+  The vision run is also a live demonstration of trap F5: the model correctly read *29*
+  valves, because the drawing shows all of them. Ownership comes from the register.
+- **Local tier is up.** `qwen3:4b` + `nomic-embed-text`, both reported `up` by `doctor`.
+  Measured on the Quadro T1000 (4 GB, display on the iGPU):
+
+  | Ollama config | GPU residency | throughput |
+  |:--|:--|:--|
+  | default | 67% | 13.3 tok/s |
+  | `num_gpu: 99` | **100%**, 3.18 GB | **43.1 tok/s** |
+
+  A 3.2x speedup from one setting. Ollama leaves ~1.6 GB of a 4 GB card unused by default.
+- **Bake-off result** (`specalive models`, 5 extraction + 6 catalog-pick tasks):
+
+  | Model | Extraction | Catalog pick | tok/s |
+  |:--|:--|:--|:--|
+  | **qwen3:4b** | **5/5** | **6/6** | 10-43 |
+  | gemma3:4b | 5/5 | 5/6 | 4 |
+
+  Getting there took four fixes to **our own code**, not a change of model — see §6.
 - **CLI**: `doctor`, `harvest`, `run`, `gate`, `bench`, `serve`, `ir-diff`. All run.
 - **Web app**: FastAPI + SSE, no build step. Smoke-tested (`/`, `/api/health`, `POST /api/runs`).
 - **Tests**: 24, each encoding a real bug or a planted trap.
 
-### 2.4 Analysis of the packet
+### 2.4 Generality — the drivetrain bench
+
+A geared drive rig that shares nothing with the NaCl packet: rotational mechanics, acausal
+`Flange_a`/`Flange_b` connectors, no state machine at all, and **every block bound at L0**
+against the harvested catalog. Five heterogeneous source files, its own precedence trap
+(archived model says ratio 4.0, approved CR-114 says 5.0).
+
+| | |
+|:--|:--|
+| Bindings | **L0=6, L1=0, L2=0** — not one SpecAlive template |
+| Acceptance | **7/7** |
+| Steady state | `w_load = ratio*tau/d = 5*2/0.8 = 12.5` rad/s; simulated **12.500**, error **0.000%** |
+
+The acceptance thresholds are derived from the analytic solution, not fitted to the output.
+
+```
+| Packet              | Compiles | Simulates | Acceptance | Verdict   |
+| drivetrain          | yes      | yes       | 7/7        | PASS      |
+| hvac_heat_exchanger | -        | -         | -          | NO PACKET |
+| nacl_evaporation    | yes      | yes       | 11/12      | PASS      |
+```
+
+### 2.5 Analysis of the packet
 
 All six planted traps identified and resolved, each with a `DecisionRecord` naming the rule
 and the trap. Routing verified against the supplied trace by decoding valve commands per
@@ -161,6 +214,18 @@ reason, and update the row rather than arguing from memory.
 | D24 | Base classes are **probed but never emitted**; dead subtrees are cut before the expensive pass | MSL declares connectors in partial base classes, so skipping them for speed silently strips ports off everything that inherits them | two filters instead of one |
 | D25 | A failed chunk is **reported and skipped**, not fatal | a partial catalog beats no catalog, especially on an unfamiliar machine | the catalog can be silently incomplete, so the warning must be loud |
 | D26 | The harvested catalog is **regenerated per machine, never committed** | it must match the MSL actually installed; a catalog built against 4.1.0 and used on 4.0.0 would name classes that do not exist there, breaking the one guarantee the whole design rests on | a 200 s setup step, which `doctor` prompts for |
+| D35 | Reference-data screens are **opt-in by content and tri-state** | a trace with nothing screenable is reported as "neither endorsed nor rejected", never as a pass; silence must not look like approval | some traces get no screen at all |
+| D36 | Screens **consult the IR**, not just column names | omc eliminates a constant source torque as a parameter alias, so `M1.tau` is absent from the result and a name-based check wrongly concludes there is no constant drive | `screen_reference` now takes an optional model |
+| D37 | Report plots are **hand-written inline SVG**, not matplotlib | the report must stay one self-contained file that survives being emailed, must be readable in dark mode, and must not add a 50 MB dependency to a fresh machine | we write our own axis code |
+| D38 | Plots show **what the acceptance criteria name**, with thresholds drawn on the same axes | ranking by variation surfaced `der(J1.w)` and connector internals; and a reader should see the criterion being met, not trust a PASS in a table | fillers capped at two |
+| D31 | `.env` is **loaded at every entry point** via `settings.load_env()` | the file existed with valid keys, `python-dotenv` was a declared dependency, and nothing ever called it -- so both cloud tiers reported down and the router silently degraded to local | new entry points must remember to call it |
+| D32 | Tiers carry **`fallback_models`, and providers now walk the list** | the field was in config and no provider read it. `llama-3.3-70b-versatile` 404s on a current key, which would otherwise be a dead tier | one wasted request per stale name, once per run |
+| D33 | **502/503/529 falls through to the next model**, not the next tier | transient overload is the most likely free-tier failure. Observed live: gemini-flash-latest was overloaded and the P&ID run only succeeded by walking down to gemini-3.5-flash | a busy model costs one request before we move on |
+| D34 | Cloud model ids are **verified against the live /models endpoint**, not assumed | hosted catalogues churn faster than our config; `doctor` now reports the model that actually resolved | one cheap API call at probe time |
+| D27 | Local models run with **`num_gpu: 99`** forced | measured 3.2x: Ollama otherwise leaves ~1.6 GB of a 4 GB card unused and runs a third of the model on CPU | must be lowered on a smaller card; `specalive models` shows the split |
+| D28 | **Thinking is disabled** on reasoning models (`think: false`) | with it on, qwen3 returns an EMPTY `response` and puts everything in a separate `thinking` field, so every structured call fails and the router escalates for nothing. We do not want reasoning for span extraction or multiple choice anyway | a provider flag per tier |
+| D29 | The catalog picker answers with a **class name, not a list index** | measured: with an index, a 4B model falls back to "0" when unsure, and that was two of its three errors. A name must be copied from the list, and a name never offered is detectable as a hallucination | slightly longer output |
+| D30 | A cache hit reports **its own latency**, not the original call's | replaying the old figure inflated every "time spent on models" number, and that number is evidence we quote | one extra field, `original_latency_s`, to keep the saving visible |
 | D22 | A hand-built **reference IR** is a first-class artefact | decouples B/C/D from A on day one, and doubles as A's scoring oracle via `ir-diff` | must be kept in step with the IR schema |
 
 ---
@@ -221,17 +286,23 @@ Ordered by priority within each owner. `[!]` means it blocks someone else.
 
 ### D — Platform, verification, proof
 
-- [ ] **D1 `[!]`** `ollama pull qwen2.5:3b-instruct-q4_K_M nomic-embed-text`; get Groq and
-      Gemini keys; `specalive doctor` all green. Nothing in `llm/` has met a live endpoint yet.
-- [ ] **D2** Exercise every router path deliberately: quota exhaustion, offline, replay, and
-      a tier returning schema-invalid JSON. An untested fallback is not a fallback.
+- [x] ~~**D1** bring every tier up~~ — **done**. Local (`qwen3:4b`, 100% GPU, 11/11 on the
+      bake-off), Groq (`openai/gpt-oss-120b`) and Gemini vision (read the P&ID 15/15) all
+      verified against live endpoints. `doctor` is green.
+- [x] ~~**D2** exercise every router path~~ — **done**. 23 fault-injection tests in
+      `tests/test_router.py`; all green, all offline.
 - [ ] **D3** Warm the response cache and commit it so `--provider replay` reproduces a
-      known-good run with no network.
-- [ ] **D4** Charge and energy conservation screens in `screen_reference`, for the electrical
-      and drivetrain benches.
-- [ ] **D5** Plots in the report (matplotlib → inline SVG), overlaying the reference trace
-      only where it is trustworthy.
-- [ ] **D6** Build the HVAC and drivetrain bench packets; wire `specalive bench` into CI.
+      known-good run with no network. **Blocked in a good way:** with the reference IR the
+      pipeline currently makes *zero* model calls, so there is nothing to warm. Do this once
+      A1 lands and the extraction path actually calls a model.
+- [x] ~~**D4** conservation screens~~ — **done**. Three screens (conserved species,
+      first-order spin-up, energy direction), each opt-in by trace content, IR-aware.
+- [x] ~~**D5** plots in the report~~ — **done**. Inline SVG, no new dependency, acceptance
+      thresholds drawn on the same axes as the signal.
+- [x] ~~**D6** drivetrain bench~~ — **done**, 7/7, all L0, analytic steady state matched to
+      0.000%. HVAC packet still outstanding; it is the near neighbour of NaCl and worth less
+      than the drivetrain, so it waits for the organisers' real packets.
+- [ ] **D6b** Wire `specalive bench` into CI once we have somewhere to run it.
 - [ ] **D7** Drop the organisers' other three packets into `benchmarks/` when they arrive.
 
 ---
@@ -271,6 +342,16 @@ will bite again on a new packet.
 | `before(crosses(a,1), crosses(b,2))` mis-parsed | split on the first comma instead of the top-level one | `test_before_handles_nested_calls` |
 | Conservation screen flagged an ordinary tank drain | required falling inventory but not rising concentration | `test_reference_trace_fails_the_conservation_screen` |
 | Duplicate `port def FluidPort` in the SysML | named by domain only, not by domain + direction | `test_sysml_declares_no_duplicate_port_defs` |
+| A rotational screen flagged a salt concentration | the speed pattern `_w_` matched `B5_w_NaCl`, so a NaCl mass fraction was reported as an impossible rotational overshoot | `test_speed_detection_does_not_mistake_a_mass_fraction_for_a_speed` |
+| A screen silently skipped itself on our own data | it checked `torques[0]` for constancy, which was an internal flange torque that varies by definition; the real constant source is not in the result at all | `test_screen_consults_the_ir_for_facts_the_columns_do_not_carry` |
+| Report plots ranked solver noise highest | filling panels by variation surfaced `der(J1.w)` and `.flange` internals | criteria now choose the panels; fillers capped |
+| Keys were set and the app could not see them | `.env` existed, `python-dotenv` was installed, nothing ever called `load_dotenv()`. Both cloud tiers reported down and the router degraded silently | `settings.load_env()` at every entry point; `doctor` now shows which env file loaded and each key's shape |
+| Groq tier was dead on a valid key | the configured model had been retired upstream. `fallback_models` was in the config and no provider read it | `test_stale_model_name_falls_through_to_the_next` |
+| P&ID read failed with 503 | the primary Gemini model was overloaded, and overload was treated as a hard error instead of a reason to try the next model | `test_overloaded_model_falls_through_rather_than_failing_the_tier` |
+| Every structured call to qwen3 returned empty | it is a reasoning model: with thinking on, `response` is `""` and the answer lands in a separate `thinking` field. The router would have escalated on every single call | provider now sends `think: false` and falls back to parsing the `thinking` field |
+| Local models scored 36-55% on our own tasks | our prompt and schema were vague: `value` had no description, so models wrote whole clauses into it. Field descriptions plus a worked example took extraction from 2/5 to 5/5 | the bake-off itself is the regression test |
+| The catalog-pick benchmark penalised correct answers | MSL has character-identical descriptions (`Spice3.Basic.C_Capacitor` and `Analog.Basic.Capacitor` are both "Ideal linear electrical capacitor"). Ground truth now accepts any identically-described candidate | `build_pick_cases` marks these `ambiguous` |
+| Cache hits reported the original call's latency | inflated the AI-cost figures in the report | `test_cache_hit_reports_its_own_latency_not_the_original` |
 | Catalog params and ports came back empty | three separate omc quirks, two of them silent: named args nested in a call abort the script; `String()` on a list-of-lists returns nothing; the record regex matched only each record's empty trailing `{}` | `test_component_record_parsing`, `test_probe_script_escapes_newlines_for_mos` |
 | Variability read from the wrong field | the trailing `{}` collapses to an empty field, shifting the index; it is now located by value, not position | `test_component_record_parsing` |
 | Full MSL harvest never finished (30 min timeout) | four omc workers shared one working directory and thrashed; single-process was 10.5 classes/s, the shared-directory chunk managed under 0.2/s | `test_base_classes_are_probed_but_never_emitted` guards the related filter; timing is checked by running it |
