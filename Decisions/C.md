@@ -16,6 +16,82 @@ gracefully.
 
 ---
 
+## 2026-09-24 (later) — C's eight tasks, ordered; C7 done; C8 re-scoped after reading B
+
+**Status:** C1 and C7 complete. C8 is smaller than the audit suggested, because B has already
+built most of the reader. Two of C's three AI touchpoints are already wired and now have a
+live tier to run against.
+
+### ⚠ Affects you
+
+**B — thank you, you fixed D-1 before I reported it.** `_port_ref` now resolves `p.id → p.name`
+so declarations and references agree. One residual: `_ident("inlet[1]")` → `inlet_1_` is not
+reversible, so a reader still cannot recover the Modelica connector name from the SysML alone.
+Under C-08 that matters. Cheapest fix is to carry it explicitly —
+`port out : FluidOutPort; // @connector outlet[1]`. Small ask, tell me if you would rather I did it.
+
+**B — your `parse_back` is ~70% of the C8 reader and I would rather extend it than duplicate it.**
+Your 26 patterns already *capture* the right groups; `ParsedSysML` just doesn't keep the
+values. `redefine` captures name and value but stores neither; `transition` captures source,
+guard and target but stores only the id; `allocation` captures the Modelica class but stores
+only the block id. C8 adds retention plus a typed view. I will not change your patterns or
+emitter without asking.
+
+**D — STATUS.md §1 and §2.3 have two stale C numbers.** After C-07 the catalog is **1,402**
+classes, not 1,529. And retrieval measured on full MSL is **5/10 top-1**, not 7/8 — the 7/8
+looks to have come from the 239-class subset. `scripts/retrieval_probe.py` is the repeatable
+scoreboard. Yours to restate, not mine.
+
+**Everyone — `out/catalog.jsonl` must be rebuilt.** C-07 changed what the harvest emits. Run
+`specalive harvest` again or your catalog still contains 127 uninstantiable classes.
+
+### The eight tasks
+
+| # | Task | State | Needs AI? | Blocked on |
+|:--|:--|:--|:--|:--|
+| C1 | Full MSL catalog harvest | **done** — 1,402 classes, ~200 s | no | — |
+| C7 | Exclude partial classes via `isPartial()` | **done** — see C-07 | no | — |
+| C8 | Modelica generated **from** the SysML (C-08) | next | no | B's emitter being stable |
+| C2 | Embeddings in retrieval | ready to start | yes — `nomic-embed-text` | nothing, tier is live |
+| C5 | More deterministic fixers | ready to start | no | — |
+| C3 | L1 templates: rotational / thermal / electrical | ready to start | no | — |
+| C4 | L2 synthesis (`_try_l2`) | stub | **yes** — the only unwritten AI path | a live tier |
+| C6 | Tier-2 acausal `Modelica.Fluid` + WaterNaCl | stretch | no | C8 |
+
+### C's three AI touchpoints
+
+C is not AI-free, and two of the three are already wired — they were just never run, because
+no tier was live:
+
+| Touchpoint | Where | State |
+|:--|:--|:--|
+| **L0 catalog picker** | `Binder._try_l0` | wired; D made it answer by class name rather than list index, so a fabricated answer is detectable. Never exercised against a live model |
+| **Repair, semantic branch** | `RepairLoop._attempt` | wired; 5 deterministic fixers run first, the model only sees what they cannot fix. Never exercised |
+| **L2 equation synthesis** | `Binder._try_l2` | **stub — C4.** The one genuinely unwritten piece |
+
+The thesis is *"ground the small model, don't grow the model"*, not *"avoid the model"*. Every
+one of these gives the model a bounded multiple-choice or a minimal-diff task, never free
+generation — and each is validated before anything reaches the IR or the emitter.
+
+### Ordering, and why
+
+1. **C8** — it is the top scoring band (*"Modelica derived from the SysML, correspondence
+   shown"*) and it is cheaper than it looked. Behind `--from-sysml`; the IR path stays the
+   default until the bench is green on it. Standing rule 6.
+2. **C2** — retrieval is 5/10 and the embed tier is live. Re-measure with embeddings before
+   assuming anything; the probe script makes that a one-liner.
+3. **C4** — the last unwritten AI path, and the most defensible thing to demo: the model
+   writes equations *only*, inside a skeleton whose ports, units and connector balance we fixed.
+4. **C5** — every fixer added is a model call never made. Pure code, no dependencies.
+5. **C3** — L1 templates. Lower priority than it looks: the drivetrain bench already binds
+   **6/6 at L0**, so the catalog is covering rotational mechanics without templates.
+6. **C6** — stretch. A working acausal prototype already exists (`../modelica/NaClEvap.mo`,
+   built outside the repo): `OpenTank` with `use_portsData`, `ClosedVolume` junction,
+   `StaticPipe` head, verified against the reference trace to 1 s. It closes OPEN-ISSUE-03
+   and -04 if there is time.
+
+---
+
 ## 1. Verified environment (2026-09-24)
 
 Reproduced from a clean venv on the second dev machine, so these are facts, not claims.
