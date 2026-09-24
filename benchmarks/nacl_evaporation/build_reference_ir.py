@@ -69,6 +69,12 @@ SETPOINTS = [
 # --------------------------------------------------------------------------- vessels
 #           id  name                 kind                area  levelMax lvl0   w0     class
 VESSELS = [
+    # The 0.45 and 0.30 starting levels are NOT in the packet. Fifteen documents give B1 and
+    # B2 their area, height, maximum level and composition, and not one says how much liquid
+    # they hold. These two numbers were chosen so the batch can run. They are declared in
+    # OPEN-ISSUE-06 -- an earlier version of this file carried them silently, which is exactly
+    # the failure the project exists to catch, and it flattered this fixture by 11 checks
+    # against an extracted IR that correctly refused to invent them.
     ("B1", "Charging tank",   "tank",            0.070, 0.50, 0.45, 0.000, "SpecAlive.Vessels.Reservoir"),
     ("B2", "Charging tank",   "tank",            0.070, 0.50, 0.30, 0.250, "SpecAlive.Vessels.Reservoir"),
     ("B3", "Mixing tank",     "tank",            0.050, 0.38, 0.005, 0.000, "SpecAlive.Vessels.Reservoir"),
@@ -531,6 +537,17 @@ def _gaps() -> list[Gap]:
                    "carried in the architecture and as parameters, but are documentation only.",
             requirement_ids=["REQ-MOD-004", "REQ-MOD-005", "REQ-MOD-006"], severity="warn",
             workaround="Tier 2 binds to acausal Modelica.Fluid components where these apply."),
+        Gap(id="OPEN-ISSUE-06", kind="deviation", subject="B1.level_start, B2.level_start",
+            detail="The packet never states how much liquid the charging vessels hold. It gives "
+                   "their area (0.070 m2), height (0.6 m), maximum level (0.5 m), port level and "
+                   "composition; the requirement spec says only that 'B1 is initially charged "
+                   "with water and B2 with concentrated brine'; the operator runbook says to "
+                   "'confirm B1 contains the water-rich initial charge'; and the legacy Modelica "
+                   "declares both tanks with no starting level at all. The 0.45 m and 0.30 m used "
+                   "here were chosen by us so the batch can complete.",
+            severity="warn",
+            workaround="Ask the customer for the initial charge of B1 and B2. Until then these "
+                       "two numbers are the only values in this model that no document supports."),
         Gap(id="OPEN-ISSUE-05", kind="unimplemented_requirement", subject="REQ-MOD-003",
             detail="The known WaterNaCl pump-start convergence failure is recorded but not "
                    "diagnosed. Pumps P1 and P2 are retained in both architecture and model.",

@@ -25,6 +25,11 @@ from pathlib import Path
 from typing import Any
 
 from ..catalog.retrieve import PICK_PROMPT, PICK_SCHEMA, CatalogIndex
+from ..ir.complete import (
+    fill_missing_initial_inventory,
+    match_parameter,
+    recover_stated_initial_values,
+)
 from ..ir.evidence import Gap
 from ..ir.system import Block, StateMachine, SystemModel
 
@@ -185,12 +190,18 @@ class Binder:
 
     @staticmethod
     def _map_params(block: Block, entry: Any, explicit: dict[str, str] | None = None) -> dict[str, str]:
-        """Only ever emit modifiers that exist on the target class."""
+        """Only ever emit modifiers that exist on the target class.
+
+        Matching tolerates case and word order, because a register writes "Max Level (m)"
+        and the class declares `levelMax`. An exact-match-only rule dropped that bound
+        silently, and every assumption scaled from it became impossible to found.
+        """
         valid = {p.name for p in entry.params}
         out: dict[str, str] = {}
         for p in block.parameters:
-            target = (explicit or {}).get(p.name, p.name)
-            if target in valid and p.quantity.value is not None:
+            wanted = (explicit or {}).get(p.name, p.name)
+            target = match_parameter(wanted, valid)
+            if target and p.quantity.value is not None:
                 out[target] = _literal(p.quantity.value)
         return out
 
@@ -558,7 +569,11 @@ class ModelicaEmitter:
             if b.binding_tier == "unbound" or not b.modelica_class:
                 self._w(2, f"// GAP: block '{b.id}' ({b.kind}) has no binding; see report.")
                 continue
+            assumed = b.modelica_modifiers.pop("__assumed__", None)
             mods = ", ".join(f"{k} = {v}" for k, v in sorted(b.modelica_modifiers.items()))
+            if assumed is not None:
+                self._w(2, f"// ASSUMPTION: {b.id} starting inventory is not stated in the "
+                           f"evidence; see the declared gaps in the report.")
             decl = f"{b.modelica_class} {_mid(b.id)}"
             if mods:
                 decl += f"({mods})"
@@ -704,6 +719,12 @@ def emit_modelica(
         b.binding_rationale = res.rationale
         b.synthesised_equations = res.synthesised
         tiers[res.tier] += 1
+
+    # First recover what the evidence DOES state but column extraction missed, then
+    # assume only what is genuinely absent. Order matters: a recovered fact must never
+    # be overwritten by an assumption.
+    model.gaps.extend(recover_stated_initial_values(model, index))
+    model.gaps.extend(fill_missing_initial_inventory(model, index))
 
     # Reconcile the document's port vocabulary with the bound class's real connectors
     # BEFORE emitting. Skipping this writes `B1.bottom_port`, which no class declares.
