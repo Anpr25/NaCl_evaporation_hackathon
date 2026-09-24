@@ -93,7 +93,7 @@ the C10 entry: `main=1/8` without a reference IR, and that number is A and B's t
 
 ## 2026-09-25 — C5 done: four more fixes that no longer cost a model call
 
-**Status: implemented, not committed.** 105 fast tests green, gate green, both benches green.
+**Status: implemented.** 105 fast tests green, gate green, both benches green.
 
 ```
                     before C5      after C5
