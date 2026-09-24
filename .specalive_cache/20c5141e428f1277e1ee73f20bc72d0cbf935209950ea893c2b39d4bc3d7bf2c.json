@@ -1,0 +1,196 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"BAT-09\",\n      \"predicate\": \"objective\",\n      \"value\": \"Verify a complete automatic batch cycle using the effective setpoints and approved return routing.\",\n      \"quote\": \"Verify a complete automatic batch cycle using the effective setpoints and approved return routing.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"BAT-09\",\n      \"predicate\": \"objective\",\n      \"value\": \"The test is primarily a controller/architecture acceptance test; the WaterNaCl property package may be replaced by StandardWater for topology debugging, but final composition-based acceptance uses the composition-capable configuration.\",\n      \"quote\": \"The test is primarily a controller/architecture acceptance test; the WaterNaCl property package may be replaced by StandardWater for topology debugging, but final composition-based acceptance uses the composition-capable configuration.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"Simulation time\",\n      \"predicate\": \"initial condition\",\n      \"value\": \"0 s\",\n      \"quote\": \"Simulation time 0 s\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"B1 composition\",\n      \"predicate\": \"initial condition\",\n      \"value\": \"w_NaCl = 0.000\",\n      \"quote\": \"B1 composition w_NaCl = 0.000\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"B2 composition\",\n      \"predicate\": \"initial condition\",\n      \"value\": \"w_NaCl = 0.250\",\n      \"quote\": \"B2 composition w_NaCl = 0.250\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"B3-B7\",\n      \"predicate\": \"initial condition\",\n      \"value\": \"Near empty; level <=0.01 m except unavoidable residual volume\",\n      \"quote\": \"B3-B7 Near empty; level <=0.01 m except unavoidable residual volume\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"Ambient pressure\",\n      \"predicate\": \"initial condition\",\n      \"value\": \"101325 Pa\",\n      \"quote\": \"Ambient pressure 101325 Pa\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"Ambient temperature\",\n      \"predicate\": \"initial condition\",\n      \"value\": \"293.15 K\",\n      \"quote\": \"Ambient temperature 293.15 K\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"All automated valves\",\n      \"predicate\": \"initial condition\",\n      \"value\": \"Closed\",\n      \"quote\": \"All automated valves Closed\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"P1, P2\",\n      \"predicate\": \"initial condition\",\n      \"value\": \"Off\",\n      \"quote\": \"P1, P2 Off\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"B5 heater / B6 cooler / B7 cooler\",\n      \"predicate\": \"initial condition\",\n      \"value\": \"Off\",\n      \"quote\": \"B5 heater / B6 cooler / B7 cooler Off\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"K1 cooling-water flow proof\",\n      \"predicate\": \"initial condition\",\n      \"value\": \"Available, >=0.10 kg/s when heater demanded\",\n      \"quote\": \"K1 cooling-water flow proof Available, >=0.10 kg/s when heater demanded\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B3 water prefill\",\n      \"predicate\": \"acceptance criterion\",\n      \"value\": \"Step1 exits at LIS-301 >=0.13 m\",\n      \"quote\": \"B3 water prefill Step1 exits at LIS-301 >=0.13 m\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B3 recipe\",\n      \"predicate\": \"acceptance criterion\",\n      \"value\": \"Step2 exits at QI-302 >=0.080 kg/kg\",\n      \"quote\": \"B3 recipe Step2 exits at QI-302 >=0.080 kg/kg\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B3 empty\",\n      \"predicate\": \"acceptance criterion\",\n      \"value\": \"Step3 exits below 0.01 m\",\n      \"quote\": \"B3 empty Step3 exits below 0.01 m\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B5 charge\",\n      \"predicate\": \"acceptance criterion\",\n      \"value\": \"Step5 exits at LIS-501 >=0.18 m\",\n      \"quote\": \"B5 charge Step5 exits at LIS-501 >=0.18 m\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Evaporation\",\n      \"predicate\": \"acceptance criterion\",\n      \"value\": \"Step6 exits at QIS-502 >=0.180 kg/kg\",\n      \"quote\": \"Evaporation Step6 exits at QIS-502 >=0.180 kg/kg\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B6 cooling\",\n      \"predicate\": \"acceptance criterion\",\n      \"value\": \"TIS-602 <=20 degC before P2 return\",\n      \"quote\": \"B6 cooling TIS-602 <=20 degC before P2 return\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B7 cooling\",\n      \"predicate\": \"acceptance criterion\",\n      \"value\": \"TIS-702 <=25 degC before P1 return\",\n      \"quote\": \"B7 cooling TIS-702 <=25 degC before P1 return\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Routing\",\n      \"predicate\": \"acceptance criterion\",\n      \"value\": \"B6 condensate returns to B1; B7 concentrate returns to B2\",\n      \"quote\": \"Routing B6 condensate returns to B1; B7 concentrate returns to B2\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Parallel join\",\n      \"predicate\": \"acceptance criterion\",\n      \"value\": \"Cycle reset cannot occur until both branches complete\",\n      \"quote\": \"Parallel join Cycle reset cannot occur until both branches complete\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Cycle restart\",\n      \"predicate\": \"acceptance criterion\",\n      \"value\": \"Initial becomes active only after process time >2500 s\",\n      \"quote\": \"Cycle restart Initial becomes active only after process time >2500 s\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Log\",\n      \"predicate\": \"logging\",\n      \"value\": \"Log at 5 s or faster: state/region, all tank levels, QI-302, QIS-502, TI-503, TIS-602, TIS-702, FIS-801, P1/P2, heater/cooler commands and all 15 automated valve commands.\",\n      \"quote\": \"Log at 5 s or faster: state/region, all tank levels, QI-302, QIS-502, TI-503, TIS-602, TIS-702, FIS-801, P1/P2, heater/cooler commands and all 15 automated valve commands.\",\n      \"confidence\": 1.0\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 954,
+  "completion_tokens": 1916,
+  "latency_s": 78.41438865661621,
+  "data": {
+    "claims": [
+      {
+        "kind": "requirement",
+        "subject": "BAT-09",
+        "predicate": "objective",
+        "value": "Verify a complete automatic batch cycle using the effective setpoints and approved return routing.",
+        "quote": "Verify a complete automatic batch cycle using the effective setpoints and approved return routing.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "BAT-09",
+        "predicate": "objective",
+        "value": "The test is primarily a controller/architecture acceptance test; the WaterNaCl property package may be replaced by StandardWater for topology debugging, but final composition-based acceptance uses the composition-capable configuration.",
+        "quote": "The test is primarily a controller/architecture acceptance test; the WaterNaCl property package may be replaced by StandardWater for topology debugging, but final composition-based acceptance uses the composition-capable configuration.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "parameter",
+        "subject": "Simulation time",
+        "predicate": "initial condition",
+        "value": "0 s",
+        "quote": "Simulation time 0 s",
+        "confidence": 1.0
+      },
+      {
+        "kind": "parameter",
+        "subject": "B1 composition",
+        "predicate": "initial condition",
+        "value": "w_NaCl = 0.000",
+        "quote": "B1 composition w_NaCl = 0.000",
+        "confidence": 1.0
+      },
+      {
+        "kind": "parameter",
+        "subject": "B2 composition",
+        "predicate": "initial condition",
+        "value": "w_NaCl = 0.250",
+        "quote": "B2 composition w_NaCl = 0.250",
+        "confidence": 1.0
+      },
+      {
+        "kind": "parameter",
+        "subject": "B3-B7",
+        "predicate": "initial condition",
+        "value": "Near empty; level <=0.01 m except unavoidable residual volume",
+        "quote": "B3-B7 Near empty; level <=0.01 m except unavoidable residual volume",
+        "confidence": 1.0
+      },
+      {
+        "kind": "parameter",
+        "subject": "Ambient pressure",
+        "predicate": "initial condition",
+        "value": "101325 Pa",
+        "quote": "Ambient pressure 101325 Pa",
+        "confidence": 1.0
+      },
+      {
+        "kind": "parameter",
+        "subject": "Ambient temperature",
+        "predicate": "initial condition",
+        "value": "293.15 K",
+        "quote": "Ambient temperature 293.15 K",
+        "confidence": 1.0
+      },
+      {
+        "kind": "parameter",
+        "subject": "All automated valves",
+        "predicate": "initial condition",
+        "value": "Closed",
+        "quote": "All automated valves Closed",
+        "confidence": 1.0
+      },
+      {
+        "kind": "parameter",
+        "subject": "P1, P2",
+        "predicate": "initial condition",
+        "value": "Off",
+        "quote": "P1, P2 Off",
+        "confidence": 1.0
+      },
+      {
+        "kind": "parameter",
+        "subject": "B5 heater / B6 cooler / B7 cooler",
+        "predicate": "initial condition",
+        "value": "Off",
+        "quote": "B5 heater / B6 cooler / B7 cooler Off",
+        "confidence": 1.0
+      },
+      {
+        "kind": "parameter",
+        "subject": "K1 cooling-water flow proof",
+        "predicate": "initial condition",
+        "value": "Available, >=0.10 kg/s when heater demanded",
+        "quote": "K1 cooling-water flow proof Available, >=0.10 kg/s when heater demanded",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "B3 water prefill",
+        "predicate": "acceptance criterion",
+        "value": "Step1 exits at LIS-301 >=0.13 m",
+        "quote": "B3 water prefill Step1 exits at LIS-301 >=0.13 m",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "B3 recipe",
+        "predicate": "acceptance criterion",
+        "value": "Step2 exits at QI-302 >=0.080 kg/kg",
+        "quote": "B3 recipe Step2 exits at QI-302 >=0.080 kg/kg",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "B3 empty",
+        "predicate": "acceptance criterion",
+        "value": "Step3 exits below 0.01 m",
+        "quote": "B3 empty Step3 exits below 0.01 m",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "B5 charge",
+        "predicate": "acceptance criterion",
+        "value": "Step5 exits at LIS-501 >=0.18 m",
+        "quote": "B5 charge Step5 exits at LIS-501 >=0.18 m",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "Evaporation",
+        "predicate": "acceptance criterion",
+        "value": "Step6 exits at QIS-502 >=0.180 kg/kg",
+        "quote": "Evaporation Step6 exits at QIS-502 >=0.180 kg/kg",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "B6 cooling",
+        "predicate": "acceptance criterion",
+        "value": "TIS-602 <=20 degC before P2 return",
+        "quote": "B6 cooling TIS-602 <=20 degC before P2 return",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "B7 cooling",
+        "predicate": "acceptance criterion",
+        "value": "TIS-702 <=25 degC before P1 return",
+        "quote": "B7 cooling TIS-702 <=25 degC before P1 return",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "Routing",
+        "predicate": "acceptance criterion",
+        "value": "B6 condensate returns to B1; B7 concentrate returns to B2",
+        "quote": "Routing B6 condensate returns to B1; B7 concentrate returns to B2",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "Parallel join",
+        "predicate": "acceptance criterion",
+        "value": "Cycle reset cannot occur until both branches complete",
+        "quote": "Parallel join Cycle reset cannot occur until both branches complete",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "Cycle restart",
+        "predicate": "acceptance criterion",
+        "value": "Initial becomes active only after process time >2500 s",
+        "quote": "Cycle restart Initial becomes active only after process time >2500 s",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "Log",
+        "predicate": "logging",
+        "value": "Log at 5 s or faster: state/region, all tank levels, QI-302, QIS-502, TI-503, TIS-602, TIS-702, FIS-801, P1/P2, heater/cooler commands and all 15 automated valve commands.",
+        "quote": "Log at 5 s or faster: state/region, all tank levels, QI-302, QIS-502, TI-503, TIS-602, TIS-702, FIS-801, P1/P2, heater/cooler commands and all 15 automated valve commands.",
+        "confidence": 1.0
+      }
+    ]
+  }
+}

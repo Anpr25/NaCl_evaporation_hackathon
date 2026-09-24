@@ -1,0 +1,180 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B1\",\n      \"predicate\": \"charge water\",\n      \"value\": \"Open V8\",\n      \"quote\": \"Open V8, B1 to B3 LIS-301 >= 0.13 m\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B2\",\n      \"predicate\": \"charge brine / mix\",\n      \"value\": \"Open V9, B2 to B3\",\n      \"quote\": \"Open V9, B2 to B3 QI-302 reaches recipe target\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B3\",\n      \"predicate\": \"buffer transfer\",\n      \"value\": \"Open V11, B3 to B4\",\n      \"quote\": \"Open V11, B3 to B4 LIS-301 < 0.01 m\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B5\",\n      \"predicate\": \"evaporator charge\",\n      \"value\": \"When B5 is idle, open V12, B4 to B5\",\n      \"quote\": \"When B5 is idle, open V12, B4 to B5 LIS-501 reaches batch level\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B5\",\n      \"predicate\": \"evaporation enable\",\n      \"value\": \"QIS-502 reaches evaporation target\",\n      \"quote\": \"QIS-502 reaches evaporation target\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B6\",\n      \"predicate\": \"condensate branch cool\",\n      \"value\": \"Cool B6, then return condensate\",\n      \"quote\": \"Cool B6, then return condensate\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B7\",\n      \"predicate\": \"concentrate branch transfer\",\n      \"value\": \"Transfer B5 to B7, cool B7, return concentrate\",\n      \"quote\": \"Transfer B5 to B7, cool B7, return concentrate\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B6\",\n      \"predicate\": \"condensate branch cooling complete\",\n      \"value\": \"Cooling complete and B6 returned\",\n      \"quote\": \"Cooling complete and B6 returned\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B7\",\n      \"predicate\": \"concentrate branch cooling complete\",\n      \"value\": \"Cooling complete and B7 returned\",\n      \"quote\": \"Cooling complete and B7 returned\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"cycle reset\",\n      \"predicate\": \"wait for both branches\",\n      \"value\": \"Both complete and time > 2500 s\",\n      \"quote\": \"Wait for both branches Both complete and time > 2500 s\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"P&ID\",\n      \"predicate\": \"includes controller-operated and manual/local valves\",\n      \"value\": \"The P&ID; includes both controller-operated and manual/local valves\",\n      \"quote\": \"The P&ID; includes both controller-operated and manual/local valves\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Pumps P1 and P2\",\n      \"predicate\": \"return cooled process streams\",\n      \"value\": \"return cooled process streams to the charging-vessel header system\",\n      \"quote\": \"Pumps P1 and P2 return cooled process streams to the charging-vessel header system\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"intended physical simulation medium\",\n      \"predicate\": \"is a water-NaCl mixture\",\n      \"value\": \"water-NaCl mixture\",\n      \"quote\": \"The intended physical simulation medium is a water-NaCl mixture\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"StandardWater configuration\",\n      \"predicate\": \"may be used as an integration baseline\",\n      \"value\": \"to verify topology and sequence behavior before enabling composition-dependent property functions\",\n      \"quote\": \"A StandardWater configuration may be used as an integration baseline to verify topology and sequence behavior before enabling composition-dependent property functions\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"tank connections\",\n      \"predicate\": \"can pass above or below the liquid level\",\n      \"value\": \"pass above or below the liquid level\",\n      \"quote\": \"Tank connections can pass above or below the liquid level\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"preferred numerical treatment\",\n      \"predicate\": \"is a regularized asymmetric loss-factor formulation with hysteresis around the port elevation\",\n      \"value\": \"regularized asymmetric loss-factor formulation with hysteresis around the port elevation\",\n      \"quote\": \"The preferred numerical treatment is a regularized asymmetric loss-factor formulation with hysteresis around the port elevation\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"small junction volumes\",\n      \"predicate\": \"shall be used where multiple isolating pressure-drop components could otherwise leave undefined pressure, enthalpy or composition states\",\n      \"value\": \"where multiple isolating pressure-drop components could otherwise leave undefined pressure, enthalpy or composition states\",\n      \"quote\": \"Small junction volumes shall be used where multiple isolating pressure-drop components could otherwise leave undefined pressure, enthalpy or composition states\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"non-horizontal pipes\",\n      \"predicate\": \"shall include static head in their pressure-drop relationship\",\n      \"value\": \"include static head in their pressure-drop relationship\",\n      \"quote\": \"All non-horizontal pipes shall include static head in their pressure-drop relationship\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"evaporator/condenser\",\n      \"predicate\": \"may be represented as a combined simulation component\",\n      \"value\": \"provided the physical condenser K1 remains identifiable in the system architecture\",\n      \"quote\": \"The evaporator/condenser may be represented as a combined simulation component provided the physical condenser K1 remains identifiable in the system architecture\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"acceptance simulation\",\n      \"predicate\": \"shall demonstrate a full charge-mix-buffer-evaporate-cool-return cycle\",\n      \"value\": \"a full charge-mix-buffer-evaporate-cool-return cycle\",\n      \"quote\": \"The acceptance simulation shall demonstrate a full charge-mix-buffer-evaporate-cool-return cycle\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"acceptance simulation\",\n      \"predicate\": \"shall continue beyond 2500 s\",\n      \"value\": \"beyond 2500 s\",\n      \"quote\": \"It shall continue beyond 2500 s to demonstrate cycle reset\",\n      \"confidence\": 0.9\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 1060,
+  "completion_tokens": 1733,
+  "latency_s": 78.75236892700195,
+  "data": {
+    "claims": [
+      {
+        "kind": "requirement",
+        "subject": "B1",
+        "predicate": "charge water",
+        "value": "Open V8",
+        "quote": "Open V8, B1 to B3 LIS-301 >= 0.13 m",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "B2",
+        "predicate": "charge brine / mix",
+        "value": "Open V9, B2 to B3",
+        "quote": "Open V9, B2 to B3 QI-302 reaches recipe target",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "B3",
+        "predicate": "buffer transfer",
+        "value": "Open V11, B3 to B4",
+        "quote": "Open V11, B3 to B4 LIS-301 < 0.01 m",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "B5",
+        "predicate": "evaporator charge",
+        "value": "When B5 is idle, open V12, B4 to B5",
+        "quote": "When B5 is idle, open V12, B4 to B5 LIS-501 reaches batch level",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "B5",
+        "predicate": "evaporation enable",
+        "value": "QIS-502 reaches evaporation target",
+        "quote": "QIS-502 reaches evaporation target",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "B6",
+        "predicate": "condensate branch cool",
+        "value": "Cool B6, then return condensate",
+        "quote": "Cool B6, then return condensate",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "B7",
+        "predicate": "concentrate branch transfer",
+        "value": "Transfer B5 to B7, cool B7, return concentrate",
+        "quote": "Transfer B5 to B7, cool B7, return concentrate",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "B6",
+        "predicate": "condensate branch cooling complete",
+        "value": "Cooling complete and B6 returned",
+        "quote": "Cooling complete and B6 returned",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "B7",
+        "predicate": "concentrate branch cooling complete",
+        "value": "Cooling complete and B7 returned",
+        "quote": "Cooling complete and B7 returned",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "cycle reset",
+        "predicate": "wait for both branches",
+        "value": "Both complete and time > 2500 s",
+        "quote": "Wait for both branches Both complete and time > 2500 s",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "P&ID",
+        "predicate": "includes controller-operated and manual/local valves",
+        "value": "The P&ID; includes both controller-operated and manual/local valves",
+        "quote": "The P&ID; includes both controller-operated and manual/local valves",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "Pumps P1 and P2",
+        "predicate": "return cooled process streams",
+        "value": "return cooled process streams to the charging-vessel header system",
+        "quote": "Pumps P1 and P2 return cooled process streams to the charging-vessel header system",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "intended physical simulation medium",
+        "predicate": "is a water-NaCl mixture",
+        "value": "water-NaCl mixture",
+        "quote": "The intended physical simulation medium is a water-NaCl mixture",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "StandardWater configuration",
+        "predicate": "may be used as an integration baseline",
+        "value": "to verify topology and sequence behavior before enabling composition-dependent property functions",
+        "quote": "A StandardWater configuration may be used as an integration baseline to verify topology and sequence behavior before enabling composition-dependent property functions",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "tank connections",
+        "predicate": "can pass above or below the liquid level",
+        "value": "pass above or below the liquid level",
+        "quote": "Tank connections can pass above or below the liquid level",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "preferred numerical treatment",
+        "predicate": "is a regularized asymmetric loss-factor formulation with hysteresis around the port elevation",
+        "value": "regularized asymmetric loss-factor formulation with hysteresis around the port elevation",
+        "quote": "The preferred numerical treatment is a regularized asymmetric loss-factor formulation with hysteresis around the port elevation",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "small junction volumes",
+        "predicate": "shall be used where multiple isolating pressure-drop components could otherwise leave undefined pressure, enthalpy or composition states",
+        "value": "where multiple isolating pressure-drop components could otherwise leave undefined pressure, enthalpy or composition states",
+        "quote": "Small junction volumes shall be used where multiple isolating pressure-drop components could otherwise leave undefined pressure, enthalpy or composition states",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "non-horizontal pipes",
+        "predicate": "shall include static head in their pressure-drop relationship",
+        "value": "include static head in their pressure-drop relationship",
+        "quote": "All non-horizontal pipes shall include static head in their pressure-drop relationship",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "evaporator/condenser",
+        "predicate": "may be represented as a combined simulation component",
+        "value": "provided the physical condenser K1 remains identifiable in the system architecture",
+        "quote": "The evaporator/condenser may be represented as a combined simulation component provided the physical condenser K1 remains identifiable in the system architecture",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "acceptance simulation",
+        "predicate": "shall demonstrate a full charge-mix-buffer-evaporate-cool-return cycle",
+        "value": "a full charge-mix-buffer-evaporate-cool-return cycle",
+        "quote": "The acceptance simulation shall demonstrate a full charge-mix-buffer-evaporate-cool-return cycle",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "acceptance simulation",
+        "predicate": "shall continue beyond 2500 s",
+        "value": "beyond 2500 s",
+        "quote": "It shall continue beyond 2500 s to demonstrate cycle reset",
+        "confidence": 0.9
+      }
+    ]
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Controller\",\n      \"predicate\": \"remains\",\n      \"value\": \"sequential StateGraph\",\n      \"quote\": \"Controller remains a sequential StateGraph with a parallel split after evaporation and a join before cycle reset.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B5 heater\",\n      \"predicate\": \"permissive\",\n      \"value\": \"LIS-501 >= 0.05 m\",\n      \"quote\": \"LIS-501 >= 0.05 m\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B5 heater\",\n      \"predicate\": \"permissive\",\n      \"value\": \"FIS-801 >= 0.10 kg/s\",\n      \"quote\": \"FIS-801 >= 0.10 kg/s\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"P1 and P2\",\n      \"predicate\": \"require\",\n      \"value\": \"dry-run inhibit from source-tank level\",\n      \"quote\": \"P1 and P2 require dry-run inhibit from source-tank level.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Automated process valves\",\n      \"predicate\": \"are\",\n      \"value\": \"discrete and fail closed\",\n      \"quote\": \"Automated process valves are discrete and fail closed.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"K1\",\n      \"predicate\": \"remains\",\n      \"value\": \"a physical condenser\",\n      \"quote\": \"K1 remains a physical condenser even if the legacy Modelica component combines evaporator and condenser equations.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Junction volumes\",\n      \"predicate\": \"are mandatory\",\n      \"value\": \"where closed valve combinations could otherwise leave pressure/composition states undefined\",\n      \"quote\": \"Junction volumes are mandatory where closed valve combinations could otherwise leave pressure/composition states undefined.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"StandardWater\",\n      \"predicate\": \"is\",\n      \"value\": \"a topology/control integration baseline only\",\n      \"quote\": \"StandardWater is a topology/control integration baseline only;\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"StandardWater\",\n      \"predicate\": \"intended physical variant remains\",\n      \"value\": \"WaterNaCl\",\n      \"quote\": \"intended physical variant remains WaterNaCl.\",\n      \"confidence\": 0.95\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 708,
+  "completion_tokens": 658,
+  "latency_s": 28.3059241771698,
+  "data": {
+    "claims": [
+      {
+        "kind": "requirement",
+        "subject": "Controller",
+        "predicate": "remains",
+        "value": "sequential StateGraph",
+        "quote": "Controller remains a sequential StateGraph with a parallel split after evaporation and a join before cycle reset.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "B5 heater",
+        "predicate": "permissive",
+        "value": "LIS-501 >= 0.05 m",
+        "quote": "LIS-501 >= 0.05 m",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "B5 heater",
+        "predicate": "permissive",
+        "value": "FIS-801 >= 0.10 kg/s",
+        "quote": "FIS-801 >= 0.10 kg/s",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "P1 and P2",
+        "predicate": "require",
+        "value": "dry-run inhibit from source-tank level",
+        "quote": "P1 and P2 require dry-run inhibit from source-tank level.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "Automated process valves",
+        "predicate": "are",
+        "value": "discrete and fail closed",
+        "quote": "Automated process valves are discrete and fail closed.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "K1",
+        "predicate": "remains",
+        "value": "a physical condenser",
+        "quote": "K1 remains a physical condenser even if the legacy Modelica component combines evaporator and condenser equations.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "Junction volumes",
+        "predicate": "are mandatory",
+        "value": "where closed valve combinations could otherwise leave pressure/composition states undefined",
+        "quote": "Junction volumes are mandatory where closed valve combinations could otherwise leave pressure/composition states undefined.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "StandardWater",
+        "predicate": "is",
+        "value": "a topology/control integration baseline only",
+        "quote": "StandardWater is a topology/control integration baseline only;",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "StandardWater",
+        "predicate": "intended physical variant remains",
+        "value": "WaterNaCl",
+        "quote": "intended physical variant remains WaterNaCl.",
+        "confidence": 0.95
+      }
+    ]
+  }
+}

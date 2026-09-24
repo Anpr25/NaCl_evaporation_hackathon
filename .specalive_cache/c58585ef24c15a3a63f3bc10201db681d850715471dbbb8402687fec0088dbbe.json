@@ -1,0 +1,173 @@
+{
+  "text": "{\"claims\":[{\"kind\":\"component\",\"subject\":\"central controller\",\"predicate\":\"implemented as\",\"value\":\"StateGraph-style sequential function chart\",\"quote\":\"The central controller is implemented as a StateGraph-style sequential function chart.\"},{\"kind\":\"component\",\"subject\":\"sensors connector\",\"predicate\":\"bundles\",\"value\":\"measured process values\",\"quote\":\"A single sensors connector bundles measured process values\"},{\"kind\":\"component\",\"subject\":\"actuators connector\",\"predicate\":\"bundles\",\"value\":\"automated valve, pump and thermal commands\",\"quote\":\"A single actuators connector bundles automated valve, pump and thermal commands\"},{\"kind\":\"note\",\"subject\":\"Manual/isolation valves\",\"predicate\":\"excluded from\",\"value\":\"normal StateGraph actuator bundle\",\"quote\":\"Manual/isolation valves shown on the P&ID are intentionally excluded from the normal StateGraph actuator bundle unless specifically stated in the ICD.\"},{\"kind\":\"scenario\",\"subject\":\"Branch A\",\"predicate\":\"cools\",\"value\":\"condensate in B6\",\"quote\":\"Branch A cools the condensate in B6 and then returns it.\"},{\"kind\":\"scenario\",\"subject\":\"Branch A\",\"predicate\":\"returns\",\"value\":\"condensate\",\"quote\":\"Branch A cools the condensate in B6 and then returns it.\"},{\"kind\":\"scenario\",\"subject\":\"Branch B\",\"predicate\":\"waits for\",\"value\":\"B7 availability\",\"quote\":\"Branch B waits for B7 availability, transfers B5 concentrate to B7, cools it, then returns it.\"},{\"kind\":\"scenario\",\"subject\":\"Branch B\",\"predicate\":\"transfers\",\"value\":\"B5 concentrate to B7\",\"quote\":\"Branch B waits for B7 availability, transfers B5 concentrate to B7, cools it, then returns it.\"},{\"kind\":\"scenario\",\"subject\":\"Branch B\",\"predicate\":\"returns\",\"value\":\"concentrate\",\"quote\":\"Branch B waits for B7 availability, transfers B5 concentrate to B7, cools it, then returns it.\"},{\"kind\":\"note\",\"subject\":\"join\",\"predicate\":\"satisfied only when\",\"value\":\"both branches report completion\",\"quote\":\"A join is satisfied only when both branches report completion.\"},{\"kind\":\"interlock\",\"subject\":\"B5 heater permissive\",\"predicate\":\"requires\",\"value\":\"LIS-501 >= 0.05 m AND FIS-801 >= 0.10 kg/s\",\"quote\":\"B5 heater permissive: LIS-501 >= 0.05 m AND FIS-801 >= 0.10 kg/s.\"},{\"kind\":\"interlock\",\"subject\":\"P1 permissive\",\"predicate\":\"requires\",\"value\":\"LIS-701 > 0.02 m\",\"quote\":\"P1 permissive: LIS-701 > 0.02 m.\"},{\"kind\":\"interlock\",\"subject\":\"Low discharge pressure alarm for P1\",\"predicate\":\"triggered when\",\"value\":\"PIS-901 < 0.8 bar(g) while running\",\"quote\":\"Low discharge pressure alarm if PIS-901 < 0.8 bar(g) while running.\"},{\"kind\":\"interlock\",\"subject\":\"P2 permissive\",\"predicate\":\"requires\",\"value\":\"LIS-601 > 0.02 m\",\"quote\":\"P2 permissive: LIS-601 > 0.02 m.\"},{\"kind\":\"interlock\",\"subject\":\"Low discharge pressure alarm for P2\",\"predicate\":\"triggered when\",\"value\":\"PIS-1001 < 0.8 bar(g) while running\",\"quote\":\"Low discharge pressure alarm if PIS-1001 < 0.8 bar(g) while running.\"},{\"kind\":\"note\",\"subject\":\"Automated valves\",\"predicate\":\"fail\",\"value\":\"closed\",\"quote\":\"Automated valves fail closed and are not treated as modulating valves.\"},{\"kind\":\"note\",\"subject\":\"Controller valve-group assignments\",\"predicate\":\"shall follow\",\"value\":\"CR-017\",\"quote\":\"Controller valve-group assignments shall follow CR-017.\"},{\"kind\":\"connection\",\"subject\":\"condensate from B6\",\"predicate\":\"returns to\",\"value\":\"B1\",\"quote\":\"recovered condensate from B6 returns to B1\"},{\"kind\":\"connection\",\"subject\":\"concentrate from B7\",\"predicate\":\"returns to\",\"value\":\"B2\",\"quote\":\"cooled concentrate from B7 returns to B2\"},{\"kind\":\"signal\",\"subject\":\"controller.sensors.LIS_301\",\"predicate\":\"assigned to\",\"value\":\"B3.level\",\"quote\":\"controller.sensors.LIS_301 = B3.level;\"},{\"kind\":\"signal\",\"subject\":\"controller.sensors.QIS_502\",\"predicate\":\"assigned to\",\"value\":\"B5.medium.Xi[NaCl]\",\"quote\":\"controller.sensors.QIS_502 = B5.medium.Xi[NaCl];\"},{\"kind\":\"signal\",\"subject\":\"V9.open\",\"predicate\":\"assigned to\",\"value\":\"controller.actuators.T5_Heater\",\"quote\":\"V9.open = controller.actuators.T5_Heater;\"},{\"kind\":\"signal\",\"subject\":\"HeatB5.Q_flow\",\"predicate\":\"assigned to\",\"value\":\"if controller.actuators.T5_Heater then 20000 else 0\",\"quote\":\"HeatB5.Q_flow = if controller.actuators.T5_Heater then 20000 else 0;\"}]}",
+  "tier": "t3_cloud_reasoning",
+  "model": "openai/gpt-oss-120b",
+  "prompt_tokens": 1089,
+  "completion_tokens": 3318,
+  "latency_s": 7.764882326126099,
+  "data": {
+    "claims": [
+      {
+        "kind": "component",
+        "subject": "central controller",
+        "predicate": "implemented as",
+        "value": "StateGraph-style sequential function chart",
+        "quote": "The central controller is implemented as a StateGraph-style sequential function chart."
+      },
+      {
+        "kind": "component",
+        "subject": "sensors connector",
+        "predicate": "bundles",
+        "value": "measured process values",
+        "quote": "A single sensors connector bundles measured process values"
+      },
+      {
+        "kind": "component",
+        "subject": "actuators connector",
+        "predicate": "bundles",
+        "value": "automated valve, pump and thermal commands",
+        "quote": "A single actuators connector bundles automated valve, pump and thermal commands"
+      },
+      {
+        "kind": "note",
+        "subject": "Manual/isolation valves",
+        "predicate": "excluded from",
+        "value": "normal StateGraph actuator bundle",
+        "quote": "Manual/isolation valves shown on the P&ID are intentionally excluded from the normal StateGraph actuator bundle unless specifically stated in the ICD."
+      },
+      {
+        "kind": "scenario",
+        "subject": "Branch A",
+        "predicate": "cools",
+        "value": "condensate in B6",
+        "quote": "Branch A cools the condensate in B6 and then returns it."
+      },
+      {
+        "kind": "scenario",
+        "subject": "Branch A",
+        "predicate": "returns",
+        "value": "condensate",
+        "quote": "Branch A cools the condensate in B6 and then returns it."
+      },
+      {
+        "kind": "scenario",
+        "subject": "Branch B",
+        "predicate": "waits for",
+        "value": "B7 availability",
+        "quote": "Branch B waits for B7 availability, transfers B5 concentrate to B7, cools it, then returns it."
+      },
+      {
+        "kind": "scenario",
+        "subject": "Branch B",
+        "predicate": "transfers",
+        "value": "B5 concentrate to B7",
+        "quote": "Branch B waits for B7 availability, transfers B5 concentrate to B7, cools it, then returns it."
+      },
+      {
+        "kind": "scenario",
+        "subject": "Branch B",
+        "predicate": "returns",
+        "value": "concentrate",
+        "quote": "Branch B waits for B7 availability, transfers B5 concentrate to B7, cools it, then returns it."
+      },
+      {
+        "kind": "note",
+        "subject": "join",
+        "predicate": "satisfied only when",
+        "value": "both branches report completion",
+        "quote": "A join is satisfied only when both branches report completion."
+      },
+      {
+        "kind": "interlock",
+        "subject": "B5 heater permissive",
+        "predicate": "requires",
+        "value": "LIS-501 >= 0.05 m AND FIS-801 >= 0.10 kg/s",
+        "quote": "B5 heater permissive: LIS-501 >= 0.05 m AND FIS-801 >= 0.10 kg/s."
+      },
+      {
+        "kind": "interlock",
+        "subject": "P1 permissive",
+        "predicate": "requires",
+        "value": "LIS-701 > 0.02 m",
+        "quote": "P1 permissive: LIS-701 > 0.02 m."
+      },
+      {
+        "kind": "interlock",
+        "subject": "Low discharge pressure alarm for P1",
+        "predicate": "triggered when",
+        "value": "PIS-901 < 0.8 bar(g) while running",
+        "quote": "Low discharge pressure alarm if PIS-901 < 0.8 bar(g) while running."
+      },
+      {
+        "kind": "interlock",
+        "subject": "P2 permissive",
+        "predicate": "requires",
+        "value": "LIS-601 > 0.02 m",
+        "quote": "P2 permissive: LIS-601 > 0.02 m."
+      },
+      {
+        "kind": "interlock",
+        "subject": "Low discharge pressure alarm for P2",
+        "predicate": "triggered when",
+        "value": "PIS-1001 < 0.8 bar(g) while running",
+        "quote": "Low discharge pressure alarm if PIS-1001 < 0.8 bar(g) while running."
+      },
+      {
+        "kind": "note",
+        "subject": "Automated valves",
+        "predicate": "fail",
+        "value": "closed",
+        "quote": "Automated valves fail closed and are not treated as modulating valves."
+      },
+      {
+        "kind": "note",
+        "subject": "Controller valve-group assignments",
+        "predicate": "shall follow",
+        "value": "CR-017",
+        "quote": "Controller valve-group assignments shall follow CR-017."
+      },
+      {
+        "kind": "connection",
+        "subject": "condensate from B6",
+        "predicate": "returns to",
+        "value": "B1",
+        "quote": "recovered condensate from B6 returns to B1"
+      },
+      {
+        "kind": "connection",
+        "subject": "concentrate from B7",
+        "predicate": "returns to",
+        "value": "B2",
+        "quote": "cooled concentrate from B7 returns to B2"
+      },
+      {
+        "kind": "signal",
+        "subject": "controller.sensors.LIS_301",
+        "predicate": "assigned to",
+        "value": "B3.level",
+        "quote": "controller.sensors.LIS_301 = B3.level;"
+      },
+      {
+        "kind": "signal",
+        "subject": "controller.sensors.QIS_502",
+        "predicate": "assigned to",
+        "value": "B5.medium.Xi[NaCl]",
+        "quote": "controller.sensors.QIS_502 = B5.medium.Xi[NaCl];"
+      },
+      {
+        "kind": "signal",
+        "subject": "V9.open",
+        "predicate": "assigned to",
+        "value": "controller.actuators.T5_Heater",
+        "quote": "V9.open = controller.actuators.T5_Heater;"
+      },
+      {
+        "kind": "signal",
+        "subject": "HeatB5.Q_flow",
+        "predicate": "assigned to",
+        "value": "if controller.actuators.T5_Heater then 20000 else 0",
+        "quote": "HeatB5.Q_flow = if controller.actuators.T5_Heater then 20000 else 0;"
+      }
+    ]
+  }
+}

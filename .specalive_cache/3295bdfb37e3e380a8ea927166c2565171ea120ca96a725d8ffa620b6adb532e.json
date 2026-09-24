@@ -1,0 +1,20 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"note\",\n      \"subject\": \"right of Controller\",\n      \"predicate\": \"note\",\n      \"value\": null,\n      \"quote\": \"note right of Controller\",\n      \"confidence\": 0.95\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 480,
+  "completion_tokens": 63,
+  "latency_s": 5.437005043029785,
+  "data": {
+    "claims": [
+      {
+        "kind": "note",
+        "subject": "right of Controller",
+        "predicate": "note",
+        "value": null,
+        "quote": "note right of Controller",
+        "confidence": 0.95
+      }
+    ]
+  }
+}
