@@ -20,6 +20,8 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Iterable
 
+from pydantic import ValidationError
+
 from ..ir.evidence import EvidenceClaim, Locator
 from ..ingest.base import DocBlock, Document
 from ..llm.base import LLMError
@@ -345,7 +347,8 @@ Rules:
 - Report what the text SAYS, even if it contradicts something you believe. Contradictions are
   resolved later and are valuable; suppressing one loses information.
 - If the text states that one document supersedes another, emit a claim of kind
-  "supersession" with subject = the superseding record and value = the superseded record.
+  "supersession" with subject = the superseding record, value = the superseded record, and
+  predicate = "supersedes" exactly (regardless of how the source text phrases the relationship).
 
 TEXT
 {chunk}
@@ -439,21 +442,33 @@ def _to_claims(
         if quote_check is not None and not quote_check(quote):
             dropped += 1
             continue
-        claims.append(
-            EvidenceClaim(
-                id=f"CLM-{next(iter(seq)):05d}",
-                source_id=doc.source.id,
-                locator=locator,
-                kind=c.get("kind", "note"),
-                subject=subject,
-                predicate=str(c.get("predicate") or ""),
-                value=c.get("value"),
-                unit=c.get("unit"),
-                quote=quote,
-                confidence=confidence,
-                extracted_by=tier,
+        try:
+            claims.append(
+                EvidenceClaim(
+                    id=f"CLM-{next(iter(seq)):05d}",
+                    source_id=doc.source.id,
+                    locator=locator,
+                    # `.get(key, default)` only substitutes for a *missing* key; an explicit
+                    # "kind": null still comes through as None and blows up this Literal field
+                    # -- and _check_schema skips validating null-valued properties, so a null
+                    # kind slips past schema validation entirely. `or` treats missing/null/empty
+                    # the same way.
+                    kind=c.get("kind") or "note",
+                    subject=subject,
+                    predicate=str(c.get("predicate") or ""),
+                    value=c.get("value"),
+                    unit=c.get("unit"),
+                    quote=quote,
+                    confidence=confidence,
+                    extracted_by=tier,
+                )
             )
-        )
+        except ValidationError as exc:
+            # Belt and suspenders beyond the `kind` case above: one malformed field from the
+            # model must never cost the whole batch -- including the deterministic claims
+            # already collected in this same extract_claims() call.
+            dropped += 1
+            doc.warnings.append(f"dropped a malformed claim from the model: {exc}")
     return claims, dropped
 
 

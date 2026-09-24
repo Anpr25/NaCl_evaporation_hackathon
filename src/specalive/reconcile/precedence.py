@@ -263,13 +263,25 @@ def build_supersession_map(claims: list[EvidenceClaim]) -> dict[str, set[str]]:
         values = [str(v).strip() for v in values if v not in (None, "", "-")]
         if not values:
             continue
-        predicate = (c.predicate or "").lower()
-        if predicate in ("superseded_by", "replaced_by", "superseded by", "replaced by"):
+        predicate = _normalise_predicate(c.predicate)
+        # A normalised-substring check, not an exact-match whitelist: a model writing
+        # "is_superseded_by", or a register using "replaced-by", must still be recognised as
+        # the value-wins direction. An exact-match whitelist silently fell through to the
+        # opposite (subject-wins) branch on any spelling it didn't anticipate -- inverting
+        # winner and loser, which is exactly the F1 trap this packet is built to catch.
+        # Anything else (including "supersedes"/"overrides", and any predicate a model didn't
+        # phrase like the prompt asked) stays on the subject-wins default, matching the
+        # convention both the regex extractor and the extraction prompt use.
+        if "supersededby" in predicate or "replacedby" in predicate:
             for winner in values:
                 out.setdefault(winner, set()).add(str(c.subject).strip())
         else:
             out.setdefault(str(c.subject).strip(), set()).update(values)
     return out
+
+
+def _normalise_predicate(p: str | None) -> str:
+    return re.sub(r"[\s_-]+", "", (p or "").lower())
 
 
 def resolve_source_supersession(

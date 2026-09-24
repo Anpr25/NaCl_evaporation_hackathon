@@ -335,9 +335,31 @@ class OpenRouterProvider(Provider):
             raise LLMError(f"openrouter HTTP {r.status_code}: {r.text[:300]}")
 
         body = r.json()
+        # OpenRouter can return HTTP 200 with an "error" body instead of "choices" -- e.g. a
+        # free model's upstream provider is overloaded. Seen live: {"error": {"code": 503,
+        # "message": "Upstream error from Nvidia: Service temporarily overloaded", ...}}.
+        # Without this check that becomes an opaque KeyError on "choices" deep in providers.py.
+        if "error" in body:
+            err = body.get("error") or {}
+            code = err.get("code")
+            message = err.get("message", "unknown upstream error")
+            if code == 429:
+                raise QuotaExhausted(f"openrouter upstream rate limit: {message}")
+            if code in (401, 403):
+                raise ProviderUnavailable(f"openrouter upstream auth rejected: {message}")
+            # Overload/5xx and anything else: a plain LLMError lets the router retry this tier
+            # (and then escalate) rather than disabling it for the rest of the run, since this
+            # is the upstream free model being flaky, not our own quota being spent.
+            raise LLMError(f"openrouter upstream error ({code}): {message}")
+
+        try:
+            content = body["choices"][0]["message"]["content"] or ""
+        except (KeyError, IndexError) as exc:
+            raise LLMError(f"openrouter returned no choices: {json.dumps(body)[:300]}") from exc
+
         usage = body.get("usage", {})
         return LLMResponse(
-            text=_strip_fences(body["choices"][0]["message"]["content"] or ""),
+            text=_strip_fences(content),
             tier=self.name,
             model=body.get("model", self.model),
             prompt_tokens=usage.get("prompt_tokens", 0),

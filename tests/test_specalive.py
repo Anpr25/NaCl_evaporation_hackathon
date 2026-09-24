@@ -7,6 +7,7 @@ Run:  pytest            (fast tests only)
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from specalive.emit.sysml import SysMLEmitter, round_trip_check
 from specalive.extract.claims import extract_claims, normalise_header, parse_value
 from specalive.ingest.base import DocBlock, Document
 from specalive.ingest.registry import load_packet
-from specalive.ir.evidence import Locator, Source
+from specalive.ir.evidence import EvidenceClaim, Locator, Source
 from specalive.ir.system import SystemModel
 from specalive.ir.validate import validate
 from specalive.llm.base import LLMError, LLMResponse, Provider
@@ -79,6 +80,40 @@ def test_docx_embedded_image_reaches_the_vision_tier(tmp_path):
     assert not doc.warnings, doc.warnings
 
 
+def test_docx_embedded_transparent_image_is_composited_onto_white_not_blackened(tmp_path):
+    """convert("RGB") on its own discards alpha instead of compositing it -- a transparent
+    background silently became a black rectangle, with no error or warning that the diagram's
+    evidence was gone."""
+    docx = pytest.importorskip("docx")
+    PIL_Image = pytest.importorskip("PIL.Image")
+
+    img_path = tmp_path / "fig.png"
+    # Fully transparent background with an opaque red square in the middle -- if alpha is
+    # dropped instead of composited, the (0, 0) corner comes out black, not white.
+    img = PIL_Image.new("RGBA", (40, 40), (0, 0, 0, 0))
+    for x in range(10, 30):
+        for y in range(10, 30):
+            img.putpixel((x, y), (255, 0, 0, 255))
+    img.save(img_path)
+
+    doc_path = tmp_path / "note.docx"
+    d = docx.Document()
+    d.add_paragraph("Design note with a transparent diagram.")
+    d.add_picture(str(img_path))
+    d.save(str(doc_path))
+
+    from specalive.ingest.adapters import DocxAdapter
+
+    source = Source(id="SRC-01", filename="note.docx", media_type="application/vnd.docx")
+    doc = DocxAdapter().parse(doc_path, source)
+    full_image = doc.images()[0]
+    out_img = PIL_Image.open(io.BytesIO(full_image.image)).convert("RGB")
+    assert out_img.getpixel((0, 0)) == (255, 255, 255), (
+        "a transparent background must composite to white, not black"
+    )
+    assert out_img.getpixel((20, 20)) == (255, 0, 0), "the opaque content must be preserved"
+
+
 def test_chunks_can_be_restricted_to_prose_kinds():
     """The model text path must only ever see prose -- a table/keyvalue/graph/code/image block
     is either already deterministic or belongs to the vision path, never the text model."""
@@ -132,6 +167,21 @@ def test_supersession_direction_is_not_inverted():
     assert {"REQ-ROU-001", "REQ-ROU-002"} <= sup["CR-017"]
     # and never the other way round
     assert "REQ-ROU-001" not in sup or "CR-017" not in sup.get("REQ-ROU-001", set())
+
+
+def test_supersession_map_recognises_predicate_spelling_variants():
+    """The direction check used to be an exact-match whitelist on four spellings. A model
+    writing 'is_superseded_by', or a register using 'replaced-by', fell through to the *other*
+    branch and silently inverted winner and loser -- precisely the F1 trap this packet plants."""
+    claims = [
+        EvidenceClaim(id="CLM-1", source_id="SRC-01", kind="supersession",
+                      subject="REQ-ROU-001", predicate="is_superseded_by", value="CR-017", quote="x"),
+        EvidenceClaim(id="CLM-2", source_id="SRC-01", kind="supersession",
+                      subject="REQ-ROU-002", predicate="replaced-by", value="CR-017", quote="y"),
+    ]
+    sup = build_supersession_map(claims)
+    assert {"REQ-ROU-001", "REQ-ROU-002"} <= sup["CR-017"]
+    assert "REQ-ROU-001" not in sup and "REQ-ROU-002" not in sup
 
 
 # --------------------------------------------------------------- extract: model path (A1/A2)
@@ -242,6 +292,51 @@ def test_extract_claims_records_a_tier_failure_and_continues():
     claims = extract_claims([doc], router=router)
     assert len(claims) == 1 and claims[0].subject == "K-1"
     assert any("extract_claim failed" in w for w in doc.warnings)
+
+
+def test_extract_claims_survives_a_null_kind_without_losing_the_whole_batch():
+    """`{"kind": null}` passes _check_schema (it skips null-valued properties) and then blows up
+    EvidenceClaim's Literal field. That crash used to propagate out of extract_claims() entirely,
+    discarding every deterministic claim already collected in the same call -- not just the one
+    malformed model claim."""
+    doc = Document(source=Source(id="SRC-01", filename="x.txt", media_type="text/plain"))
+    doc.blocks = [
+        DocBlock("table", "id | value\nA-1 | 5", rows=[["id", "value"], ["A-1", "5"]]),
+        DocBlock("paragraph", "Pump P-2 runs at 50 Hz.", Locator(line_start=1)),
+    ]
+    router = _FakeRouter(
+        {
+            "extract_claim": [
+                {"kind": None, "subject": "P-2", "predicate": "frequency", "value": 50,
+                 "unit": "Hz", "quote": "P-2 runs at 50 Hz"},
+            ]
+        }
+    )
+    claims = extract_claims([doc], router=router)
+    det = [c for c in claims if c.extracted_by == "t0_deterministic"]
+    assert len(det) == 1 and det[0].subject == "A-1", "the deterministic claim must survive"
+    model_claims = [c for c in claims if c.extracted_by != "t0_deterministic"]
+    assert len(model_claims) == 1
+    assert model_claims[0].kind == "note", "a null kind must fall back to 'note', not crash"
+
+
+def test_extract_claims_drops_a_claim_with_an_unrecognised_kind_instead_of_crashing():
+    """A `kind` the model invented outright (not null, just not one of the 15 allowed values)
+    still fails EvidenceClaim's Literal field even with the null-kind fix in place -- this is
+    what the broader try/except around construction actually guards against."""
+    doc = Document(source=Source(id="SRC-01", filename="x.txt", media_type="text/plain"))
+    doc.blocks = [DocBlock("paragraph", "Pump P-2 runs at 50 Hz.", Locator(line_start=1))]
+    router = _FakeRouter(
+        {
+            "extract_claim": [
+                {"kind": "widget", "subject": "P-2", "predicate": "frequency", "value": 50,
+                 "unit": "Hz", "quote": "P-2 runs at 50 Hz"},
+            ]
+        }
+    )
+    claims = extract_claims([doc], router=router)
+    assert claims == []
+    assert any("malformed claim" in w for w in doc.warnings)
 
 
 @pytest.mark.skipif(not REF_IR.exists(), reason="reference IR not built")
