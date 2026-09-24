@@ -22,3 +22,6 @@ out/
 
 # Keep the warmed replay cache: it is what makes the demo reproducible offline.
 # .specalive_cache/
+
+# Visual Studio per-user workspace state (created when the folder is opened in VS).
+.vs/

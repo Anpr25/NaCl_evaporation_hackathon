@@ -187,12 +187,17 @@ class Binder:
     # ------------------------------------------------------------------ L1
     def _try_l1(self, block: Block) -> BindingResult | None:
         text = f"{block.name} {block.kind} {block.description or ''}".lower()
-        best: tuple[int, str, dict[str, Any]] | None = None
+        head = f"{block.name} {block.kind}".lower()
+        best: tuple[tuple[bool, int, int], str, dict[str, Any]] | None = None
         for key, tpl in L1_TEMPLATES.items():
-            score = sum(1 for kw in tpl["keywords"] if kw in text)
-            # A more specific template (heated/cooled vessel) must win over the generic one.
-            score += key.count(".")
-            if score > 1 and (best is None or score > best[0]):
+            hits = sum(1 for kw in tpl["keywords"] if kw in text)
+            if not hits:
+                continue  # specificity ranks matching templates; it is not itself a match
+            # What the part *is* (name, kind) outranks what its description mentions ('decouples
+            # mixing from evaporator availability' is not an evaporator); among those, a more
+            # specific template (heated/cooled vessel) must win over the generic one.
+            score = (any(kw in head for kw in tpl["keywords"]), key.count("."), hits)
+            if best is None or score > best[0]:
                 best = (score, key, tpl)
         if best is None:
             return None
@@ -361,7 +366,13 @@ class ModelicaEmitter:
             self._w(2, f"{_mid(sm.name)} {_mid(sm.id)};")
         self._w(0)
         self._w(1, "equation")
+        simulated = {b.id for b in self.m.simulatable_blocks()}
         for c in self.m.connections:
+            ends = {c.source.split(".")[0], c.target.split(".")[0]}
+            if not ends <= simulated:
+                # An architecture-only part (a boundary, a manual valve) has no instance here.
+                self._w(2, f"// architecture only: {c.id} ({c.source} -> {c.target}) is not simulated")
+                continue
             note = f"  // @series {', '.join(c.series_elements)}" if c.series_elements else ""
             self._w(2, f"connect({self._ref(c.source)}, {self._ref(c.target)});{note}")
         self._w(0)

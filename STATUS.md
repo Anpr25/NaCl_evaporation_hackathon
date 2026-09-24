@@ -7,9 +7,11 @@ Keep this current. When you finish something, move it from §4 to §2 with the e
 proves it. When you make a call that another person could reasonably have made differently,
 add it to §3 — that is how we avoid re-litigating decisions at 2am on day three.
 
-**Last updated:** after the catalog harvest was made to work at full scale.
+**Last updated:** after workstream B landed IR assembly (B1–B5): the NaCl packet now reaches
+Modelica emission with no `--reference-ir`.
 **Verdict:** the hard gate passes, the pipeline runs end to end, the full Modelica catalog
-is built and retrieval works across five domains. Three modules are still stubs. On track.
+is built and retrieval works across five domains. IR assembly is no longer a stub: extracted
+IR scores 83% recall against the hand-built oracle, 100% on series groups. On track.
 
 ---
 
@@ -20,8 +22,9 @@ is built and retrieval works across five domains. Three modules are still stubs.
 | Hard gate (Modelica compiles) | **PASS** |
 | Simulation runs 3000 s | **PASS** |
 | Acceptance checks | **11/12** (the twelfth is a defect in the source data — see §5) |
-| Tests | **24/24** green (22 fast, 2 gate) |
-| Pipeline stages implemented | 10 of 10 wired; 3 have stubbed internals |
+| Tests | **40** fast (22 original + 18 workstream-B) + 2 gate |
+| Pipeline stages implemented | 10 of 10 wired; 2 have stubbed internals (extract model path on main, L2) |
+| Extracted IR vs reference (`ir-diff`) | **83%** overall; topology 90%, series groups 100%, requirements 100% |
 | Modelica catalog | **1,529 classes** harvested from full MSL in **203 s** |
 | Catalog retrieval | **7/8 top-1** across rotational, electrical, fluid, signal, thermal — BM25 only, no model |
 | Domains proven | fluid + thermal + sequential control end to end; catalog retrieval across five domains |
@@ -65,7 +68,7 @@ Everything here was executed on the dev machine, not just written.
 | extract (deterministic) | **done** | 501 claims with cell-level locators |
 | extract (model path) | *stub* | `TODO(A)` in `extract/claims.py` |
 | reconcile (precedence) | **done** | resolves `CR-017 supersedes REQ-ROU-001, REQ-ROU-002` with no model call |
-| reconcile (IR assembly) | *stub* | `TODO(B1..B5)` in `reconcile/builder.py` |
+| reconcile (IR assembly) | **done** | 47 blocks, 19 connections, 37 signals, 4 interlocks, 19-state FSM (3 regions, fork + join), BAT-09 scenario with 10 derived checks; validate 0 errors; SysML round-trip clean; `ir-diff` 83% |
 | validate | **done** | 10 checks; reference IR passes with 0 errors, 0 warnings |
 | SysML emit | **done** | round-trip check loses nothing |
 | Modelica emit | **done** | L0=1, L1=15 on the NaCl fixture |
@@ -102,7 +105,9 @@ Everything here was executed on the dev machine, not just written.
   against a live endpoint** — no keys and no Ollama on the dev machine.
 - **CLI**: `doctor`, `harvest`, `run`, `gate`, `bench`, `serve`, `ir-diff`. All run.
 - **Web app**: FastAPI + SSE, no build step. Smoke-tested (`/`, `/api/health`, `POST /api/runs`).
-- **Tests**: 24, each encoding a real bug or a planted trap.
+- **Tests**: 40 fast + 2 gate, each encoding a real bug or a planted trap. Workstream B's live in
+  `tests/test_reconcile.py`; the synthetic cases use a switchboard, capacitors and flywheels so a
+  tank-shaped rule fails there first.
 
 ### 2.4 Analysis of the packet
 
@@ -163,6 +168,19 @@ reason, and update the row rather than arguing from memory.
 | D26 | The harvested catalog is **regenerated per machine, never committed** | it must match the MSL actually installed; a catalog built against 4.1.0 and used on 4.0.0 would name classes that do not exist there, breaking the one guarantee the whole design rests on | a 200 s setup step, which `doctor` prompts for |
 | D22 | A hand-built **reference IR** is a first-class artefact | decouples B/C/D from A on day one, and doubles as A's scoring oracle via `ir-diff` | must be kept in step with the IR schema |
 
+### IR assembly (workstream B)
+
+| # | Decision | Why | Cost we accepted |
+|:--|:--|:--|:--|
+| D27 | The builder types a subject by the **shape of its resolved facts** (`from`+`to` = hop, `next` = step, `location`+measurement = instrument, numeric `value` = parameter, tagged + physical kind = part), never by sheet or file name | an unknown packet will not call its sheets "Interfaces" or "State_Sequence" | a subject whose facts fit no shape is not built; `GAP-UNUSED-*` counts them |
+| D28 | Table extraction keeps **every named column**: an unrecognised header keeps its own name, a header with a unit names a quantity, colliding synonyms fall back to their own name, and the id column must be unique | the vocabulary dropped the Interfaces, State_Sequence and Instruments sheets entirely, and B1 cannot assemble what was never extracted | touches A's `extract/claims.py` (one helper plus the header rule); more `note` claims per packet |
+| D29 | **Series elements are real parts** with `abstracted_into=<path>`; the path is a lumped block | SysML keeps every valve and pump as a part (D11) while Modelica collapses them, and `simulatable_blocks()` already excludes abstracted parts | more blocks in the IR than the reference, which hides them |
+| D30 | A **named group** ("plus B1 routing group") is resolved from wherever its members are listed, **including superseded records**, and each derivation is a `DecisionRecord` (`D-group-membership`, F2) | a change record that re-pairs branches with destinations does not move valves; the superseded text is the only place the B1 group is spelled out | the argument must be written down, and it is |
+| D31 | A guard clause the parser cannot formalise is **dropped and declared** as a Gap, never guessed. "B6 return complete" is formalised only via the transfer's own interlock (`LIS_601 > 0.02` on P2, so done at `LIS_601 <= 0.02`) | honesty over apparent completeness; the derived rule is domain-neutral | `Initial -> Step1` fires on the next scan (its "startEnable AND B3 available" is declared unformalised) |
+| D32 | Drawing and vision edges **corroborate** register topology; they never create it when a connection register exists | a drawing is not a routing authority (F2), and the vision model's P&ID edges are mostly wrong (B1->B2, B6->B7) | uncorroborated edges are listed in an info gap, not modelled |
+| D33 | `satisfy` / `verify` are **first-class SysML relationships**, derived from what each requirement's text names (sensor + value + unit for transitions; actuator + sensor for interlocks; routed ends for paths); `parse_back()` must recognise **every** emitted line | a trace comment cannot be checked; a parser that silently skips new constructs is worse than none (B5) | satisfaction is heuristic, and explained in each requirement's provenance note |
+| D34 | Validation treats a block **nobody has tried to bind yet** as `info`, not an error | validation runs before the emitter binds, so every extracted block used to fail it | an unbound block after binding is still an error |
+
 ---
 
 ## 4. Backlog
@@ -186,17 +204,43 @@ Ordered by priority within each owner. `[!]` means it blocks someone else.
 
 ### B — IR, reconciliation, SysML
 
-- [ ] **B1 `[!]`** `reconcile/builder.py` TODOs B1–B5: assemble blocks, connections, signals,
-      the FSM and the scenario from resolved claims. Precedence wiring is done; this is
-      mechanical.
-- [ ] **B2** Series-group detection: walk from/to chains and populate
-      `Connection.series_elements`. Test: `RET_A` must carry `{P2,V20,V24,V25,V1,V3}`.
-- [ ] **B3** Generalise `_supply_ceiling` in `validate.py` beyond geometric vessels, so the
-      guard-reachability check works for charge and rotational energy too.
-- [ ] **B4** Richer SysML: `satisfy` / `verify` as first-class relationships rather than
-      trace comments.
-- [ ] **B5** Keep `parse_back()` in step with the emitter — it is our only structural check,
-      and a stale one is worse than none.
+- [x] ~~**B1** Builder assembly~~ — **done**: blocks, ports, connections, signals, interlocks,
+      FSM, scenario and requirement satisfaction from resolved claims (`reconcile/builder.py`,
+      `entities.py`, `topology.py`, `behaviour.py`). NaCl: B1–B7 + K1 simulatable, P1/P2 and 15
+      automated valves abstracted into their paths, 13 manual valves architecture-only, 15
+      `cmd_V*` actuators, 3 regions / 19 states with the fork at Step6 and the join into `Join`.
+- [x] ~~**B2** Series groups~~ — **done**: the B6->B1 return (reference `RET_A`) carries exactly
+      `[P2, V20, V24, V25, V1, V3]`, B7->B2 carries `{P1, V18, V22, V23, V5, V6}`; `ir-diff`
+      series groups 100%. Proven domain-neutral on a synthetic breaker chain.
+- [x] ~~**B3** Generalised supply ceiling~~ — **done**: store models for geometric volume,
+      electrical charge, rotational/translational kinetic energy and mass; transitive upstream
+      traversal through non-storing elements; `or` guards skipped; returns None on any missing
+      number. Tests on capacitors and flywheels; reference IR still clean.
+- [x] ~~**B4** First-class `satisfy` / `verify`~~ — **done**: requirement usages, `satisfy <req>
+      by <element>` (89 on the reference IR), verification defs with `objective { verify ... }`,
+      interlocks as `constraint`s, `exhibit state` on the system, `entry; then` for initial
+      states. Also fixed: part defs now declare the ports of *every* block of their kind.
+- [x] ~~**B5** `parse_back()` in step~~ — **done**: parses every construct above and reports any
+      line it does not recognise, and `round_trip_check` fails on it. Mutation tests cover a
+      dropped `satisfy` and an unknown construct.
+- [ ] **B6** Guard normalisation through the router for clauses the deterministic parser drops
+      ("startEnable AND B3 available"), with a validator that every symbol is a known signal or
+      parameter. Needs a `normalise_guard` task chain in `config/models.yaml` (D).
+- [ ] **B7** Initial conditions: the packet states B1/B2 initial levels only in prose and legacy
+      code; once A's model path lands, lift them into `Block.parameters` (`level_start`) so the
+      B3 reachability check has numbers to work with on the extracted IR.
+
+**Handoffs found while doing B** (not B's code; each blocks the no-reference-IR gate):
+
+- **C — port mapping at bind time.** The builder's ports carry source names (`bottom_port`,
+  `return_inlet`); the L1 templates call them `inlet[1]` / `outlet[1]` / `port_a`. `Binder` must
+  rename `Port.name` onto the bound class's connectors by direction and order (and set
+  `nIn`/`nOut`). Until then the extracted-IR Modelica cannot compile.
+- **C — unbound sensors.** The controller declares every sensor as an `input`; FIS-801, PIS-901
+  and PIS-1001 have no plant binding (declared as gaps), which leaves the model unbalanced.
+  Emit inputs only for bound sensors, or bind unbound ones to a declared constant.
+- **D — `specalive run` crashes without `omc`.** `OmcRunner()` raises `FileNotFoundError`
+  instead of the pipeline emitting a `compile: fail` event and still writing the report.
 
 ### C — Modelica, catalog, repair
 
@@ -277,6 +321,10 @@ will bite again on a new packet.
 | `OpenTank` had no ports | `.BaseClasses` was cut from the probe pass for speed, so the partial parent holding the connectors was never read | `test_base_classes_are_probed_but_never_emitted` |
 | Every controller was invisible to retrieval | `search()` defaulted to `restriction="model"`; a controller is a `block` | `test_retrieval_covers_blocks_not_just_models` |
 | `'dict' object has no attribute 'lower'` in classification | YAML parsed a bare `re:` token as a mapping | fixed in `config/precedence.yaml`; consumer hardened |
+| Whole register sheets produced zero claims | header vocabulary only: `Interface ID` matched nothing so there was no subject column; `State` mapped to *status*; `From Port` collided with `From` | `test_every_named_column_becomes_a_predicate` |
+| SysML `connect B3.top_port_2` pointed at an undeclared port | part defs took ports from the first block of each kind only | `test_part_defs_declare_the_ports_of_every_block_of_their_kind` |
+| Every unmatched block bound to `Vessels.Evaporator` | the L1 score added a specificity bonus that alone cleared the threshold, with zero keyword hits | checked by binding the extracted IR: all 15 blocks bind as in the reference |
+| `Step9 -> Step10` invented a second fork | the merged row is named `Step10/11`; step names now alias each number | `test_state_machine_has_three_regions_a_fork_and_a_join` |
 
 ---
 
