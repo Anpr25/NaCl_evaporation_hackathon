@@ -135,7 +135,15 @@ modes:
   auto:   {allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid, t3_cloud_reasoning, t4_cloud_vision, t4_local_vision, t3_openrouter, t4_openrouter_vision]}
   local:  {allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid, t4_local_vision]}
   cloud:  {allow: [t0_deterministic, t3_cloud_reasoning, t4_cloud_vision, t3_openrouter, t4_openrouter_vision]}
-  replay: {allow: [t0_deterministic], replay_only: true}   # demo-safe: cache hits or bust
+  # Replay must allow the SAME tiers as auto. `replay_only` is what prevents a live call,
+  # and the router checks it *after* the cache lookup. Listing only t0 here left the tier
+  # chain empty, so run() raised before ever opening the cache and every model-derived claim
+  # silently vanished -- a replay that looked fast because it did nothing.
+  replay:
+    allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid,
+            t3_cloud_reasoning, t4_cloud_vision, t4_local_vision,
+            t3_openrouter, t4_openrouter_vision]
+    replay_only: true
   none:   {allow: [t0_deterministic]}                      # deterministic-only smoke path
 
 cache:

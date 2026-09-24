@@ -412,3 +412,17 @@ def test_all_models_gone_reports_the_tier_unavailable():
     with pytest.raises(ProviderUnavailable) as exc:
         _try_models(prov, LLMRequest(prompt="p"), call)
     assert "a gone" in str(exc.value) and "b gone" in str(exc.value)
+
+
+def test_real_replay_mode_can_actually_reach_the_cache():
+    """Regression: replay listed only t0_deterministic, so the tier chain came out empty and
+    run() raised before ever opening the cache. Every model-derived claim vanished and the
+    replay looked fast because it did nothing. `replay_only` is what blocks a live call, and
+    the router checks it *after* the cache lookup -- so replay must allow the same tiers as
+    auto. A fixture config cannot catch this; it has to be asserted against the real file."""
+    cfg = yaml.safe_load(Path("config/models.yaml").read_text(encoding="utf-8"))
+    auto = set(cfg["modes"]["auto"]["allow"])
+    replay = cfg["modes"]["replay"]
+    assert replay.get("replay_only") is True
+    missing = auto - set(replay["allow"])
+    assert not missing, f"replay cannot serve cached answers for: {sorted(missing)}"
