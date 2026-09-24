@@ -196,3 +196,95 @@ def test_generated_plant_carries_a_diagram_layout():
     assert len(xs) >= 10, "components are not being placed"
     assert len(set(xs)) >= 5, f"layout collapsed into {len(set(xs))} column(s): cycles not broken"
     assert "Line(points=" in text, "connections carry no route, so OMEdit draws no edges"
+
+
+# ------------------------------------------------------------------ C10: gate honesty
+
+
+def _csv(tmp_path, name, header, rows):
+    import csv as _csv
+    p = tmp_path / name
+    with p.open("w", newline="", encoding="utf-8") as fh:
+        w = _csv.writer(fh)
+        w.writerow(header)
+        w.writerows(rows)
+    return p
+
+
+class _Region:
+    def __init__(self, region, n):
+        self.region, self.n = region, n
+
+
+class _SM:
+    def __init__(self, spec):
+        self.regions = list(spec)
+        self._spec = spec
+
+    def states_in(self, region):
+        return [object()] * self._spec[region]
+
+
+class _Model:
+    def __init__(self, spec):
+        self.state_machines = [_SM(spec)] if spec else []
+
+
+def test_a_simulation_where_nothing_moves_is_not_a_pass(tmp_path):
+    """The literal vacuous case: it integrated, and every variable is where it started."""
+    from specalive.verify.omc import liveness
+
+    rows = [[t, 1.0, 2.0] for t in range(10)]
+    live = liveness(_csv(tmp_path, "flat.csv", ["time", "a", "b"], rows))
+    assert not live.ok
+    assert "nothing changed" in live.reason
+
+
+def test_a_controller_that_stalls_mid_sequence_is_not_a_pass(tmp_path):
+    """The case that actually bit us, and the reason a did-anything check is too weak.
+
+    Without a reference IR the NaCl model compiled, simulated, moved 7% of its variables and
+    scored 0/10 -- because the main region reached Step1 of 8 and stopped. Extraction had
+    missed cmd_heater, so nothing ever evaporated. Any "did the controller move" test passes
+    this; only comparing against the state count catches it.
+    """
+    from specalive.verify.omc import liveness
+
+    rows = [[t, 1.0 + t * 1e-3, 1, 3, 5] for t in range(10)]
+    live = liveness(
+        _csv(tmp_path, "stalled.csv", ["time", "x", "ctrl.s_main", "ctrl.s_A", "ctrl.s_B"], rows),
+        _Model({"main": 9, "A": 4, "B": 6}),
+    )
+    assert live.regions["main"] == 1 and live.expected["main"] == 8
+    assert live.stalled == ["main"]
+    assert not live.ok
+    assert "main stopped at 1 of 8" in live.reason
+
+
+def test_a_completed_sequence_passes(tmp_path):
+    from specalive.verify.omc import liveness
+
+    rows = [[t, float(t), min(t, 8), min(t, 3), min(t, 5)] for t in range(10)]
+    live = liveness(
+        _csv(tmp_path, "done.csv", ["time", "x", "ctrl.s_main", "ctrl.s_A", "ctrl.s_B"], rows),
+        _Model({"main": 9, "A": 4, "B": 6}),
+    )
+    assert live.stalled == [] and live.ok
+
+
+def test_a_continuous_model_with_no_controller_is_judged_on_movement_alone(tmp_path):
+    """The drivetrain has no state machine. Requiring a finished sequence there would fail a
+    model that is working perfectly, so the sequence test only applies when there is one."""
+    from specalive.verify.omc import liveness
+
+    rows = [[t, float(t), 2.0 * t] for t in range(10)]
+    live = liveness(_csv(tmp_path, "cont.csv", ["time", "w", "tau"], rows), _Model({}))
+    assert live.ok and not live.expected
+
+
+def test_liveness_survives_a_result_file_it_cannot_read(tmp_path):
+    """Never let a screen crash the run it is screening."""
+    from specalive.verify.omc import liveness
+
+    assert not liveness(tmp_path / "missing.csv").ok
+    assert not liveness(_csv(tmp_path, "head.csv", ["time", "a"], [])).ok

@@ -27,7 +27,7 @@ from .ir.system import SystemModel
 from .ir.validate import validate
 from .repair.loop import RepairLoop
 from .verify.acceptance import Scorecard, score
-from .verify.omc import OmcRunner, describe_environment
+from .verify.omc import OmcRunner, describe_environment, liveness
 from .verify.report import build_report
 
 Stage = Literal[
@@ -299,6 +299,16 @@ class Pipeline:
         if not sim.ok:
             yield from self._finish(t0, runner)
             return
+
+        # C10. "It simulated" is not "it worked". A model whose states never move, or whose
+        # sequential controller never leaves Initial, has integrated a system in which
+        # nothing happens -- and it would otherwise print HARD GATE MET above 0/10.
+        live = liveness(cfg.out_dir / "results.csv", model)
+        self.result.gate["live"] = live.ok
+        self.result.gate["liveness"] = live.summary()
+        yield self._emit(
+            "simulate", "ok" if live.ok else "warn", live.summary(), live=live.ok,
+        )
 
         # ---------------------------------------------------------- 9. verify
         yield self._emit("verify", "start", "scoring acceptance criteria")

@@ -201,7 +201,20 @@ def run(
     if not result.ok:
         con.print("\n[red]HARD GATE NOT MET[/] - the Modelica does not compile and run.")
         raise typer.Exit(1)
-    con.print("\n[green]HARD GATE MET[/] - the model compiles and simulates.")
+
+    # C10. Three states, not two. A model can compile, simulate to completion, and have
+    # integrated a system in which nothing happens -- which is what printing "HARD GATE MET"
+    # above "0/10 acceptance checks" used to mean. Say so.
+    if result.gate.get("live") is False:
+        con.print("\n[yellow]HARD GATE MET, BUT THE MODEL IS INERT[/]")
+        con.print(f"  {result.gate.get('liveness', '')}")
+        con.print(
+            "  It compiles and simulates, so the gate is met -- but nothing happens in the\n"
+            "  run, so the simulation is not evidence that the system was modelled correctly.\n"
+            "  Usually extraction missed an actuator or a connection: check the report's gap list."
+        )
+        return
+    con.print("\n[green]HARD GATE MET[/] - the model compiles, simulates and runs its sequence.")
 
 
 # ------------------------------------------------------------------------------------ gate

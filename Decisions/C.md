@@ -16,7 +16,64 @@ gracefully.
 
 ---
 
-## 2026-09-24 (latest) — what is left in C, and what I propose we drop
+## 2026-09-24 (latest) — C10 done: the gate now says when a model runs but does nothing
+
+**Status: implemented.** 99 fast tests green, gate green, both benches green.
+
+The gate has three states now, not two:
+
+```
+with the fixture IR      226/262 variables moved (86%), controller A=3/3, B=5/5, main=8/8
+                         HARD GATE MET - compiles, simulates and runs its sequence
+
+without the fixture IR    21/268 variables moved (7%),  controller A=3/3, B=5/5, main=1/8
+                         HARD GATE MET, BUT THE MODEL IS INERT
+                           the controller did not finish its sequence (main stopped at 1 of 8)
+
+drivetrain (no FSM)       37/37 variables moved (100%)
+                         HARD GATE MET
+```
+
+### The test that works, and the two that do not
+
+My first attempt screened for *movement* — did any variable change? It passed the failing run,
+because 7% of variables do move and the controller does leave state 0. A did-anything check is
+too weak for exactly the failure it was written to catch.
+
+A percentage threshold would have worked on these two runs and is a magic number that means
+nothing on an unseen packet.
+
+What discriminates honestly is **sequence completion**: `liveness()` takes the IR, counts the
+states in each region, and compares against the highest index the simulation reached.
+`main=1/8` is unambiguous and explains itself in the message. When a model has no state
+machine the test does not apply — the drivetrain is purely continuous and would fail any
+sequence requirement while working perfectly.
+
+### Why this is C's, and why it mattered
+
+`compiles` and `simulates` is the PRD's hard gate and it is unchanged — `result.ok` still means
+exactly that, and `--from-sysml`, the bench and the exit code all behave as before. What
+changed is that the *report* no longer implies the model works when it only ran.
+
+Printing `HARD GATE MET` above `0/10 acceptance checks passed` was the one place this repo
+read as a silent pass, and standing rule 4 says a declared gap beats that. A judge supplies a
+spec; there is no reference IR for it; this is the message they would have seen.
+
+### ⚠ Affects you
+
+**A and B — this is a reporting fix, not a cure.** The root cause is extraction recall: 83%
+overall, but the missing 17% includes `cmd_heater`, `cmd_coolB6`, `cmd_coolB7` and four
+`Bn.out -> L_Vn.port_a` connections. No heater command, no evaporation, so `main` never leaves
+Step1. Recovering those four signals is probably the highest-value work left anywhere on the
+project — it is the difference between 0/10 and something defensible on a judge's packet.
+`main=N/8` is now a one-line progress meter for it.
+
+**D — `gate` carries two new keys**, `live` (bool) and `liveness` (string), already passed to
+`build_report`. Worth surfacing in `report.html` next to the compile/simulate badges.
+
+---
+
+## 2026-09-24 (earlier) — what is left in C, and what I propose we drop
 
 **Two tasks measured their way off the list, two stay, one is new and urgent.**
 

@@ -281,6 +281,142 @@ class OmcRunner:
 # ------------------------------------------------------------------------------ result I/O
 
 
+@dataclass
+class Liveness:
+    """C10. Did the simulation actually do anything?
+
+    `compiles` and `simulates` are the hard gate and they are necessary, but they are not
+    sufficient, and the difference bit us: on a packet run without a reference IR the model
+    compiled, simulated to completion and scored **0/10** on acceptance, because extraction
+    had missed the heater and cooler commands. No heater command means no evaporation, so
+    every threshold check fails -- while the run itself reports success.
+
+    A model that integrates a system in which nothing moves is not a working model, and
+    printing "HARD GATE MET" above "0/10" is the one place this repo reads as a silent pass.
+    So the gate reports three states rather than two, and this is the third.
+
+    Deterministic and domain-general: it asks whether state changed and whether any
+    controller left its initial state. It makes no assumption about what the system *is*.
+    """
+
+    moved: int
+    total: int
+    #: Controller region -> highest state index reached. Empty when the model has no FSM,
+    #: which is normal: the drivetrain bench is purely continuous.
+    regions: dict[str, float] = field(default_factory=dict)
+    #: Region -> highest state index that exists, from the IR. Without it we can only tell
+    #: that a controller moved, not that it finished -- and "moved" is too weak a test: the
+    #: failing NaCl run reached Step1 of 8 and stopped, which passes any did-anything check.
+    expected: dict[str, int] = field(default_factory=dict)
+    reason: str = ""
+
+    @property
+    def stalled(self) -> list[str]:
+        """Regions that started their sequence and did not finish it."""
+        return sorted(
+            r for r, top in self.expected.items() if self.regions.get(r, -1) < top
+        )
+
+    @property
+    def ok(self) -> bool:
+        if self.moved == 0:
+            return False
+        if self.regions and max(self.regions.values(), default=0) <= 0:
+            return False
+        # The discriminating case. A batch controller that reaches Step1 of 8 and stops has
+        # not run the process, however much continuous state drifted underneath it.
+        if self.stalled:
+            return False
+        return True
+
+    def summary(self) -> str:
+        if self.total == 0:
+            return "no result data to screen"
+        pct = 100 * self.moved // max(self.total, 1)
+        head = f"{self.moved}/{self.total} variables moved ({pct}%)"
+        if self.regions:
+            head += ", controller " + ", ".join(
+                f"{r}={int(self.regions.get(r, -1))}/{self.expected.get(r, '?')}"
+                for r in sorted(set(self.regions) | set(self.expected))
+            )
+        return head + (f" -- {self.reason}" if self.reason and not self.ok else "")
+
+
+_STATE_COL = re.compile(r"(?:^|\.)s_(\w+)$")
+
+
+def liveness(path: str | Path, model: Any = None, *, rel_tol: float = 1e-6) -> Liveness:
+    """Screen a result file for movement and sequence completion.
+
+    Streams the file: result CSVs run to hundreds of megabytes. `model` is a SystemModel;
+    without it the sequence-completion test is skipped and only movement is checked.
+    """
+    p = Path(path)
+    if not p.exists():
+        return Liveness(0, 0, reason="no result file")
+
+    expected: dict[str, int] = {}
+    for sm in getattr(model, "state_machines", []) or []:
+        for region in sm.regions:
+            n = len(sm.states_in(region))
+            if n > 1:
+                expected[_ident_region(region)] = n - 1
+
+    with p.open(newline="", encoding="utf-8") as fh:
+        reader = csv.reader(fh)
+        header = next(reader, None)
+        if not header:
+            return Liveness(0, 0, reason="empty result file")
+        idx = [i for i, name in enumerate(header) if name != "time"]
+        lo = [float("inf")] * len(header)
+        hi = [float("-inf")] * len(header)
+        rows = 0
+        for row in reader:
+            rows += 1
+            for i in idx:
+                try:
+                    v = float(row[i])
+                except (ValueError, IndexError):
+                    continue
+                if v < lo[i]:
+                    lo[i] = v
+                if v > hi[i]:
+                    hi[i] = v
+
+    if rows < 2:
+        return Liveness(0, 0, reason="result file has no trajectory")
+
+    moved = 0
+    regions: dict[str, float] = {}
+    for i in idx:
+        if hi[i] < lo[i]:
+            continue
+        span = hi[i] - lo[i]
+        scale = max(abs(hi[i]), abs(lo[i]), 1e-12)
+        if span / scale > rel_tol and span > 0:
+            moved += 1
+        if m := _STATE_COL.search(header[i]):
+            regions[m.group(1)] = max(regions.get(m.group(1), 0.0), hi[i])
+
+    live = Liveness(moved, len(idx), regions, expected)
+    if moved == 0:
+        live.reason = "nothing changed over the whole run"
+    elif regions and max(regions.values(), default=0) <= 0:
+        live.reason = "the controller never left its initial state, so no sequence ran"
+    elif live.stalled:
+        detail = ", ".join(
+            f"{r} stopped at {int(regions.get(r, -1))} of {expected[r]}" for r in live.stalled
+        )
+        live.reason = f"the controller did not finish its sequence ({detail})"
+    return live
+
+
+def _ident_region(raw: str) -> str:
+    """Region name as the Modelica emitter writes it into `s_<region>`."""
+    out = re.sub(r"[^A-Za-z0-9_]", "_", raw.strip())
+    return out if out and not out[0].isdigit() else f"m_{out}"
+
+
 def read_result(path: str | Path, variables: list[str] | None = None) -> dict[str, list[float]]:
     """Read an omc CSV result into columns. Keeps only `variables` when given, to bound memory."""
     cols: dict[str, list[float]] = {}
