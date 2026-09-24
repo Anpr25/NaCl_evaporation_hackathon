@@ -365,3 +365,42 @@ def test_probe_script_escapes_newlines_for_mos():
     assert "print(\"@@CMP" not in script
     assert "cmp0 := getComponents(" in script
     assert "inh0 := getInheritedClasses(" in script
+
+
+def test_partial_classes_are_excluded_by_the_compiler_not_by_their_name():
+    """C7. Name heuristics catch `*.BaseClasses.*` and `Partial*`, but MSL has partial classes
+    that match neither -- Modelica.Thermal.HeatTransfer.Interfaces.Element1D is partial, is not
+    named Partial*, and does not live under BaseClasses. It reached the catalog and outranked
+    ThermalConductor. `isPartial()` from omc makes the filter exact instead of approximate.
+
+    The partial flag must be read at EMIT time only: partial bases are still probed, because
+    _collect_rows walks the inheritance chain through them to recover ports (D24)."""
+    from specalive.catalog.harvest import _build_entries, _probe_script
+
+    # The probe must ask omc, and must not wrap the answer in a bare String() of a list.
+    script = _probe_script("loadModel(Modelica);\n", ["Modelica.Fluid.Vessels.OpenTank"])
+    assert "par0 := isPartial(Modelica.Fluid.Vessels.OpenTank);" in script
+    assert r'@@PAR " + String(par0)' in script
+
+    # A partial class is probed (its rows are available to children) but never emitted.
+    meta = (
+        "@@KEY Demo.PartialThing\n"
+        '@@RES "model"\n'
+        '@@COM "shared base"\n'
+        "@@PAR true\n"
+        '{{"Modelica.Thermal.HeatTransfer.Interfaces.HeatPort_a","port_a","a port",'
+        '"public","false","false","false","false","unspecified","none","unspecified"},{}}\n'
+        "@@INH\n"
+        "{}\n"
+        "@@KEY Demo.RealThing\n"
+        '@@RES "model"\n'
+        '@@COM "an instantiable component"\n'
+        "@@PAR false\n"
+        '{{"Modelica.Units.SI.Length","L","length","public","false","false","false","false",'
+        '"parameter","none","unspecified"},{}}\n'
+        "@@INH\n"
+        "{}\n"
+    )
+    keys = {e.key for e in _build_entries(meta, ("model",))}
+    assert "Demo.RealThing" in keys
+    assert "Demo.PartialThing" not in keys, "a partial class must not reach the catalog"
