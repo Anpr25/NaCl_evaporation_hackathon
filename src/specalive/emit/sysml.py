@@ -268,6 +268,14 @@ class SysMLEmitter:
                         extra = f" // fork -> {', '.join(t.forks)}"
                     elif t.joins:
                         extra = f" // join <- {', '.join(t.joins)}"
+                    if t.declared_fallback:
+                        # The architecture artefact has to show the same two exits the
+                        # executable one has, and say which of them we added. A SysML model
+                        # that shows only the customer's guard would be describing a plant we
+                        # did not simulate.
+                        extra = (f" // DECLARED FALLBACK (SA-05), not specified by the "
+                                 f"customer: backs up {t.fallback_for}, which is unreachable"
+                                 + extra)
                     self._w(
                         d,
                         f"transition {_ident(t.id)} first {_ident(t.source_state)} "

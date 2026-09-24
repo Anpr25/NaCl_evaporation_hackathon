@@ -9,6 +9,160 @@ know about; everything else is FYI.
 
 ---
 
+## 2026-09-24 (latest) — extraction: recover what the evidence already said
+
+**3/10 → 8/10** on the autonomous packet. Semantic recall **83% → 92%**. No ownership
+boundaries any more: A/B/C's areas were fair game and most of this lands in theirs.
+
+**First, the ruler was broken.** `ir-diff` compared connection endpoints and signal ids as
+strings, so it measured vocabulary, not extraction:
+
+- **connections 0%** against a *topologically identical* graph, because the extractor reads a
+  vessel's drain port off the drawing as `bottom_port` and the reference calls it `out`
+- three actuators reported **missing** that were present, correctly bound, and driving the
+  plant — `cmd_B5_Heater` and `cmd_heater` are the same signal if they drive the same
+  connector
+- `RET_A`/`RET_B` "missing" when the extractor had the same paths as `L_B6_B1`/`L_B7_B2`,
+  with identical series groups
+- `Step10` "missing" when the extractor kept the document's own combined name `Step10_11`
+- `SP-HEATER-LVL` "missing" when that name was **invented by the reference**; the extractor
+  inlines the literal `0.05` from the prose, which is arguably more honest
+
+Edges are now compared block-to-block with multiplicity, signals by role and binding, and
+naming agreement is reported separately and **not scored**. Nine of the nine points came from
+measuring properly. I stopped there deliberately: tuning the metric further to match our own
+output would be fitting the ruler to the plank.
+
+**Then the real defect, which was one chain.**
+
+```
+SP-K1-CW = 0.1 kg/s  "minimum cooling-water flow ... applies to K1"   <- extracted, then dropped
+K1.cw_flow = 0                                                        <- nothing "feeds" a boundary
+FIS-801 = 0                                                           <- no document binds an instrument tag
+FIS-801 >= 0.10  ->  false, always                                    <- heater permissive
+B5 never boils -> nothing condenses -> B6/B7 never get a hot charge   <- 5 checks red
+```
+
+Two fixes, both **evidence-backed recoveries rather than assumptions**: an unbound real input
+looks for a setpoint the evidence supplies for that block and quantity before falling back to
+the inert value; and a sensor compared against a setpoint we have *already* resolved is bound
+to that quantity. If the setpoint was never resolved, nothing happens and the declared
+assumption stands.
+
+**⚠ Affects you:** only *actuator* bindings now suppress an input's drive equation. A sensor
+binding is a read — treating `FIS_801 -> K1.cw_flow` as a write left the connector with no
+equation and the model under-determined.
+
+**The worst bug of the session, and it was mine.** We were manufacturing a contradiction and
+reporting it as the customer's. Step5 and Step6 both got a declared fallback in the *same*
+pass; Step6 is downstream, so its dwell was measured on a trace where Step5 was still
+deadlocked. The 172 s that came out cut the heater short and we filed B5.w as "58.2% short of
+a setpoint its own numbers forbid". It reaches **exactly 0.180** once Step5 can exit. Each
+pass now fixes the earliest blocked step per region and defers the rest — a verdict measured
+against a broken upstream is not evidence and is no longer recorded at all.
+
+**New defect in the packet — OPEN-ISSUE-07.** Step7 completes at `LIS-701 < 0.01 m`, but P1's
+permissive is `LIS-701 > 0.02 m`: the pump that drains B7 stops at twice the level the step
+waits for. Invisible until the diagnosis learned to measure the *approach* (max drawdown)
+rather than the whole series — B7 starts at 0.005 m, fills to 0.167 m, drains to 0.02 m, so
+against sample zero its minimum looked identical to its start.
+
+**Verified, because it changes what we may claim:** OPEN-ISSUE-01 is *not* an artifact of our
+80% initial-charge assumption. At a 100% charge `B5.level` max is 0.1476 either way.
+
+**End to end, through the web app as well as the CLI:** ingest → extract → reconcile →
+validate → SysML → Modelica → compile → simulate → verify → 3 build passes → report, all
+artifacts downloadable. Web run and CLI run agree exactly: 8/10, 6 assumptions (0 unfounded),
+4 questions (2 blocking).
+
+**Numbers.** 111 tests green. `bench`: drivetrain 7/7, nacl 11/12, hvac NO PACKET.
+
+---
+
+## 2026-09-24 — rules 6.2/6.3 compliance: assumptions and questions are first-class
+
+Read the input-handling rules against what we actually do. Two of the three clauses were
+already met; one was not, and the fix turned out to be worth more than compliance.
+
+**Where we stood.** Contradictions were flagged with a precedence rule id and a rationale
+(6.3b, met). Nothing reached the output without provenance — zero blocks with an empty
+provenance record (6.3c, met). But 6.3a says missing information must be *"inferred with a
+stated assumption, or surfaced as a question"*, and we had neither concept: everything was an
+undifferentiated `Gap`, the report had no questions section at all, and an inference made
+during emission was a source comment nobody reads.
+
+**What changed.**
+
+| | |
+|:--|:--|
+| `ir/evidence.py` | new `Assumption` and `Question` records, separate from `Gap` on purpose — a gap is something we could not do, an assumption is something we *did* on our own authority |
+| `config/assumptions.yaml` | **the register**: five named conventions (SA-01..SA-05), each with `applies_when`, `rule`, `basis`, `challenge`, `risk` |
+| `ir/assumptions.py` | `AssumptionLog`. `assume()` **raises** on a basis that is not in the register, so a convention cannot be invented at the call site to excuse whatever the code just did |
+| `verify/diagnose.py` | classifies every red check: `unreachable` (plateaued short — the spec contradicts itself), `stalled` (never moved — a knock-on), `unsettled` (stop time too short) |
+| `verify/report.py` | *Questions for the customer* and *Stated assumptions* sections, ahead of the gaps table, plus two gate cards |
+
+**The register is the part that matters.** An entry is written *before* the code that spends
+it, and is domain-general — if you cannot state it without naming this week's packet, it is
+not a standard assumption. `basis: null` is still allowed, because forbidding it just pushes
+people back to guessing silently; it is counted instead, as `assumptions_unfounded`, and the
+report prints that number whether or not it flatters us. It is currently **0**.
+
+**Two things fell out of it that are not compliance.**
+
+1. The unreachable-guard diagnosis makes the autonomous run rediscover **OPEN-ISSUE-01** on
+   its own, from the trace rather than from static analysis: *"B5.level settled at 0.1476
+   against a required 0.18, having travelled 0.1426 of the 0.175 needed (18.5% short) and
+   then stopped changing."* Static reachability never caught this — it needed upstream
+   geometry the extractor does not find. A plateau needs no such inference.
+2. It also separates root cause from noise. Seven checks were red; **two** are real
+   contradictions and **five** are downstream of them. Reporting seven would have been as
+   misleading as reporting none.
+
+**Bug worth knowing about.** Every `AssumptionLog` numbers from 1, and a run uses two
+(emission, then diagnosis). `attach()` merged by id, so the second log's records looked like
+duplicates and were dropped — losing both blocking questions about a contradiction the run
+had just proved. It now renumbers and carries the assumption→question back-references
+across. Tested, because a silent-drop bug in the honesty machinery is the worst kind.
+
+**SA-05 is now implemented** (approved 2026-09-24). When a guard is proved unreachable we
+keep the customer's guard exactly as written and add a second, clearly marked transition
+beside it, then build and run again. **3/10 → 5/10** on the autonomous packet.
+
+What stops this being a retuned setpoint, which is the thing we must not do:
+
+- the specified transition is untouched and still evaluated **first**, so it wins whenever it
+  can; deleting the fallback restores the deadlock
+- the fallback is a separate `Transition`, so **both** the Modelica and the SysML show the
+  customer's guard and ours side by side, each marked `FALLBACK (SA-05)`
+- the contradiction stays **blocking** and the question stays **open**. Nothing turned green
+  because we added an exit — the two contradicted checks still fail, by design
+- the dwell is **derived from the trace** (1.25× the time the quantity actually spent moving
+  before it settled), not tuned until checks pass
+
+Matching a diagnosis to a transition is **semantic**: guards speak in instrument tags
+(`LIS_501 >= SP_B5_BATCH`), the result file speaks in plant terms (`B5.level`), and the join
+is the sensor's binding. Matching on the resolved *number* as well as the tag matters —
+a signal is usually watched by several steps at different setpoints, and backing up the wrong
+one would let the sequence skip a step that was working.
+
+**⚠ Affects you (C):** `emit/modelica.py` now emits a `tEnter_<region>` discrete clock in the
+scan block, but only for regions that have a fallback. `Transition` gained
+`declared_fallback`, `fallback_for`, `dwell_timeout`. `pipeline.stream()` step 6–9 is now
+`_build_and_verify()`, a pass that can run up to three times.
+
+**I was wrong about the number.** I estimated ~11/12 for this change; it delivers 5/10. The
+11/12 is the *reference-IR* score, and I conflated the two paths. Of the five still failing,
+two are the genuine contradictions (correctly red), and three are **extraction** gaps that
+have nothing to do with fallbacks: `K1.cw_flow` is undriven and B6/B7 never receive a hot
+charge, so their temperatures never move. That is A's and B's ground to make up, and the
+report now names it.
+
+**Numbers.** 102 tests green (22 new). `bench` unchanged: drivetrain 7/7, nacl 11/12, hvac NO
+PACKET. Autonomous run: compiles, simulates, **5/10**, 8 stated assumptions (**0 unfounded**),
+4 questions (2 blocking).
+
+---
+
 ## 2026-09-24 (later) — drivetrain bench green, screens generalised, plots in the report
 
 **Status: D4, D5, D6 done.** 51/51 tests green. Two domains now pass end to end.

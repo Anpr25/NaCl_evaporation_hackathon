@@ -486,9 +486,16 @@ def ir_diff(
     for label, got, want in (
         ("requirements", {r.id for r in a.requirements}, {r.id for r in b.requirements}),
         ("blocks", {x.id for x in a.blocks}, {x.id for x in b.blocks}),
-        ("connections", {(c.source, c.target) for c in a.connections},
-         {(c.source, c.target) for c in b.connections}),
-        ("signals", {s.id for s in a.signals}, {s.id for s in b.signals}),
+        # Edges compared block-to-block, not endpoint-string to endpoint-string. The
+        # extractor reads a vessel's drain port off the drawing as `bottom_port` and the
+        # reference calls it `out`; both are honest readings of the same documents, and a
+        # metric that scores one of them wrong is measuring vocabulary, not extraction. This
+        # row read 0% against a topologically identical graph, which sent us looking for a
+        # fault that was not there.
+        ("connections", _edges(a), _edges(b)),
+        # Likewise signals: `cmd_B5_Heater` and `cmd_heater` are the same actuator if they
+        # drive the same thing. What matters is the binding into the plant.
+        ("signals", {_signal_key(x) for x in a.signals}, {_signal_key(x) for x in b.signals}),
         ("states", {s.id for sm in a.state_machines for s in sm.states},
          {s.id for sm in b.state_machines for s in sm.states}),
         ("parameters", {p.id for p in a.parameters}, {p.id for p in b.parameters}),
@@ -505,6 +512,35 @@ def ir_diff(
                   f"{100 * hit // max(len(want), 1)}%", ", ".join(missing) or "-")
     con.print(t)
     con.print(f"overall recall: [bold]{100 * total_hit // max(total_ref, 1)}%[/]")
+
+    # Naming agreement is worth knowing and worth keeping out of the score. A low number here
+    # costs nothing at simulation time -- the emitter resolves names against the catalog --
+    # but it is what a reviewer notices first when reading the SysML beside the source.
+    same = len({s_.id for s_ in a.signals} & {s_.id for s_ in b.signals})
+    con.print(
+        f"vocabulary agreement: {same}/{len(b.signals)} signal ids spelled the same "
+        f"(not scored: different names for the same bound signal are not an extraction error)"
+    )
+
+
+def _edges(m) -> set[tuple[str, str, int]]:
+    """Block-to-block edges with multiplicity, ignoring port spelling.
+
+    The index disambiguates parallel edges: B3 feeds B4 once, but a header feeding a vessel
+    twice is two edges and losing one of them is a real miss.
+    """
+    seen: dict[tuple[str, str], int] = {}
+    out: set[tuple[str, str, int]] = set()
+    for c in m.connections:
+        key = (c.source.split(".")[0], c.target.split(".")[0])
+        seen[key] = seen.get(key, 0) + 1
+        out.add((*key, seen[key]))
+    return out
+
+
+def _signal_key(s) -> tuple[str, str]:
+    """Identify a signal by what it is wired to, falling back to its id when unbound."""
+    return (s.role, (s.binding or f"#{s.id.lower().replace('_', '')}"))
 
 
 def _routes(m) -> dict[tuple[str, str], frozenset[str]]:
