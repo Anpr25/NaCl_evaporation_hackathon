@@ -16,7 +16,89 @@ gracefully.
 
 ---
 
-## 2026-09-24 (latest) — the agentic plan for C: making the `.mo` recover when it goes wrong
+## 2026-09-24 (latest) — C-AI-1..5 built and measured, plus a diagram layout
+
+**Status: implemented.** Groq is live (`t3_cloud_reasoning: up, openai/gpt-oss-120b`).
+94 fast tests green, gate green, both benches green.
+
+### The headline number
+
+`specalive faults` breaks a working model in eight documented ways and measures what comes back:
+
+```
+deterministic only   2/8 recovered,  6 declared as gaps
+with the agent       5/8 recovered,  3 declared as gaps
+```
+
+Reproduce:
+```
+specalive faults out/diagram/GeneratedPlant.mo -m GeneratedPlant.BAT09 --stop-time 50 --provider none
+specalive faults out/diagram/GeneratedPlant.mo -m GeneratedPlant.BAT09 --stop-time 50 --provider cloud
+```
+
+The three that stay gaps are the right answer, not a shortfall. A deleted `connect()` and a
+component bound to a partial class have no correct *local* edit — inventing one would put a
+plausible, wrong model in front of an engineer, which standing rule 4 exists to prevent.
+
+### What changed
+
+**C-AI-1 · the simulate gate.** `RepairLoop` gated on `checkModel`; the pipeline never passed
+a stop time, so the simulate branch was dead code. Now the gate is `check` **then**
+`build + simulate`, and the candidate probe uses the same bar — otherwise a patch that fixes
+`check` while breaking the build gets accepted and the loop congratulates itself on a model
+that does not run. Visible in the matrix: F04 reported `undetected` before, `build` after.
+Two new deterministic fixers for this stage: `fix_partial_type_binding` (C-07's failure, no
+valid local fix, so it removes the component and declares a gap) and
+`fix_missing_initial_condition`.
+
+**C-AI-2 · the loop is now an agent.** Three additions:
+- *Diagnose before editing.* `diagnosis` and `strategy` are required schema fields, ordered
+  ahead of `replacements`. The compiler points at the symptom; the cause is often three lines
+  above. Real output: `"The class name SpecAlive.Vessels.Resevoir is misspelled"` → then the edit.
+- *Memory.* Rejected attempts are fed back — `[rejected] renamed the port: errors 1 -> 3,
+  discarded` — so the next pass refines instead of re-guessing. Also changed the rejection
+  path from `break` to *continue with the rejection recorded*: keep-best still holds, but one
+  bad guess no longer ends the run.
+- *Tool use.* The agent may return `lookup: ["SpecAlive.Vessels.Reservoir"]` with no edit; the
+  loop answers from the harvested catalog and asks again, bounded at one round. **Honest note:
+  on these eight faults it never used it** — the model solved them from the window alone. The
+  path is proven by test, not by the matrix.
+
+**C-AI-3 · L2 with self-critique.** Was a `return None` stub. Now: generate equations inside a
+skeleton we write (ports, connector types, parameters, class name are ours) → a second pass
+criticises the draft against a fixed six-point checklist → revise → `omc` judges. Emitted into
+the package under a banner saying which equations a model wrote.
+
+**C-AI-4 · retrieval.** The picker is live via Groq and answers by class name, so a fabricated
+answer is detectable. Embedding rerank still needs `nomic-embed-text`, which needs Ollama,
+which is not on this machine.
+
+**C-AI-5 · `specalive faults`.** The harness above. Eight faults, each a defect we have hit or
+proved reachable. F01 reports `n/a` on our Tier-1 causal models because they have no `inner` —
+left honest rather than tuned until it always fires.
+
+**Diagram layout (not in the plan, added because a model you cannot look at is hard to review).**
+The generated Modelica now carries `Placement` and `Line` annotations, so OMEdit draws a block
+diagram instead of an empty canvas. Layout is derived from the connection graph, not from any
+packet's coordinates, so it works on an unseen domain. A process plant is **not** a DAG — this
+one recycles B6→B1 and B7→B2 — and both obvious ranking schemes collapse on that: relaxation
+pushes every rank up together, Kahn never starts because nothing has indegree zero. Fixed by
+stripping DFS back-edges from the *layout* graph only. Result is the real process order:
+`cw → K1 → B6 → RET_A → B1 → V8 → B3 → V11 → B4 → V12 → B5 → V15 → B7 → RET_B → B2`.
+
+### ⚠ Affects you
+
+**D — the router got its first sustained real use and held up.** 28 cached responses across
+the fault runs, schema validation clean, no escalation failures. `--provider replay` should
+now reproduce a repair sequence offline; the cache is warm with something worth caching.
+
+**Everyone — the default path is unchanged.** `--provider none` still runs the whole pipeline
+and still meets the gate. AI is the fallback when deterministic work runs out, never the first
+move. Both benches pass with no model calls at all.
+
+---
+
+## 2026-09-24 (earlier) — the agentic plan for C: making the `.mo` recover when it goes wrong
 
 **Status: plan, not yet built.** `.env` created and loaded (`doctor` shows `Env file loaded`);
 waiting on the Groq key. Everything below is C's AI surface and the order I propose to build it.

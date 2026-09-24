@@ -95,6 +95,94 @@ L2_SCHEMA: dict[str, Any] = {
     },
 }
 
+L2_PROMPT = """\
+Write the equations for one Modelica component. The class declaration, its connectors and
+its parameters are already written and are NOT yours to change.
+
+{spec}
+
+ALREADY DECLARED -- refer to these, do not redeclare them
+{ports}
+{params}
+
+Your job is the `equation` section, plus any local variables it needs.
+
+Rules:
+- One equation per array entry, no trailing semicolon, plain Modelica.
+- The system must be square: exactly one equation per unknown you introduce, plus one for
+  each flow variable on a connector.
+- Use `der(x)` for rates. Declare any state you differentiate as a variable with a `start`.
+- Refer to a connector's members as `<connector>.<member>`.
+- Do not invent parameters. If you need a constant that is not declared above, write it as a
+  literal in the equation and say so in `explanation`.
+- Physics before elegance: conserve mass and energy.
+"""
+
+L2_CRITIQUE_PROMPT = """\
+Find the fault in this draft Modelica component. Assume there is one.
+
+{spec}
+
+DRAFT
+{draft}
+
+Check, in order:
+1. Squareness -- is there exactly one equation per unknown? Count them.
+2. Every connector's flow variable must appear in exactly one equation.
+3. Conservation -- does mass in minus mass out equal the rate of accumulation? Same for energy.
+4. Any variable used but never declared, or declared but never used.
+5. Units -- are both sides of each equation dimensionally consistent?
+6. Division by a quantity that can be zero at t=0.
+
+List only faults that would make the model wrong or fail to compile. `must_fix` should be
+empty if the draft is sound -- do not invent work.
+"""
+
+L2_REVISE_PROMPT = """\
+Your draft was reviewed and these faults were found. Fix exactly these; change nothing else.
+
+{spec}
+
+ALREADY DECLARED
+{ports}
+{params}
+
+YOUR DRAFT
+{draft}
+
+FAULTS TO FIX
+{faults}
+
+Return the corrected component in the same shape as before.
+"""
+
+L2_CRITIQUE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["must_fix"],
+    "properties": {
+        "must_fix": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Faults that would make the model wrong or uncompilable. Empty if sound.",
+        },
+        "notes": {"type": "string"},
+    },
+}
+
+
+def _l2_variable(v: dict[str, Any]) -> str:
+    start = f"(start = {v['start']})" if v.get("start") is not None else ""
+    desc = str(v.get("description", ""))[:60].replace('"', "'")
+    return f'  Real {v["name"]}{start} "{desc}";'
+
+
+def _render_l2_body(draft: dict[str, Any]) -> str:
+    """The draft as the critic sees it: variables and equations, nothing else."""
+    lines = [_l2_variable(v) for v in (draft.get("variables") or []) if isinstance(v, dict) and v.get("name")]
+    lines.append("equation")
+    lines += [f"  {e.rstrip(';')};" for e in (draft.get("equations") or [])]
+    return "\n".join(lines)
+
 
 @dataclass
 class BindingResult:
@@ -222,15 +310,104 @@ class Binder:
 
     # ------------------------------------------------------------------ L2
     def _try_l2(self, block: Block) -> BindingResult | None:
-        """Author equations only, inside a skeleton whose ports and units we fixed.
+        """C-AI-3. Author equations only, inside a skeleton whose ports and units we fixed.
 
-        TODO(C): wire the prompt and the balance check. The skeleton constrains the model to
-        the one thing it is good at -- writing a handful of equations -- and keeps connector
-        balance, unit declarations and naming out of its reach entirely.
+        The last resort, reached only when the catalog has nothing (L0) and no template
+        matches (L1). Three things keep it safe:
+
+        * **The skeleton is ours.** Ports, their connector types, parameters and the class
+          name are written by us from the IR. The model contributes an `equation` section and
+          the local variables it needs -- nothing else. Connector balance, naming and units
+          are out of its reach by construction.
+        * **It criticises its own draft before the compiler sees it.** A second pass is asked
+          to find the error in the first, against a fixed checklist. This is cheap next to a
+          failed compile, and a model is markedly better at finding a fault in a candidate
+          than at avoiding it while generating.
+        * **`omc` is still the judge.** If the critique misses something, the repair loop
+          catches it, and if that fails the block is declared as a gap. Nothing here can put
+          a silently-wrong component into the model.
         """
         if self.router is None:
             return None
-        return None
+
+        name = f"Synth_{_mid(block.id)}"
+        ports = "\n".join(
+            f"  {p.connector_type or 'Modelica.Blocks.Interfaces.RealInput'} {_port_name(p.name)}"
+            f' "{p.direction} {p.domain}";'
+            for p in block.ports
+        )
+        params = "\n".join(
+            f"  parameter Real {_mid(p.name)} = {p.quantity.value}"
+            f'{f" ({p.quantity.unit})" if p.quantity.unit else ""};'
+            for p in block.parameters
+            if isinstance(p.quantity.value, (int, float))
+        )
+        spec = (
+            f"component: {block.name} ({block.kind})\n"
+            f"description: {block.description or '(none)'}\n"
+            f"domains: {', '.join(block.domains)}\n"
+            f"connectors: {', '.join(f'{_port_name(p.name)} [{p.direction} {p.domain}]' for p in block.ports) or '(none)'}\n"
+            f"parameters: {', '.join(_mid(p.name) for p in block.parameters) or '(none)'}"
+        )
+
+        draft = self._l2_call(L2_PROMPT.format(spec=spec, ports=ports, params=params))
+        if draft is None:
+            return None
+
+        critique = self._l2_critique(spec, draft)
+        if critique and critique.get("must_fix"):
+            revised = self._l2_call(
+                L2_REVISE_PROMPT.format(
+                    spec=spec,
+                    ports=ports,
+                    params=params,
+                    draft=_render_l2_body(draft),
+                    faults="\n".join(f"  - {f}" for f in critique["must_fix"][:6]),
+                )
+            )
+            draft = revised or draft
+
+        body = L2_SKELETON.format(
+            name=name,
+            comment=(block.description or block.name).replace('"', "'")[:90],
+            ports=ports,
+            params=params,
+            variables="\n".join(_l2_variable(v) for v in (draft.get("variables") or [])
+                                if isinstance(v, dict) and v.get("name")),
+            equations="\n".join(f"  {e.rstrip(';')};" for e in (draft.get("equations") or [])),
+        )
+        why = (draft.get("explanation") or "")[:200]
+        if critique and critique.get("must_fix"):
+            why = f"{why} [self-critique raised {len(critique['must_fix'])}, revised]"
+        return BindingResult("L2", name, {}, why or "L2 synthesis", synthesised=body)
+
+    def _l2_call(self, prompt: str) -> dict[str, Any] | None:
+        def validate(data: Any) -> tuple[bool, str]:
+            eqs = (data or {}).get("equations") or []
+            if not eqs:
+                return False, "no equations returned"
+            for e in eqs:
+                if not isinstance(e, str) or "=" not in e:
+                    return False, f"not an equation: {str(e)[:60]!r}"
+            return True, ""
+
+        try:
+            resp = self.router.run("equation_synthesis", prompt, schema=L2_SCHEMA, validator=validate)
+        except Exception:
+            return None
+        return resp.data or None
+
+    def _l2_critique(self, spec: str, draft: dict[str, Any]) -> dict[str, Any] | None:
+        """Ask for the fault in the draft, against a fixed checklist. Never asks 'is this ok?'."""
+        try:
+            resp = self.router.run(
+                "equation_synthesis",
+                L2_CRITIQUE_PROMPT.format(spec=spec, draft=_render_l2_body(draft)),
+                schema=L2_CRITIQUE_SCHEMA,
+            )
+        except Exception:
+            return None
+        return resp.data or None
 
 
 def _literal(v: Any) -> str:
@@ -420,6 +597,7 @@ class ModelicaEmitter:
         self._w(0, f"package {self.package}")
         self._w(1, f'"Generated by SpecAlive from {len(self.m.sources)} evidence sources."')
         self._w(0)
+        self._emit_synthesised()
         for sm in self.m.state_machines:
             self._emit_controller(sm)
         self._emit_plant()
@@ -428,6 +606,23 @@ class ModelicaEmitter:
         self._w(0, f'  annotation (uses(Modelica(version = "4.0.0"), SpecAlive(version = "0.1.0")));')
         self._w(0, f"end {self.package};")
         return "\n".join(self.lines) + "\n"
+
+    def _emit_synthesised(self) -> None:
+        """C-AI-3. L2 components live inside the generated package, ahead of the Plant.
+
+        Kept visibly separate and labelled in the source, because an engineer reviewing this
+        file should be able to see at a glance which components came from a verified library
+        and which were written by a model.
+        """
+        synth = [b for b in self.m.blocks if b.binding_tier == "L2" and b.synthesised_equations]
+        if not synth:
+            return
+        self._w(1, "// ---- L2: equations below were model-authored inside a fixed skeleton.")
+        self._w(1, "// ---- Ports, parameters and connector balance were not. Review before trusting.")
+        for b in synth:
+            for line in (b.synthesised_equations or "").splitlines():
+                self._w(1, line)
+            self._w(0)
 
     # ------------------------------------------------------------------ controller
     def _emit_controller(self, sm: StateMachine) -> None:
@@ -552,8 +747,121 @@ class ModelicaEmitter:
                 out.append((block.id, cp.name, "false" if leaf.startswith("boolean") else "0.0"))
         return out
 
+    def _layout(self) -> dict[str, str]:
+        """Place components on the diagram canvas so OMEdit renders a block diagram.
+
+        Without `Placement` annotations OMEdit shows an empty diagram and an engineer has to
+        read Modelica source to see the topology -- which defeats the point of handing them a
+        model to *review*. The layout is derived from the connection graph, not from any
+        packet's coordinates, so it works on a domain nobody has seen.
+
+        Components are ranked by longest path from a source (a block nothing feeds), which
+        puts flow left-to-right in process order; siblings stack vertically within a rank.
+        Crude next to a real graph-drawing library, and enormously better than nothing.
+        """
+        blocks = [b for b in self.m.simulatable_blocks() if b.modelica_class]
+        ids = [b.id for b in blocks]
+        if not ids:
+            return {}
+        known = set(ids)
+        succ: dict[str, set[str]] = {i: set() for i in ids}
+        indeg: dict[str, int] = {i: 0 for i in ids}
+        for c in self.m.connections:
+            s, t = c.source.split(".")[0], c.target.split(".")[0]
+            if s in known and t in known and t not in succ[s]:
+                succ[s].add(t)
+                indeg[t] += 1
+
+        # A process plant is not a DAG: this one recycles B6 -> B1 and B7 -> B2, and every
+        # ranking scheme collapses on a cycle -- relaxation pushes all ranks up together,
+        # Kahn never starts because nothing has indegree zero. So break the cycles first.
+        # A DFS back-edge is exactly a recycle line, and dropping it from the *layout* graph
+        # (never from the model) leaves the forward process order intact.
+        colour: dict[str, int] = {i: 0 for i in ids}  # 0 white, 1 grey, 2 black
+        back: set[tuple[str, str]] = set()
+
+        def strip_cycles(root: str) -> None:
+            stack: list[tuple[str, list[str]]] = [(root, sorted(succ[root]))]
+            colour[root] = 1
+            while stack:
+                node, pending = stack[-1]
+                if not pending:
+                    colour[node] = 2
+                    stack.pop()
+                    continue
+                nxt = pending.pop()
+                if colour[nxt] == 1:  # points back into the current path: a recycle line
+                    back.add((node, nxt))
+                elif colour[nxt] == 0:
+                    colour[nxt] = 1
+                    stack.append((nxt, sorted(succ[nxt])))
+
+        for start in sorted(ids, key=lambda i: (indeg[i], i)):
+            if colour[start] == 0:
+                strip_cycles(start)
+
+        dag = {s: {t for t in succ[s] if (s, t) not in back} for s in ids}
+        deg = {i: 0 for i in ids}
+        for s in ids:
+            for t in dag[s]:
+                deg[t] += 1
+
+        rank: dict[str, int] = {i: 0 for i in ids}
+        queue = [i for i in ids if deg[i] == 0]
+        while queue:
+            s = queue.pop(0)
+            for t in sorted(dag[s]):
+                rank[t] = max(rank[t], rank[s] + 1)
+                deg[t] -= 1
+                if deg[t] == 0:
+                    queue.append(t)
+
+        columns: dict[int, list[str]] = {}
+        for i in ids:
+            columns.setdefault(rank[i], []).append(i)
+
+        out: dict[str, str] = {}
+        span_x, span_y, w, h = 34, 30, 22, 18
+        for col, members in sorted(columns.items()):
+            x = -100 + col * span_x
+            top = (len(members) - 1) * span_y / 2
+            for row, bid in enumerate(members):
+                y = top - row * span_y
+                out[bid] = (
+                    f" annotation (Placement(transformation("
+                    f"extent={{{{{x:.0f},{y - h / 2:.0f}}},{{{x + w:.0f},{y + h / 2:.0f}}}}})))"
+                )
+        # The controller is not in the flow graph; park it above the plant.
+        for sm in self.m.state_machines:
+            out[sm.id] = (
+                " annotation (Placement(transformation(extent={{-20,70},{20,95}})))"
+            )
+        return out
+
+    @staticmethod
+    def _line(src: str, tgt: str, placement: dict[str, str]) -> str:
+        """A straight run between two placed components, so OMEdit draws the edge."""
+        def centre(bid: str) -> tuple[float, float] | None:
+            anno = placement.get(bid)
+            if not anno:
+                return None
+            nums = [float(n) for n in re.findall(r"-?\d+(?:\.\d+)?", anno)]
+            if len(nums) < 4:
+                return None
+            x1, y1, x2, y2 = nums[-4:]
+            return (x1 + x2) / 2, (y1 + y2) / 2
+
+        a, b = centre(src), centre(tgt)
+        if a is None or b is None:
+            return ""
+        return (
+            f" annotation (Line(points={{{{{a[0]:.0f},{a[1]:.0f}}},"
+            f"{{{b[0]:.0f},{b[1]:.0f}}}}}, color={{0,127,255}}))"
+        )
+
     def _emit_plant(self) -> None:
         self._w(1, f"model Plant \"{self.m.description or self.m.name}\"")
+        placement = self._layout()
         for b in self.m.simulatable_blocks():
             if b.binding_tier == "unbound" or not b.modelica_class:
                 self._w(2, f"// GAP: block '{b.id}' ({b.kind}) has no binding; see report.")
@@ -563,9 +871,11 @@ class ModelicaEmitter:
             if mods:
                 decl += f"({mods})"
             trace = " ".join(f"@trace {r}" for r in b.provenance.requirement_ids)
-            self._w(2, f'{decl} "{b.description or b.name}{" " + trace if trace else ""}";')
+            anno = placement.get(b.id, "")
+            self._w(2, f'{decl} "{b.description or b.name}{" " + trace if trace else ""}"{anno};')
         for sm in self.m.state_machines:
-            self._w(2, f"{_mid(sm.name)} {_mid(sm.id)};")
+            anno = placement.get(sm.id, "")
+            self._w(2, f"{_mid(sm.name)} {_mid(sm.id)}{anno};")
         self._w(0)
         self._w(1, "equation")
         simulated = {b.id for b in self.m.simulatable_blocks()}
@@ -576,7 +886,8 @@ class ModelicaEmitter:
                 self._w(2, f"// architecture only: {c.id} ({c.source} -> {c.target}) is not simulated")
                 continue
             note = f"  // @series {', '.join(c.series_elements)}" if c.series_elements else ""
-            self._w(2, f"connect({self._ref(c.source)}, {self._ref(c.target)});{note}")
+            line = self._line(c.source.split(".")[0], c.target.split(".")[0], placement)
+            self._w(2, f"connect({self._ref(c.source)}, {self._ref(c.target)}){line};{note}")
         self._w(0)
         for sm in self.m.state_machines:
             ctrl = _mid(sm.id)
@@ -603,6 +914,10 @@ class ModelicaEmitter:
         for comp, connector, zero in self._unbound_signal_inputs():
             self._w(2, f"// GAP: nothing drives {comp}.{connector}; assuming {zero}")
             self._w(2, f"{_mid(comp)}.{connector} = {zero};")
+        # A canvas wide enough for the ranked layout, or OMEdit clips the right-hand columns.
+        ranks = max(1, len(set(re.findall(r"extent=\{\{(-?\d+)", "".join(placement.values())))))
+        self._w(2, "annotation (Diagram(coordinateSystem(preserveAspectRatio = false,")
+        self._w(3, f"extent = {{{{-110,-110}},{{{max(110, -100 + ranks * 34 + 40)},110}}}})));")
         self._w(1, "end Plant;")
         self._w(0)
 

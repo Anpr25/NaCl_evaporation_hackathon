@@ -132,10 +132,62 @@ def fix_undeclared_typo(src: str, diag: Diagnostic) -> tuple[str, str] | None:
     )
 
 
+def fix_partial_type_binding(src: str, diag: Diagnostic) -> tuple[str, str] | None:
+    """C-AI-1. A partial class cannot be instantiated -- and `checkModel` does not say so.
+
+    This is the failure C-07 documented: `checkModel` reports success (the equation/variable
+    counts come back unbalanced, but that is not an error) and the build then dies with
+    `Component 'x' has partial type 'Y'`. Because the repair loop used to gate on check alone,
+    the whole family escaped repair and surfaced at simulate.
+
+    There is no local edit that makes a partial class instantiable, so the honest repair is to
+    comment the component out and leave a GAP marker the report picks up, rather than invent a
+    substitute class the evidence never named.
+    """
+    if diag.kind not in ("build", "type_mismatch", "other"):
+        return None
+    m = re.search(r"Component '?(\w+)'? has partial type '?([\w.]+)'?", diag.message)
+    if not m:
+        return None
+    comp, cls = m.group(1), m.group(2)
+    pattern = rf"^(\s*)([\w.]*{re.escape(cls.split('.')[-1])}\s+{re.escape(comp)}\b[^\n]*)$"
+    if not re.search(pattern, src, re.M):
+        return None
+    return (
+        re.sub(pattern, rf"\1// GAP: '{comp}' bound to partial class {cls}; see report.\n\1// \2",
+               src, count=1, flags=re.M),
+        f"removed '{comp}': {cls} is partial and cannot be instantiated; declared as a gap",
+    )
+
+
+def fix_missing_initial_condition(src: str, diag: Diagnostic) -> tuple[str, str] | None:
+    """C-AI-1. Underdetermined initialisation: a state with no start value pinned.
+
+    Passes `checkModel` (the counts balance) and fails at initialisation. The fix is
+    mechanical -- mark the reported variable's start value as fixed -- so it should never
+    cost a model call.
+    """
+    if diag.kind not in ("initialization", "singular", "build"):
+        return None
+    m = re.search(r"\b([\w.]+)\b[^.]*?(?:not fixed|underdetermined|no start value|initial)", diag.message, re.I)
+    if not m:
+        return None
+    var = m.group(1).split(".")[-1]
+    pattern = rf"(\b(?:Real|Integer|Boolean)\s+{re.escape(var)}\s*\(\s*start\s*=\s*[^)]*?)\)"
+    if not re.search(pattern, src) or "fixed" in (re.search(pattern, src) or [""])[0]:
+        return None
+    return (
+        re.sub(pattern, r"\1, fixed = true)", src, count=1),
+        f"pinned '{var}' with fixed = true to close an underdetermined initialisation",
+    )
+
+
 DETERMINISTIC_FIXERS: tuple[Fixer, ...] = (
     fix_discrete_loop,
     fix_missing_inner,
     fix_undeclared_typo,
+    fix_partial_type_binding,
+    fix_missing_initial_condition,
     fix_unbalanced_system,
     fix_unit_annotation,
 )
@@ -145,8 +197,14 @@ DETERMINISTIC_FIXERS: tuple[Fixer, ...] = (
 
 REPAIR_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "required": ["replacements", "explanation"],
+    "required": ["diagnosis", "strategy", "replacements", "explanation"],
     "properties": {
+        # C-AI-2. Diagnosis and strategy come BEFORE the edit, and are required. Naming the
+        # cause and the plan first is what stops the common failure mode of patching the line
+        # the compiler pointed at when the cause is three lines above it. They are also what
+        # the next iteration reads back as memory.
+        "diagnosis": {"type": "string", "description": "What is actually wrong. One sentence."},
+        "strategy": {"type": "string", "description": "The edit that will fix it, and why."},
         "replacements": {
             "type": "array",
             "items": {
@@ -154,6 +212,13 @@ REPAIR_SCHEMA: dict[str, Any] = {
                 "required": ["find", "replace"],
                 "properties": {"find": {"type": "string"}, "replace": {"type": "string"}},
             },
+        },
+        # C-AI-2 tool use. The agent may ask for a verified class signature instead of
+        # guessing one. Answered from the harvested catalog -- ground truth, not recall.
+        "lookup": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Modelica class names whose verified signature you need before editing.",
         },
         "explanation": {"type": "string"},
     },
@@ -174,14 +239,29 @@ SOURCE WINDOW (lines {start}-{end} of {path})
 {window}
 
 {catalog_note}
+{history}
+Work in this order:
+1. `diagnosis` -- what is actually wrong. The compiler points at the symptom; the cause is
+   often a few lines above it.
+2. `strategy` -- the edit you will make, and why it addresses the diagnosis.
+3. `replacements` -- the edit itself.
 
 Rules:
 - Return replacements as exact substrings of the source window. Each `find` must appear
   verbatim, exactly once, inside the window shown above.
 - Change as little as possible. Do not reformat, rename or restructure anything unrelated.
-- Do not invent Modelica classes, parameters or connectors. If the fix needs a class you were
-  not shown, say so in `explanation` and return an empty `replacements` list.
+- Do not invent Modelica classes, parameters or connectors. If you need the real signature of
+  a class, put its full name in `lookup` and return an empty `replacements`; you will be shown
+  the verified signature and asked again. Guessing an API is always worse than asking.
+- If a previous attempt is listed above, do not repeat it. It was measured and rejected.
 - Answer JSON only.
+"""
+
+#: Injected when the agent has already tried and failed. Multi-pass refinement is only
+#: refinement if the next pass can see the last one.
+HISTORY_BLOCK = """
+PREVIOUS ATTEMPTS ON THIS MODEL (all measured by the compiler, all rejected)
+{attempts}
 """
 
 
@@ -221,11 +301,14 @@ class RepairLoop:
         *,
         max_iterations: int = 6,
         window: int = 15,
+        index: Any | None = None,
     ) -> None:
         self.runner = runner
         self.router = router
         self.max_iterations = max_iterations
         self.window = window
+        #: CatalogIndex, for answering the agent's `lookup` requests. C-AI-2.
+        self.index = index
 
     def run(
         self,
@@ -242,13 +325,27 @@ class RepairLoop:
         best_source, best_errors = source, None
         steps: list[RepairStep] = []
         last: OmcResult | None = None
+        #: C-AI-2 memory. What was tried, and what the compiler said about it. Fed back to
+        #: the agent so the next pass is a refinement rather than another first guess.
+        history: list[str] = []
+
+        def gate(files: list[Any]) -> OmcResult:
+            """The bar a candidate has to clear.
+
+            C-AI-1: `checkModel` alone is not the bar. A model can check cleanly and still
+            fail to build -- a partial-type binding does exactly that -- so when a stop time
+            is given the gate runs the simulation too, and simulate-stage diagnostics become
+            repairable like any other.
+            """
+            res = self.runner.check(model_name, files)
+            if res.ok and stop_time:
+                res = self.runner.simulate(model_name, files, stop_time=stop_time)
+            return res
 
         for it in range(self.max_iterations + 1):
             target.write_text(source, encoding="utf-8")
             files = [target, *support_files]
-            last = self.runner.check(model_name, files)
-            if last.ok and stop_time:
-                last = self.runner.simulate(model_name, files, stop_time=stop_time)
+            last = gate(files)
             n_errors = 0 if last.ok else max(len(last.diagnostics), 1)
 
             if best_errors is None or n_errors < best_errors:
@@ -262,30 +359,63 @@ class RepairLoop:
             if diag is None:
                 break
 
-            patched, method, desc = self._attempt(source, diag, target, catalog_note)
+            patched, method, desc = self._attempt(source, diag, target, catalog_note, history)
             if patched is None or patched == source:
                 steps.append(RepairStep(it, diag.kind, method, desc or "no fix found", n_errors, n_errors, False))
                 break
 
-            # Evaluate the candidate before committing to it.
+            # Evaluate the candidate against the same bar the loop exits on -- otherwise a
+            # patch that fixes `check` while breaking the build would be accepted, and the
+            # loop would congratulate itself on a model that does not run.
             target.write_text(patched, encoding="utf-8")
-            probe = self.runner.check(model_name, files)
+            probe = gate([target, *support_files])
             after = 0 if probe.ok else max(len(probe.diagnostics), 1)
             accepted = after < n_errors or probe.ok
             steps.append(RepairStep(it, diag.kind, method, desc or "", n_errors, after, accepted))
             if accepted:
                 source = patched
+                history.append(f"[accepted] {desc or method}: errors {n_errors} -> {after}")
             else:
-                # Regression: roll back and stop rather than thrash.
+                # Keep-best: never apply a patch that made things worse. But record WHY it
+                # was rejected and let the agent try a different approach, rather than
+                # stopping at the first bad guess -- that is the difference between a loop
+                # that refines and a loop that gives up.
                 target.write_text(source, encoding="utf-8")
-                break
+                history.append(
+                    f"[rejected] {desc or method}: errors {n_errors} -> {after}, discarded"
+                )
 
         target.write_text(best_source, encoding="utf-8")
         return RepairOutcome(False, best_source, len(steps), steps, last)
 
     # ------------------------------------------------------------------ one repair attempt
+    def _signature(self, class_names: list[str]) -> str:
+        """Answer a `lookup` request from the harvested catalog. C-AI-2 tool use.
+
+        The point is not convenience. The catalog is the same ground truth the emitter binds
+        against (C-03), so an agent that asks instead of recalling cannot propose a parameter
+        or connector that does not exist -- the class of error it is most prone to.
+        """
+        if self.index is None:
+            return "(no catalog available; do not guess -- say so in `explanation`)"
+        out: list[str] = []
+        for name in class_names[:4]:
+            entry = self.index.get(name)
+            if entry is None:
+                out.append(f"{name}: NOT IN CATALOG. It does not exist; do not use it.")
+                continue
+            params = ", ".join(f"{p.name}: {p.type}" for p in entry.params[:14])
+            ports = ", ".join(f"{p.name}: {p.type}" for p in entry.ports)
+            out.append(f"{name}\n  parameters: {params or '(none)'}\n  connectors: {ports or '(none)'}")
+        return "VERIFIED SIGNATURES (from the harvested catalog)\n" + "\n".join(out)
+
     def _attempt(
-        self, source: str, diag: Diagnostic, path: Path, catalog_note: str
+        self,
+        source: str,
+        diag: Diagnostic,
+        path: Path,
+        catalog_note: str,
+        history: list[str] | None = None,
     ) -> tuple[str | None, str, str]:
         for fixer in DETERMINISTIC_FIXERS:
             try:
@@ -303,18 +433,26 @@ class RepairLoop:
         start = max(0, centre - self.window)
         end = min(len(lines), centre + self.window)
         window = "\n".join(f"{i + 1:5d}| {lines[i]}" for i in range(start, end))
-        prompt = REPAIR_PROMPT.format(
-            kind=diag.kind,
-            location=diag.locate(),
-            message=diag.message,
-            raw=diag.raw[:1500],
-            start=start + 1,
-            end=end,
-            path=path.name,
-            window=window,
-            catalog_note=catalog_note or "(no catalog context supplied)",
-        )
         window_text = "\n".join(lines[start:end])
+        hist = (
+            HISTORY_BLOCK.format(attempts="\n".join(f"  - {h}" for h in history[-4:]))
+            if history
+            else ""
+        )
+
+        def build(note: str) -> str:
+            return REPAIR_PROMPT.format(
+                kind=diag.kind,
+                location=diag.locate(),
+                message=diag.message,
+                raw=diag.raw[:1500],
+                start=start + 1,
+                end=end,
+                path=path.name,
+                window=window,
+                catalog_note=note or "(no catalog context supplied)",
+                history=hist,
+            )
 
         def validate(data: Any) -> tuple[bool, str]:
             reps = data.get("replacements") or []
@@ -323,19 +461,32 @@ class RepairLoop:
                     return False, f"'find' text does not occur exactly once in the window: {r['find'][:60]!r}"
             return True, ""
 
-        try:
-            resp = self.router.run("repair_modelica", prompt, schema=REPAIR_SCHEMA, validator=validate)
-        except Exception as exc:
-            return None, "model", f"router failed: {exc}"
+        note = catalog_note
+        data: dict[str, Any] = {}
+        # Two rounds at most: one to ask for signatures, one to act on them. Bounded on
+        # purpose -- an agent that can keep asking will keep asking.
+        for round_no in range(2):
+            try:
+                resp = self.router.run(
+                    "repair_modelica", build(note), schema=REPAIR_SCHEMA, validator=validate
+                )
+            except Exception as exc:
+                return None, "model", f"router failed: {exc}"
+            data = resp.data or {}
+            wanted = [w for w in (data.get("lookup") or []) if isinstance(w, str)]
+            if wanted and not data.get("replacements") and round_no == 0:
+                note = self._signature(wanted)
+                continue
+            break
 
-        data = resp.data or {}
         reps = data.get("replacements") or []
+        rationale = (data.get("strategy") or data.get("explanation") or "").strip()
         if not reps:
-            return None, "model", data.get("explanation", "model declined to patch")[:200]
+            return None, "model", (rationale or "model declined to patch")[:200]
         patched = source
         for r in reps:
             patched = patched.replace(r["find"], r["replace"], 1)
-        return patched, "model", data.get("explanation", "")[:200]
+        return patched, "model", rationale[:200]
 
 
 #: Fix the errors most likely to be causing the others first.

@@ -249,10 +249,18 @@ class Pipeline:
         stop_time = cfg.stop_time or (scenario.stop_time if scenario else 1.0)
 
         runner = OmcRunner(workdir=str(cfg.out_dir / "work"))
-        loop = RepairLoop(runner, self.router, max_iterations=cfg.repair_iterations)
+        # C-AI-2: the catalog goes in so the agent can ask for a verified class signature
+        # instead of recalling one.
+        loop = RepairLoop(runner, self.router, max_iterations=cfg.repair_iterations, index=index)
 
         yield self._emit("compile", "start", f"omc checkModel({model_name})")
-        outcome = loop.run(model_name, mo_path, list(cfg.library_files))
+        # C-AI-1: the repair gate now includes build+simulate, not just checkModel. Without
+        # the stop time the loop exits the moment `check` is clean and a model that cannot
+        # actually run reaches the user unrepaired.
+        outcome = loop.run(
+            model_name, mo_path, list(cfg.library_files),
+            stop_time=None if cfg.skip_simulation else stop_time,
+        )
         self._repair_steps = outcome.steps
         self.result.gate["compiled"] = outcome.ok
         self.result.gate["repair"] = outcome.summary()

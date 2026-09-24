@@ -519,3 +519,97 @@ def _routes(m) -> dict[tuple[str, str], frozenset[str]]:
 
 if __name__ == "__main__":
     app()
+
+
+@app.command()
+def faults(
+    target: Path = typer.Argument(..., help="A generated .mo that already compiles"),
+    model: str = typer.Option(..., "--model", "-m", help="Fully qualified model to check"),
+    library: list[Path] = typer.Option(
+        [Path("modelica/SpecAlive.mo")], "--library", "-l", help="Support .mo files"
+    ),
+    provider: str = typer.Option("auto", help="auto | local | cloud | replay | none"),
+    stop_time: Optional[float] = typer.Option(None, "--stop-time",
+                                              help="Also require the model to simulate"),
+    catalog: Path = typer.Option(Path("out/catalog.jsonl")),
+    iterations: int = typer.Option(4, help="Repair budget per fault"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Write the matrix as JSON"),
+) -> None:
+    """C-AI-5. Break a working model in known ways and measure what the repair loop recovers.
+
+    A packet that happens to compile exercises none of the repair code. This makes the
+    failure paths run on demand, and turns "we have AI repair" into a number we can defend.
+    Run it twice -- `--provider none` then `--provider cloud` -- to get the honest delta.
+    """
+    import shutil
+    import tempfile
+
+    from .repair.faults import FAULTS, inject
+    from .repair.loop import RepairLoop
+    from .verify.omc import OmcRunner
+
+    load_env()
+    source = target.read_text(encoding="utf-8")
+    index = None
+    if catalog.exists():
+        from .catalog.retrieve import CatalogIndex
+
+        index = CatalogIndex.from_file(catalog)
+
+    router = _router(provider)
+    rows: list[dict] = []
+
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        libs = [Path(shutil.copy(lib, work / Path(lib).name)) for lib in library]
+        runner = OmcRunner(workdir=str(work / "omc"))
+
+        # A baseline that does not pass makes every later number meaningless.
+        probe = work / target.name
+        probe.write_text(source, encoding="utf-8")
+        base = runner.check(model, [probe, *libs])
+        if not base.ok:
+            con.print(f"[red]baseline does not compile[/]: {base.summary()}")
+            raise typer.Exit(1)
+        con.print(f"baseline: {base.summary()}\n")
+
+        for f in FAULTS:
+            broken = inject(source, f)
+            if broken is None:
+                rows.append({"id": f.id, "outcome": "n/a", "detail": "pattern absent from this model"})
+                continue
+            probe.write_text(broken, encoding="utf-8")
+            before = runner.check(model, [probe, *libs])
+            if before.ok and not stop_time:
+                # It slipped past checkModel. That is the C-AI-1 case, and without a stop
+                # time we cannot see it -- so say so rather than scoring it as a pass.
+                rows.append({"id": f.id, "outcome": "undetected",
+                             "detail": "passes checkModel; rerun with --stop-time"})
+                continue
+            loop = RepairLoop(runner, router, max_iterations=iterations, index=index)
+            outcome = loop.run(model, probe, libs, stop_time=stop_time)
+            used = {s.method for s in outcome.steps}
+            rows.append({
+                "id": f.id,
+                "outcome": "recovered" if outcome.ok else "declared gap",
+                "iterations": outcome.iterations,
+                "method": "+".join(sorted(used)) or "-",
+                "detail": outcome.summary(),
+                "surfaces_at": f.surfaces_at,
+            })
+
+    t = Table(title=f"Fault injection -- provider={provider}")
+    for c in ("Fault", "Surfaces at", "Outcome", "Iter", "Method"):
+        t.add_column(c)
+    for r in rows:
+        colour = {"recovered": "green", "declared gap": "yellow"}.get(r["outcome"], "dim")
+        t.add_row(r["id"], r.get("surfaces_at", "-"), f"[{colour}]{r['outcome']}[/]",
+                  str(r.get("iterations", "-")), r.get("method", "-"))
+    con.print(t)
+
+    applied = [r for r in rows if r["outcome"] in ("recovered", "declared gap", "undetected")]
+    ok = [r for r in rows if r["outcome"] == "recovered"]
+    con.print(f"\nrecovered {len(ok)}/{len(applied)} injected fault(s)")
+    if out:
+        out.write_text(json.dumps({"provider": provider, "rows": rows}, indent=2), encoding="utf-8")
+        con.print(f"wrote {out}")
