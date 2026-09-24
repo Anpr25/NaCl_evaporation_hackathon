@@ -262,6 +262,12 @@ _SIGNAL_TYPES = ("booleaninput", "booleanoutput", "realinput", "realoutput",
                  "integerinput", "integeroutput")
 
 
+def _subscript(name: str) -> int:
+    """The [n] on a connector reference, or 0 when it is a scalar."""
+    m = re.search(r"\[(\d+)\]", name)
+    return int(m.group(1)) if m else 0
+
+
 def _side_of(name: str, type_name: str) -> str:
     """Which end of the component a connector belongs to: 'in', 'out', 'signal' or 'other'."""
     leaf = type_name.rsplit(".", 1)[-1].lower()
@@ -326,7 +332,23 @@ def resolve_ports(model: SystemModel, index: CatalogIndex | None) -> list[str]:
             # Keep it in the IR (SysML should still show the port the register described)
             # but give it no Modelica name, so nothing tries to emit a connection to it.
             port.connector_type = None
+        # Resolution must be idempotent. A hand-built or previously-resolved IR already
+        # names real connectors, and re-deriving them by direction gets it wrong: an
+        # evaporator has two out-side connectors and the first out-port was reassigned from
+        # `outlet` to `vapor`, swapping the concentrate and vapour streams. If the name is
+        # already a connector this class declares, keep it and just count the slot.
+        declared = {cp.name for cp in entry.ports}
         for port in connected:
+            base = port.name.split("[")[0]
+            if base in declared:
+                used[base] = max(used.get(base, 0), _subscript(port.name))
+                side_already = _side_of(base, next(c.type for c in entry.ports if c.name == base))
+                used[side_already] = used.get(side_already, 0) + 1
+                count_param = next((c for c in _COUNT_PARAM.get(base, ()) if c in
+                                    {prm.name for prm in entry.params}), None)
+                if count_param and _subscript(port.name):
+                    block.modelica_modifiers[count_param] = str(used[base])
+                continue
             if port.domain in ("signal", "control"):
                 side = "signal"
             else:
