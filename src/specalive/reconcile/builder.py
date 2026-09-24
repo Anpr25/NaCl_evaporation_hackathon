@@ -596,11 +596,7 @@ class Assembler:
 
     # ------------------------------------------------------------------ B5 scenario
     def build_scenario(self) -> None:
-        title = None
-        for d in self.docs:
-            if d.source.authority == AuthorityClass.TEST_PROCEDURE and d.blocks:
-                title = next((b.text.splitlines()[0] for b in d.blocks if b.text.strip()), None)
-                break
+        title = _procedure_title(self.docs)
         scenario, gaps = build_scenario(
             self.claims, title, self.m.state_machines[0] if self.m.state_machines else None,
             self.comparisons, {s.name: s for s in self.m.signals}, self.initials,
@@ -851,6 +847,33 @@ def _priority(facts: dict[str, EvidenceClaim]) -> str:
         if p in raw:
             return p
     return "unknown"
+
+
+_TITLE_ID = re.compile(r"\b[A-Z]{2,}-\d{2,}\b")
+
+
+def _procedure_title(docs: list[Document]) -> str | None:
+    """The title line of the acceptance procedure, wherever it happens to sit.
+
+    Do NOT assume the title is the first block. Adapters legitimately reorder: the PDF reader
+    emits a page's tables before its prose, so the first non-empty block of the acceptance
+    procedure is a table header ("Item | Initial condition") and the real title sits third.
+    Reading block[0] gave the scenario the id SCN-01 instead of BAT-09, and it was an adapter
+    change on another branch -- not this code -- that moved it.
+
+    So: look for a line carrying a record id anywhere in the document, preferring prose over
+    tables, and fall back to the first non-empty line only if nothing matches.
+    """
+    for doc in docs:
+        if doc.source.authority != AuthorityClass.TEST_PROCEDURE or not doc.blocks:
+            continue
+        prose = [b for b in doc.blocks if b.kind in ("heading", "paragraph")]
+        for block in (*prose, *doc.blocks):
+            for line in block.text.splitlines():
+                if _TITLE_ID.search(line):
+                    return line.strip()
+        return next((b.text.splitlines()[0] for b in doc.blocks if b.text.strip()), None)
+    return None
 
 
 def _infer_name(docs: list[Document]) -> str:
