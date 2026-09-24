@@ -16,6 +16,81 @@ gracefully.
 
 ---
 
+## 2026-09-25 (latest) — C6 done: OPEN-ISSUE-04 closed with numbers. C's list is finished.
+
+**Status: implemented.** 105 fast tests, **9 slow** (gate + 7 new Tier-2 evidence tests), both
+benches green. `modelica/SpecAliveFluid.mo` is a new file; nothing existing changed.
+
+Tier 1 stays the default. This is not a replacement — it is the evidence that the three
+requirements C-01 could only honour on paper are real in equations.
+
+### The evidence, which is the point
+
+| Requirement | Claim | Measured |
+|:--|:--|:--|
+| **REQ-MOD-004** regularized asymmetric port loss with hysteresis | the treatment is active, not decorative | `B3.ports_penetration[1]` goes **0.00100 → 1.00000**, and it switches at level **0.099–0.115** against a port at 0.100 m |
+| **REQ-MOD-005** junction volumes | the junction is a state, not a pass-through | `J1.medium.p` solves 101325 → 117339 → 116608 Pa, distinct from both endpoints |
+| **REQ-MOD-006** static head on non-horizontal pipes | gravity is in the momentum balance | Δp = **−12 907 Pa** against ρgΔz = 998 × 9.81 × (−1.32) = **−12 927 Pa**, 0.2% |
+| calibration | fitted to evidence, not guessed | Step1 completes at **159 s**; the supplied trace runs it 20 s → 180 s |
+
+258 equations / 258 variables, compiles, simulates.
+
+### The counterexample that failed, and what replaced it
+
+My first demonstration of REQ-MOD-005 was to shrink `ChargeLeg`'s junction towards zero and
+show the solve degrade. **It made no difference** — 1.56 s against 1.38 s, which is noise.
+
+The requirement says why, and I had not read it closely enough: it asks for a junction wherever
+**multiple** pressure-drop-only elements can be isolated *simultaneously*. The charge leg has
+one valve, and B1 upstream of the pipe carries a state, so the node is never orphaned.
+
+The condition it actually protects against needs two isolating elements bracketing one node.
+`Examples.IsolatedNode` / `IsolatedNodeNoJunction` is that pair, and the difference is
+unambiguous — at exactly the instant both valves shut:
+
+```
+without the junction:  LOG_STDOUT | warning | The default linear solver fails, the fallback
+                       solver with total pivoting is started at time 1.000000
+with the junction:     (nothing)
+```
+
+Both runs still *complete*, because the fallback solver rescues them. That is precisely why it
+is worth demonstrating rather than trusting: **the failure is silent unless someone reads the
+log**, and on a plant with several isolating groups it is what turns into a stall.
+
+### GAP-MEDIUM-01 — WaterNaCl is not reconstructible, and that is the finding
+
+`13_water_nacl_medium_notes.pdf` specifies
+`PartialMedium → PartialMixtureMedium → PartialMixtureTwoPhaseMedium → WaterNaCl`.
+MSL 4.1.0 has no `PartialMixtureTwoPhaseMedium` — enumerating `Modelica.Media.Interfaces` gives
+`PartialMixtureMedium` and `PartialTwoPhaseMedium` as separate branches. That alone is work,
+not a blocker.
+
+The blocker is that the same note says the coefficients are *"intentionally absent from this
+benchmark evidence"* for four of the five required properties. Only viscosity is given in full,
+so `Media.dynamicViscosity_WaterNaCl` implements it with the packet's coefficients verbatim,
+and ρ(T,p,w), h(T,p,w), cp(T,w) and p_sat(T,w) are declared rather than invented. Making them
+up would produce a model that compiles, simulates, and is wrong — standing rule 4.
+
+**Consequence for REQ-MOD-003, stated plainly:** the pump-start convergence defect the packet
+asks us to document **cannot be reproduced**, because reproducing it needs the medium that the
+evidence deliberately withholds. We can document that it is reported, and that the acausal
+topology it concerns now exists and runs on StandardWater. We cannot show the stall. Saying so
+is the honest answer; a reproduction built on invented coefficients would prove nothing.
+
+### ⚠ Affects you
+
+**D — `SpecAliveFluid.mo` is deliberately NOT in `PipelineConfig.library_files`.** Tier 1
+remains the only library the generated model loads, so every run stays as fast and as reliable
+as before. Tier 2 is exercised by `pytest -m slow` and is a demo artefact, not a code path.
+Worth a slide: it is the difference between claiming a requirement and measuring it.
+
+**Everyone — C's backlog is now empty.** C1, C5, C6, C7, C8, C10 and C-AI-1..5 are done; C2 and
+C3 were dropped on measurement. The highest-value work left anywhere is extraction recall — see
+the C10 entry: `main=1/8` without a reference IR, and that number is A and B's to move.
+
+---
+
 ## 2026-09-25 — C5 done: four more fixes that no longer cost a model call
 
 **Status: implemented, not committed.** 105 fast tests green, gate green, both benches green.
@@ -498,7 +573,7 @@ scoreboard. Yours to restate, not mine.
 | C5 | More deterministic fixers | ready to start | no | — |
 | C3 | L1 templates: rotational / thermal / electrical | ready to start | no | — |
 | C4 | L2 synthesis (`_try_l2`) | stub | **yes** — the only unwritten AI path | a live tier |
-| C6 | Tier-2 acausal `Modelica.Fluid` + WaterNaCl | stretch | no | C8 |
+| C6 | Tier-2 acausal `Modelica.Fluid` + WaterNaCl | **done** — OPEN-ISSUE-04 closed | no | — |
 
 ### C's three AI touchpoints
 
