@@ -54,17 +54,42 @@ duplicates and were dropped — losing both blocking questions about a contradic
 had just proved. It now renumbers and carries the assumption→question back-references
 across. Tested, because a silent-drop bug in the honesty machinery is the worst kind.
 
-**Still open, needs a call.** SA-05 is *registered but not implemented*: when a guard is
-proved unreachable, we currently leave the sequence dead and report it. The register entry
-describes the alternative — keep the customer's guard exactly as written and add a second,
-clearly marked fallback transition — which is permissible under 6.3b because the
-contradiction is flagged and the resolution is not arbitrary. It would take the autonomous
-run from 3/10 to roughly 11/12. I have deliberately not done it without a decision, because
-it edits the customer's control logic.
+**SA-05 is now implemented** (approved 2026-09-24). When a guard is proved unreachable we
+keep the customer's guard exactly as written and add a second, clearly marked transition
+beside it, then build and run again. **3/10 → 5/10** on the autonomous packet.
 
-**Numbers.** 90 tests green (10 new). `bench`: drivetrain 7/7, nacl 11/12, hvac NO PACKET.
-Autonomous run: compiles, simulates, 3/10, 6 stated assumptions (0 unfounded), 4 questions
-(2 blocking).
+What stops this being a retuned setpoint, which is the thing we must not do:
+
+- the specified transition is untouched and still evaluated **first**, so it wins whenever it
+  can; deleting the fallback restores the deadlock
+- the fallback is a separate `Transition`, so **both** the Modelica and the SysML show the
+  customer's guard and ours side by side, each marked `FALLBACK (SA-05)`
+- the contradiction stays **blocking** and the question stays **open**. Nothing turned green
+  because we added an exit — the two contradicted checks still fail, by design
+- the dwell is **derived from the trace** (1.25× the time the quantity actually spent moving
+  before it settled), not tuned until checks pass
+
+Matching a diagnosis to a transition is **semantic**: guards speak in instrument tags
+(`LIS_501 >= SP_B5_BATCH`), the result file speaks in plant terms (`B5.level`), and the join
+is the sensor's binding. Matching on the resolved *number* as well as the tag matters —
+a signal is usually watched by several steps at different setpoints, and backing up the wrong
+one would let the sequence skip a step that was working.
+
+**⚠ Affects you (C):** `emit/modelica.py` now emits a `tEnter_<region>` discrete clock in the
+scan block, but only for regions that have a fallback. `Transition` gained
+`declared_fallback`, `fallback_for`, `dwell_timeout`. `pipeline.stream()` step 6–9 is now
+`_build_and_verify()`, a pass that can run up to three times.
+
+**I was wrong about the number.** I estimated ~11/12 for this change; it delivers 5/10. The
+11/12 is the *reference-IR* score, and I conflated the two paths. Of the five still failing,
+two are the genuine contradictions (correctly red), and three are **extraction** gaps that
+have nothing to do with fallbacks: `K1.cw_flow` is undriven and B6/B7 never receive a hot
+charge, so their temperatures never move. That is A's and B's ground to make up, and the
+report now names it.
+
+**Numbers.** 102 tests green (22 new). `bench` unchanged: drivetrain 7/7, nacl 11/12, hvac NO
+PACKET. Autonomous run: compiles, simulates, **5/10**, 8 stated assumptions (**0 unfounded**),
+4 questions (2 blocking).
 
 ---
 
