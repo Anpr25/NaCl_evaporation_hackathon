@@ -1,7 +1,8 @@
 """Score a simulation against the acceptance criteria extracted from the test procedure.
 
 Event checks are primary; signal comparison is secondary and only quoted when the reference
-data has been shown to be physically consistent. That ordering is not a convenience -- the
+data has passed every applicable consistency screen (conserved species, first-order
+spin-up, energy direction). That ordering is not a convenience -- the
 NaCl packet's reference trace is *not* mass-consistent (NaCl mass falls ~10% across the
 evaporation phase), so an RMSE against it would be scoring against bad data. Detecting that and
 saying so is worth more than a good-looking error number.
@@ -205,7 +206,7 @@ def score(
             )
 
     if reference_csv:
-        consistent, notes = screen_reference(reference_csv)
+        consistent, notes = screen_reference(reference_csv, model)
         card.reference_consistent = consistent
         card.reference_notes = notes
         if consistent and signal_map:
@@ -218,22 +219,76 @@ def score(
     return card
 
 
-def screen_reference(path: str | Path) -> tuple[bool, list[str]]:
+def screen_reference(
+    path: str | Path, model: SystemModel | None = None
+) -> tuple[bool, list[str]]:
     """Check a supplied reference trace for internal physical consistency before trusting it.
 
-    The screen looks for a *concentration phase*: a contiguous window where concentration rises
-    while inventory falls, i.e. solvent is being removed. Across such a window the solute
-    inventory must stay roughly constant. An ordinary tank drain also shows falling inventory
-    but with flat concentration, so requiring both conditions avoids the obvious false positive.
+    Reference data is evidence like anything else, and it can be wrong. Scoring a model
+    against a trace that violates conservation measures nothing but how well we reproduced
+    someone's spreadsheet. Each screen below asks a different conservation question; a trace
+    only earns a signal-level comparison if every applicable screen passes.
 
-    Today this covers conserved species. TODO(D): add charge and energy screens for the
-    electrical and drivetrain benches -- the shape of the check is identical.
+    Screens are opt-in by column naming: a trace with no recognisable speed columns simply
+    does not get the rotational screen, and that is reported as "not applicable", never as a
+    pass. Returns (trustworthy, notes).
     """
-    notes: list[str] = []
-    rows = list(csv.DictReader(Path(path).open(newline="", encoding="utf-8")))
-    if not rows:
+    cols = _load_columns(path)
+    if not cols:
         return False, ["reference trace is empty"]
 
+    # Some screens need to know something about the system, not just the numbers. Guessing
+    # it from column names is fragile: omc eliminates a constant source torque as a parameter
+    # alias, so `M1.tau` never appears in the result and a name-based check concludes there is
+    # no constant drive. When the IR is available, ask it.
+    facts = _system_facts(model)
+
+    ok = True
+    notes: list[str] = []
+    applied = 0
+    for screen in (_screen_solute, _screen_monotone_spinup, _screen_energy_sign):
+        verdict, screen_notes, ran = screen(cols, facts)
+        applied += ran
+        ok = ok and verdict
+        notes.extend(screen_notes)
+
+    if applied == 0:
+        notes.append(
+            "no screen was applicable to these columns; the trace is neither endorsed nor "
+            "rejected, so treat signal-level agreement with caution"
+        )
+        return True, notes
+    if ok:
+        notes.append(f"reference trace passed {applied} applicable consistency screen(s)")
+    return ok, notes
+
+
+def _system_facts(model: SystemModel | None) -> dict[str, Any]:
+    """What the screens need to know about the system under test.
+
+    `constant_drive` is tri-state on purpose: True means the IR shows a constant source,
+    False means it shows a varying one, and None means we do not know and the screen must
+    decide for itself whether to run.
+    """
+    if model is None:
+        return {"constant_drive": None}
+    sources = [
+        b for b in model.blocks
+        if b.modelica_class and ".Sources." in b.modelica_class
+    ]
+    if not sources:
+        return {"constant_drive": None}
+    constant = all(
+        "Constant" in (b.modelica_class or "") or "Fixed" in (b.modelica_class or "")
+        for b in sources
+    )
+    return {"constant_drive": constant}
+
+
+def _load_columns(path: str | Path) -> dict[str, list[float]]:
+    rows = list(csv.DictReader(Path(path).open(newline="", encoding="utf-8")))
+    if not rows:
+        return {}
     cols: dict[str, list[float]] = {k: [] for k in rows[0]}
     for r in rows:
         for k, v in r.items():
@@ -241,43 +296,55 @@ def screen_reference(path: str | Path) -> tuple[bool, list[str]]:
                 cols[k].append(float(v))
             except (TypeError, ValueError):
                 cols[k].append(float("nan"))
+    return cols
 
-    level_cols = [c for c in cols if re.search(r"level", c, re.I)]
-    conc_cols = [c for c in cols if re.search(r"(_w_|conc|fraction|_x_)", c, re.I)]
-    ok = True
-    checked = 0
 
-    for lc in level_cols:
-        tag = re.split(r"[_.]", lc)[0]
-        cc = next((c for c in conc_cols if c.startswith(tag)), None)
-        if not cc:
-            continue
+def _pair_columns(cols: dict[str, list[float]], a_pat: str, b_pat: str) -> list[tuple[str, str, str]]:
+    """Find (tag, col_a, col_b) triples where both columns belong to the same tag."""
+    a_cols = [c for c in cols if re.search(a_pat, c, re.I)]
+    b_cols = [c for c in cols if re.search(b_pat, c, re.I)]
+    out: list[tuple[str, str, str]] = []
+    for a in a_cols:
+        tag = re.split(r"[_.]", a)[0]
+        b = next((x for x in b_cols if x.startswith(tag)), None)
+        if b:
+            out.append((tag, a, b))
+    return out
+
+
+# ------------------------------------------------------------------ screen: conserved species
+
+
+def _screen_solute(cols: dict[str, list[float]], facts: dict[str, Any]) -> tuple[bool, list[str], int]:
+    """During a concentration phase, solute inventory must stay put.
+
+    A concentration phase is a run where concentration rises while inventory falls -- solvent
+    being removed. An ordinary tank drain also has falling inventory but flat concentration,
+    so requiring both conditions avoids that false positive.
+    """
+    notes: list[str] = []
+    ok, ran = True, 0
+    for tag, lc, cc in _pair_columns(cols, r"level", r"(_w_|conc|fraction|_x_)"):
         lv, cv = cols[lc], cols[cc]
         window = _concentration_window(lv, cv)
         if window is None:
             continue
+        ran += 1
         i0, i1 = window
-        checked += 1
         start_inv, end_inv = lv[i0] * cv[i0], lv[i1] * cv[i1]
         if start_inv <= 1e-9:
             continue
         change = (end_inv - start_inv) / start_inv
         if abs(change) > 0.05:
             ok = False
-            direction = "gains" if change > 0 else "loses"
             notes.append(
                 f"{tag}: during the concentration phase (samples {i0}-{i1}) the solute "
-                f"inventory {direction} {abs(change):.0%} while concentration rises "
-                f"{cv[i0]:.3f} -> {cv[i1]:.3f} and level falls {lv[i0]:.3f} -> {lv[i1]:.3f}. "
-                f"Solute is not conserved, so signal-level agreement with this trace is not "
-                f"evidence of correctness; score against events instead."
+                f"inventory {'gains' if change > 0 else 'loses'} {abs(change):.0%} while "
+                f"concentration rises {cv[i0]:.3f} -> {cv[i1]:.3f} and level falls "
+                f"{lv[i0]:.3f} -> {lv[i1]:.3f}. Solute is not conserved, so signal-level "
+                f"agreement with this trace is not evidence of correctness; score events."
             )
-    if checked == 0:
-        notes.append("no concentration phase found; conservation screen not applicable")
-        return True, notes
-    if ok:
-        notes.append(f"reference trace passed the conserved-species screen ({checked} vessel(s))")
-    return ok, notes
+    return ok, notes, ran
 
 
 def _concentration_window(level: list[float], conc: list[float]) -> tuple[int, int] | None:
@@ -285,9 +352,7 @@ def _concentration_window(level: list[float], conc: list[float]) -> tuple[int, i
     best: tuple[int, int] | None = None
     run_start: int | None = None
     for i in range(1, len(level)):
-        rising_conc = conc[i] > conc[i - 1] + 1e-9
-        falling_level = level[i] < level[i - 1] - 1e-9
-        if rising_conc and falling_level:
+        if conc[i] > conc[i - 1] + 1e-9 and level[i] < level[i - 1] - 1e-9:
             if run_start is None:
                 run_start = i - 1
         else:
@@ -300,9 +365,107 @@ def _concentration_window(level: list[float], conc: list[float]) -> tuple[int, i
         span = (run_start, len(level) - 1)
         if best is None or (span[1] - span[0]) > (best[1] - best[0]):
             best = span
-    if best is None or best[1] - best[0] < 5:
-        return None
-    return best
+    return best if best and best[1] - best[0] >= 5 else None
+
+
+# ------------------------------------------------------------------ screen: rotational
+
+# Deliberately narrow. An earlier version used `_w_`, which matched `B5_w_NaCl` -- a NaCl
+# mass fraction -- and reported a chemical composition as an impossible rotational overshoot.
+# A speed column ends in `.w` or `_w`, or says so in words.
+_SPEED = r"([._]w$|speed|omega|rpm|angular.?vel)"
+_TORQUE = r"([._]tau$|torque|[._]trq)"
+#: Columns that look like a speed by name but are something else entirely.
+_NOT_SPEED = r"(conc|fraction|_x_|nacl|salt|solute|mass)"
+
+
+def _is_constant(series: list[float], rel_tol: float = 1e-6) -> bool:
+    values = [v for v in series if not math.isnan(v)]
+    if not values:
+        return False
+    spread = max(values) - min(values)
+    return spread <= rel_tol * max(abs(max(values, key=abs)), 1.0)
+
+
+def _screen_monotone_spinup(cols: dict[str, list[float]], facts: dict[str, Any]) -> tuple[bool, list[str], int]:
+    """A constant torque into an inertia with linear damping cannot overshoot.
+
+    The response is first order, so speed rises monotonically to its asymptote. An overshoot
+    in a supplied trace means either the torque was not constant or the trace is not a
+    solution of the system it claims to describe. Only applied when the torque column really
+    is constant, so a stepped or reversing drive is left alone.
+    """
+    notes: list[str] = []
+    ok, ran = True, 0
+    speeds = [
+        c for c in cols
+        if re.search(_SPEED, c, re.I) and not re.search(_NOT_SPEED, c, re.I) and c != "time"
+    ]
+    torques = [c for c in cols if re.search(_TORQUE, c, re.I)]
+    if not speeds:
+        return True, notes, 0
+
+    # Apply only when a CONSTANT drive exists. Checking one arbitrary torque column is not
+    # enough: internal flange torques vary throughout a transient by definition, so picking
+    # `torques[0]` skipped the screen on our own drivetrain result. What matters is whether
+    # any torque in the trace is constant, i.e. whether there is a constant source at all.
+    if facts.get("constant_drive") is False:
+        return True, notes, 0
+    if facts.get("constant_drive") is None:
+        if torques and not any(_is_constant(cols[t]) for t in torques):
+            return True, notes, 0
+
+    for name in speeds:
+        series = [v for v in cols[name] if not math.isnan(v)]
+        if len(series) < 10:
+            continue
+        ran += 1
+        final = series[-1]
+        peak = max(series, key=abs)
+        if abs(final) < 1e-9:
+            continue
+        overshoot = (abs(peak) - abs(final)) / abs(final)
+        if overshoot > 0.02:
+            ok = False
+            notes.append(
+                f"{name}: peaks at {peak:.4g} then settles at {final:.4g}, a {overshoot:.0%} "
+                f"overshoot. A constant torque into an inertia with linear damping is first "
+                f"order and cannot overshoot, so this trace is not a solution of the stated "
+                f"system."
+            )
+    return ok, notes, ran
+
+
+# ------------------------------------------------------------------ screen: energy sign
+
+_TEMP = r"(temp|_T$|_T_|degc|kelvin)"
+
+
+def _screen_energy_sign(cols: dict[str, list[float]], facts: dict[str, Any]) -> tuple[bool, list[str], int]:
+    """A vessel with cooling commanded on must not warm, and vice versa.
+
+    Cheap, and it catches the most common synthesis error in a hand-made trace: a command
+    column and the quantity it drives moving in opposite directions.
+    """
+    notes: list[str] = []
+    ok, ran = True, 0
+    for tag, tc, cmdc in _pair_columns(cols, _TEMP, r"(cool|chill)"):
+        temps, cmds = cols[tc], cols[cmdc]
+        active = [
+            i for i in range(1, min(len(temps), len(cmds)))
+            if cmds[i] > 0.5 and not math.isnan(temps[i]) and not math.isnan(temps[i - 1])
+        ]
+        if len(active) < 10:
+            continue
+        ran += 1
+        warming = sum(1 for i in active if temps[i] > temps[i - 1] + 1e-6)
+        if warming > 0.2 * len(active):
+            ok = False
+            notes.append(
+                f"{tag}: temperature rises in {warming} of {len(active)} samples while the "
+                f"cooler is commanded on. Energy is flowing the wrong way."
+            )
+    return ok, notes, ran
 
 
 def compare_signals(

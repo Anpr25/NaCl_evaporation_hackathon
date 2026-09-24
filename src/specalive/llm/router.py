@@ -55,8 +55,15 @@ class DiskCache:
             self.misses += 1
             return None
         self.hits += 1
+        t0 = time.time()
         blob = json.loads(path.read_text(encoding="utf-8"))
-        return LLMResponse(**{**blob, "cached": True})
+        # Report what the cache hit actually cost, not what the original call cost. Replaying
+        # the old figure inflates every "time spent on model calls" number in the report, and
+        # that number is evidence we quote.
+        original = blob.pop("latency_s", 0.0)
+        resp = LLMResponse(**blob, cached=True, latency_s=round(time.time() - t0, 4))
+        resp.original_latency_s = original
+        return resp
 
     def put(self, key: str, resp: LLMResponse) -> None:
         if not self.enabled:

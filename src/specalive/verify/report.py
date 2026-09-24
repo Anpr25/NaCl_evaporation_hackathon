@@ -21,6 +21,7 @@ from typing import Any
 
 from ..ir.system import SystemModel
 from .acceptance import Scorecard
+from .plots import PLOT_CSS, render_plots
 
 CSS = """
 :root{--bg:#fff;--fg:#14161a;--mut:#5b6472;--line:#e3e6ea;--ok:#10725a;--okbg:#e8f5f1;
@@ -57,6 +58,8 @@ border-radius:0 8px 8px 0;margin:.8em 0}
 border:1px solid var(--line);color:var(--mut)}
 .bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:6px}
 .bar>i{display:block;height:100%;background:var(--acc)}
+"""
+CSS += PLOT_CSS + """
 @media(max-width:640px){.wrap{padding:20px 16px 60px}.card{flex:1 1 100%}}
 """
 
@@ -80,6 +83,7 @@ def build_report(
     out_dir: str | Path = "out",
     gate: dict[str, Any] | None = None,
     scorecard: Scorecard | None = None,
+    results_csv: str | Path | None = None,
     router_stats: dict[str, Any] | None = None,
     repair_steps: list[Any] | None = None,
     validation: Any | None = None,
@@ -181,6 +185,23 @@ def build_report(
                 ["ok" if r.passed else "no" for r in scorecard.results],
             )
         )
+        if results_csv and Path(results_csv).exists():
+            try:
+                from .omc import read_result
+
+                checks = [c for sc in model.scenarios for c in sc.checks]
+                fragment = render_plots(read_result(results_csv), checks)
+            except Exception as exc:  # a plotting failure must never lose the report
+                fragment = f'<p class="sub">plots unavailable: {_e(exc)}</p>'
+            if fragment:
+                p.append("<h3>Simulation</h3>")
+                p.append(
+                    '<p class="sub">Dashed lines are the acceptance thresholds, drawn on the '
+                    "same axes as the signal so the criterion can be seen being met rather "
+                    "than taken on trust.</p>"
+                )
+                p.append(fragment)
+
         if scorecard.signal_errors:
             p.append("<h3>Signal agreement (secondary)</h3>")
             p.append(

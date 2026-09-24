@@ -160,11 +160,20 @@ class CatalogIndex:
 
 PICK_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "required": ["choice_index", "confidence", "reason"],
+    "required": ["choice", "confidence", "reason"],
     "properties": {
-        "choice_index": {"type": "integer", "description": "Index from the candidate list, or -1 for none"},
-        "confidence": {"type": "number"},
-        "reason": {"type": "string"},
+        # Answer by NAME, never by list position. Measured on the local-model bake-off: with
+        # an index answer, a 4B model falls back to "0" whenever it is unsure, and two of its
+        # three errors were exactly that. Copying a name out of the list is a different and
+        # easier operation, and a name that was never offered is detectable as a
+        # hallucination -- an out-of-range index is not always.
+        "choice": {
+            "type": "string",
+            "description": "The full dotted Modelica class name, copied exactly from the "
+                           "candidate list. Empty string if none of them fit.",
+        },
+        "confidence": {"type": "number", "description": "0 to 1"},
+        "reason": {"type": "string", "description": "One sentence."},
         "parameter_map": {
             "type": "object",
             "description": "Source parameter name -> candidate parameter name",
@@ -181,16 +190,20 @@ A component was extracted from engineering documentation:
   parameters:  {parameters}
   ports:       {ports}
 
-Choose the single best Modelica class from these verified candidates:
+Which of these verified Modelica classes models exactly that component?
 
 {shortlist}
 
+The candidates are in no particular order. Compare each description against the component
+above.
+
 Rules:
-- Choose only from the list. Do not name a class that is not listed.
-- If none of them models this component, answer with choice_index -1.
+- Copy the class name exactly as written. Do not name a class that is not listed.
+- If none of them models this component, answer with an empty choice.
 - Map each source parameter onto a candidate parameter name where the meaning matches;
-  leave a source parameter out of the map if there is no genuine match.
-- Answer JSON only.
+  leave it out if there is no genuine match.
+- Answer JSON only:
+  {{"choice": "Modelica.Some.Package.ClassName", "confidence": 0.9, "reason": "..."}}
 """
 
 

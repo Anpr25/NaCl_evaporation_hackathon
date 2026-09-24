@@ -22,6 +22,11 @@ from rich.console import Console
 from rich.table import Table
 
 from .pipeline import Pipeline, PipelineConfig, PipelineEvent
+from .settings import load_env
+
+# Providers read os.getenv in their constructor, so the env file has to be in place before
+# any of them is built. Doing it here means every command gets it, including `doctor`.
+load_env()
 
 app = typer.Typer(add_completion=False, help="From specs to live engineering models.")
 con = Console()
@@ -56,6 +61,7 @@ def _router(mode: str):
 def doctor() -> None:
     """Check every external dependency and say plainly what is missing."""
     from .llm.router import Router
+    from .settings import key_status
     from .verify.omc import describe_environment
 
     t = Table(title="SpecAlive environment", show_lines=False)
@@ -71,6 +77,16 @@ def doctor() -> None:
         env.get("omc_version") or env.get("error", ""),
     )
     t.add_row("Python", "[green]ok[/]", sys.version.split()[0])
+
+    loaded = load_env()
+    t.add_row(
+        "Env file",
+        "[green]loaded[/]" if loaded else "[yellow]none[/]",
+        ", ".join(loaded) if loaded else "no .env found; using shell environment only",
+    )
+    for var, state in key_status().items():
+        good = state.startswith("set (")
+        t.add_row(f"  {var}", "[green]ok[/]" if good else "[dim]--[/]", state)
 
     cat = Path("out/catalog.jsonl")
     n = sum(1 for _ in cat.open(encoding="utf-8")) if cat.exists() else 0

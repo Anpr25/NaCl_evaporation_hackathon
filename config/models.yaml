@@ -23,7 +23,17 @@ tiers:
     model: qwen3:4b
     fallback_models: [qwen2.5:3b-instruct-q4_K_M, llama3.2:3b]
     base_url: http://localhost:11434
-    context: 8192
+    context: 4096
+    # MEASURED on a Quadro T1000 (4 GB, display on the iGPU):
+    #   default          -> 67% GPU, 13.3 tok/s   (Ollama leaves ~1.6 GB unused)
+    #   num_gpu: 99      -> 100% GPU, 43.1 tok/s, 3.18 GB resident
+    # Forcing every layer onto the card is a 3.2x speedup and still fits. Lower this if a
+    # teammate's card is smaller; `specalive models` will show the split.
+    options: {num_gpu: 99}
+    # qwen3 is a reasoning model: with thinking on, `response` comes back EMPTY and the whole
+    # answer lands in a separate `thinking` field, so every structured call fails and the
+    # router escalates for nothing. We want no reasoning here anyway.
+    think: false
     structured_output: json_schema
     max_tokens: 2048
     timeout_s: 120
@@ -52,8 +62,11 @@ tiers:
   # ---------------------------------------------------------------- T3
   t3_cloud_reasoning:
     kind: groq
-    model: llama-3.3-70b-versatile
-    fallback_models: [qwen/qwen3-32b, llama-3.1-8b-instant]
+    # Verified against the live /models endpoint on 2026-09-24. Hosted catalogues churn --
+    # llama-3.3-70b-versatile was configured here and 404s on a current key -- so the tier
+    # carries fallbacks and the provider walks the list on a model-not-found.
+    model: openai/gpt-oss-120b
+    fallback_models: [qwen/qwen3.8-27b, openai/gpt-oss-20b]
     api_key_env: GROQ_API_KEY
     structured_output: json_object
     max_tokens: 8192
@@ -64,8 +77,10 @@ tiers:
   # ---------------------------------------------------------------- T4
   t4_cloud_vision:
     kind: gemini
-    model: gemini-2.5-flash
-    fallback_models: [gemini-2.0-flash]
+    # `-latest` tracks the current flash model so a rename cannot break the demo;
+    # reproducibility comes from the response cache, not from a pinned model id.
+    model: gemini-flash-latest
+    fallback_models: [gemini-3.8-flash, gemini-3.5-flash]
     api_key_env: GEMINI_API_KEY
     structured_output: response_schema
     max_tokens: 8192

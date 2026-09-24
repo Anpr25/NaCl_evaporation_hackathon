@@ -20,11 +20,46 @@ from .base import (
     LLMError,
     LLMRequest,
     LLMResponse,
+    ModelUnavailable,
     Provider,
     ProviderUnavailable,
     QuotaExhausted,
     json_only_system,
 )
+
+
+def _try_models(provider: Provider, req: LLMRequest, call) -> LLMResponse:
+    """Call `call(model, req)` over the tier's model list until one is actually served.
+
+    Hosted catalogues churn: `llama-3.3-70b-versatile` was configured here and returns 404 on
+    a current key. Without this loop that is a dead tier; with it, it costs one wasted request
+    and the next name answers. The winner is remembered for the rest of the run.
+    """
+    # Start with the model that worked last time, but keep the rest as fallbacks: a model
+    # that answered a minute ago can be overloaded now.
+    candidates = list(provider.models)
+    if provider.resolved_model in candidates:
+        candidates.remove(provider.resolved_model)
+        candidates.insert(0, provider.resolved_model)
+    errors: list[str] = []
+    for model in candidates:
+        try:
+            resp = call(model, req)
+        except ModelUnavailable as exc:
+            errors.append(f"{model}: {exc}")
+            continue
+        provider.resolved_model = model
+        return resp
+    raise ProviderUnavailable(
+        f"no model in {provider.name} is served to this key: " + "; ".join(errors)
+    )
+
+
+def _extract_json_block(text: str) -> str:
+    """Last resort: pull the outermost {...} out of a reasoning trace."""
+    start = text.find("{")
+    end = text.rfind("}")
+    return text[start : end + 1] if 0 <= start < end else text
 
 
 def _strip_fences(text: str) -> str:
@@ -76,6 +111,13 @@ class OllamaProvider(Provider):
                 **self.cfg.get("options", {}),
             },
         }
+        # Reasoning models (qwen3, deepseek-r1, ...) put their chain of thought in a separate
+        # `thinking` field and leave `response` EMPTY. Left on, every structured call returns
+        # "" and the router escalates a tier for nothing. We never want the reasoning here:
+        # these tasks are span extraction and multiple choice, so thinking costs latency and
+        # buys nothing. Configurable because a non-thinking model rejects the flag.
+        if self.cfg.get("think") is not None:
+            payload["think"] = bool(self.cfg["think"])
         # Ollama supports full JSON-Schema constrained decoding; this is the single biggest
         # quality lever for small models and the reason a 3B is usable at all here.
         if req.schema:
@@ -93,8 +135,13 @@ class OllamaProvider(Provider):
         if r.status_code != 200:
             raise LLMError(f"ollama HTTP {r.status_code}: {r.text[:300]}")
         body = r.json()
+        # Defensive: if a thinking model slipped through with think unset, the useful output
+        # may be in `thinking` rather than `response`. Recover it instead of failing.
+        text = body.get("response") or ""
+        if not text.strip() and body.get("thinking"):
+            text = _extract_json_block(body["thinking"])
         return LLMResponse(
-            text=_strip_fences(body.get("response", "")),
+            text=_strip_fences(text),
             tier=self.name,
             model=self.model,
             prompt_tokens=body.get("prompt_eval_count", 0),
@@ -131,17 +178,38 @@ class GroqProvider(Provider):
         self.timeout = cfg.get("timeout_s", 120)
 
     def available(self) -> bool:
-        return bool(self.api_key)
+        """A key alone is not availability: the configured model must also be served."""
+        if not self.api_key:
+            return False
+        try:
+            r = httpx.get(
+                "https://api.groq.com/openai/v1/models",
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=5.0,
+            )
+            if r.status_code != 200:
+                return False
+            served = {m["id"] for m in r.json().get("data", [])}
+        except Exception:
+            return bool(self.api_key)  # cannot check; let the call decide
+        for m in self.models:
+            if m in served:
+                self.resolved_model = m
+                return True
+        return False
 
     def complete(self, req: LLMRequest) -> LLMResponse:
         if not self.api_key:
             raise ProviderUnavailable("GROQ_API_KEY not set")
+        return _try_models(self, req, self._call_once)
+
+    def _call_once(self, model: str, req: LLMRequest) -> LLMResponse:
         messages = [
             {"role": "system", "content": req.system or json_only_system(req.schema)},
             {"role": "user", "content": req.prompt},
         ]
         payload: dict[str, Any] = {
-            "model": self.model,
+            "model": model,
             "messages": messages,
             "temperature": req.temperature,
             "max_tokens": req.max_tokens,
@@ -170,6 +238,13 @@ class GroqProvider(Provider):
             raise QuotaExhausted(f"groq rate limited: {r.text[:200]}")
         if r.status_code in (401, 403):
             raise ProviderUnavailable(f"groq auth rejected: {r.status_code}")
+        if r.status_code == 404 or "model_not_found" in r.text:
+            raise ModelUnavailable(f"groq does not serve '{model}' to this key")
+        if r.status_code in (502, 503, 529):
+            # Transient overload is the single most likely free-tier failure. Treat it as
+            # "this model is unavailable right now" so the fallback list is walked, instead
+            # of retrying the same busy model and then giving up on the whole tier.
+            raise ModelUnavailable(f"groq '{model}' is overloaded (HTTP {r.status_code})")
         if r.status_code >= 400:
             raise LLMError(f"groq HTTP {r.status_code}: {r.text[:300]}")
 
@@ -178,7 +253,7 @@ class GroqProvider(Provider):
         return LLMResponse(
             text=_strip_fences(body["choices"][0]["message"]["content"] or ""),
             tier=self.name,
-            model=self.model,
+            model=model,
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
             latency_s=time.time() - t0,
@@ -201,11 +276,31 @@ class GeminiProvider(Provider):
         self.timeout = cfg.get("timeout_s", 180)
 
     def available(self) -> bool:
-        return bool(self.api_key)
+        if not self.api_key:
+            return False
+        try:
+            r = httpx.get(f"{self.BASE}", headers={"x-goog-api-key": self.api_key}, timeout=5.0)
+            if r.status_code != 200:
+                return False
+            served = {
+                m["name"].removeprefix("models/")
+                for m in r.json().get("models", [])
+                if "generateContent" in m.get("supportedGenerationMethods", [])
+            }
+        except Exception:
+            return bool(self.api_key)
+        for m in self.models:
+            if m in served:
+                self.resolved_model = m
+                return True
+        return False
 
     def complete(self, req: LLMRequest) -> LLMResponse:
         if not self.api_key:
             raise ProviderUnavailable("GEMINI_API_KEY not set")
+        return _try_models(self, req, self._call_once)
+
+    def _call_once(self, model: str, req: LLMRequest) -> LLMResponse:
         parts: list[dict[str, Any]] = [{"text": req.prompt}]
         for img in req.images:
             parts.append(
@@ -224,7 +319,7 @@ class GeminiProvider(Provider):
         t0 = time.time()
         try:
             r = httpx.post(
-                f"{self.BASE}/{self.model}:generateContent",
+                f"{self.BASE}/{model}:generateContent",
                 json=payload,
                 headers={"x-goog-api-key": self.api_key},
                 timeout=self.timeout,
@@ -238,6 +333,10 @@ class GeminiProvider(Provider):
             raise QuotaExhausted(f"gemini rate limited: {r.text[:200]}")
         if r.status_code in (401, 403):
             raise ProviderUnavailable(f"gemini auth rejected: {r.status_code}")
+        if r.status_code == 404 or "is not found" in r.text:
+            raise ModelUnavailable(f"gemini does not serve '{model}' to this key")
+        if r.status_code in (502, 503, 529) or "UNAVAILABLE" in r.text:
+            raise ModelUnavailable(f"gemini '{model}' is overloaded (HTTP {r.status_code})")
         if r.status_code >= 400:
             raise LLMError(f"gemini HTTP {r.status_code}: {r.text[:300]}")
 
@@ -250,7 +349,7 @@ class GeminiProvider(Provider):
         return LLMResponse(
             text=_strip_fences(text),
             tier=self.name,
-            model=self.model,
+            model=model,
             prompt_tokens=usage.get("promptTokenCount", 0),
             completion_tokens=usage.get("candidatesTokenCount", 0),
             latency_s=time.time() - t0,

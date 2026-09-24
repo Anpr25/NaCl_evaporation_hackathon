@@ -291,6 +291,7 @@ class Pipeline:
             out_dir=cfg.out_dir,
             gate=self.result.gate,
             scorecard=self.result.scorecard,
+            results_csv=(cfg.out_dir / "results.csv"),
             router_stats=self.router.stats() if self.router else None,
             repair_steps=getattr(self, "_repair_steps", None),
             validation=getattr(self, "_validation", None),

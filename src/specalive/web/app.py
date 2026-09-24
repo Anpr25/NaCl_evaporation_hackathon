@@ -20,6 +20,9 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from ..pipeline import Pipeline, PipelineConfig
+from ..settings import load_env
+
+load_env()
 
 app = FastAPI(title="SpecAlive", docs_url="/api/docs")
 
