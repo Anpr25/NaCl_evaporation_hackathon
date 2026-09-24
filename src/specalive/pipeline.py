@@ -26,6 +26,7 @@ from .ingest.registry import load_packet, packet_summary
 from .ir.system import SystemModel
 from .ir.validate import validate
 from .ir.assumptions import AssumptionLog
+from .ir.fallback import apply_declared_fallbacks
 from .repair.loop import RepairLoop
 from .verify.acceptance import Scorecard, score
 from .verify.diagnose import Diagnosis, diagnose, record
@@ -70,6 +71,12 @@ class PipelineConfig:
     skip_simulation: bool = False
 
 
+#: A pass is only repeated when it added a declared fallback, and `apply_declared_fallbacks`
+#: never backs up the same transition twice, so this terminates on its own. The cap is here
+#: so a bug cannot turn that into an unbounded loop of omc invocations.
+MAX_BUILD_PASSES = 3
+
+
 @dataclass
 class PipelineResult:
     model: SystemModel | None = None
@@ -88,6 +95,10 @@ class PipelineResult:
 class Pipeline:
     def __init__(self, cfg: PipelineConfig, router: Any | None = None) -> None:
         self.cfg = cfg
+        #: Check ids whose contradiction an earlier pass already proved, so a later pass does
+        #: not re-diagnose them from a trace that no longer shows it.
+        self._contradicted: set[str] = set()
+        self._pass = 1
         self.router = router
         self.result = PipelineResult()
         cfg.out_dir.mkdir(parents=True, exist_ok=True)
@@ -196,6 +207,46 @@ class Pipeline:
             losses=losses,
         )
 
+        # ---------------------------------------------------------- 6-9. build and verify
+        # Up to two passes. The second only happens when the first proved a guard unreachable
+        # and a declared fallback was added, and a third is never needed: fallbacks are added
+        # once per blocked transition and `apply_declared_fallbacks` will not re-add one.
+        runner = OmcRunner(workdir=str(cfg.out_dir / "work"))
+        for attempt in range(1, MAX_BUILD_PASSES + 1):
+            self._pass = attempt
+            verdict = yield from self._build_and_verify(model, runner, t0)
+            if verdict != "retry":
+                break
+            yield self._emit("modelica", "start", f"pass {attempt + 1}: re-emitting with the "
+                                                  f"declared fallback in place")
+        # The SysML was emitted before any fallback existed. If the model we actually
+        # simulated grew a transition, the architecture artefact has to grow it too, or the
+        # two deliverables describe different plants.
+        if any(t.declared_fallback for sm in model.state_machines for t in sm.transitions):
+            sysml_path = emit_sysml(model, cfg.out_dir / f"{model.name}.sysml")
+            losses = round_trip_check(model, sysml_path.read_text(encoding="utf-8"))
+            self.result.artifacts["SysML v2"] = str(sysml_path)
+            yield self._emit(
+                "sysml", "warn" if losses else "ok",
+                f"{sysml_path.name} re-emitted with the declared fallback shown alongside "
+                f"the specified guard"
+                + (f", {len(losses)} element(s) lost in round-trip" if losses else ""),
+                losses=losses,
+            )
+
+        yield from self._finish(t0, runner)
+
+    def _build_and_verify(
+        self, model: SystemModel, runner: OmcRunner, t0: float
+    ) -> Iterator[PipelineEvent]:
+        """Emit, compile, simulate, score -- the part of the run that can be worth repeating.
+
+        Returns "done", "halt" (nothing more can be learned this run) or "retry" (a declared
+        fallback was added and the model should be built again). The caller reports either
+        way: a run that halts still owes the reader a report saying why.
+        """
+        cfg = self.cfg
+
         # ---------------------------------------------------------- 6. Modelica
         yield self._emit("modelica", "start", "binding components and emitting Modelica")
         index = None
@@ -222,7 +273,6 @@ class Pipeline:
         )
         stop_time = cfg.stop_time or (scenario.stop_time if scenario else 1.0)
 
-        runner = OmcRunner(workdir=str(cfg.out_dir / "work"))
         loop = RepairLoop(runner, self.router, max_iterations=cfg.repair_iterations)
 
         yield self._emit("compile", "start", f"omc checkModel({model_name})")
@@ -236,13 +286,11 @@ class Pipeline:
         )
         if not outcome.ok:
             yield self._emit("simulate", "skip", "model does not compile")
-            yield from self._finish(t0, runner)
-            return
+            return "halt"
 
         if cfg.skip_simulation:
             yield self._emit("simulate", "skip", "--no-sim requested")
-            yield from self._finish(t0, runner)
-            return
+            return "halt"
 
         yield self._emit("simulate", "start", f"stopTime={stop_time}")
         sim = runner.simulate(
@@ -263,8 +311,7 @@ class Pipeline:
             sim.summary() + (f" -> {sim.result_file.name}" if sim.result_file else ""),
         )
         if not sim.ok:
-            yield from self._finish(t0, runner)
-            return
+            return "halt"
 
         # ---------------------------------------------------------- 9. verify
         yield self._emit("verify", "start", "scoring acceptance criteria")
@@ -285,8 +332,20 @@ class Pipeline:
         # brief requires it to be flagged, while the checks downstream of it are noise.
         diag_log = AssumptionLog()
         diagnoses = diagnose(model, card, read_result(cfg.out_dir / "results.csv"))
-        model.gaps.extend(record(model, diagnoses, diag_log))
-        diag_log.attach(model)
+        # Drop the previous pass's knock-on notes -- they describe a model we no longer ship
+        # -- but keep every proved contradiction, which is the finding and is not re-derivable
+        # from the final trace once a fallback lets the step exit early.
+        model.gaps = [
+            g for g in model.gaps
+            if not (g.id.startswith("GAP-GUARD-") and g.severity != "blocking")
+        ]
+        model.gaps.extend(
+            record(model, diagnoses, diag_log,
+                   already_known=self._contradicted, pass_no=self._pass)
+        )
+        self._contradicted.update(
+            d.check_id for d in diagnoses if d.verdict == "unreachable"
+        )
         self.result.diagnoses = diagnoses
 
         yield self._emit(
@@ -302,7 +361,22 @@ class Pipeline:
                 failed=[d.check_id for d in blocking],
             )
 
-        yield from self._finish(t0, runner)
+        # A step whose guard is provably unreachable deadlocks the sequence, so one defect in
+        # the customer's specification costs us every step after it. SA-05 keeps their guard
+        # exactly as written and adds a marked fallback beside it. The contradiction stays
+        # flagged and the setpoint stays untouched; what changes is how much of the sequence
+        # we can actually exercise and show. See ir/fallback.py.
+        fallbacks = apply_declared_fallbacks(model, diagnoses, diag_log)
+        diag_log.attach(model)
+        if fallbacks:
+            yield self._emit(
+                "verify", "warn",
+                f"{len(fallbacks)} step(s) cannot exit under the packet's own numbers; "
+                f"adding a declared fallback (SA-05) and re-running the model",
+                failed=[f.fallback_for or f.id for f in fallbacks],
+            )
+            return "retry"
+        return "done"
 
     # ------------------------------------------------------------------ report
     def _finish(self, t0: float, runner: OmcRunner) -> Iterator[PipelineEvent]:

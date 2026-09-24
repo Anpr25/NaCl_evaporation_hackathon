@@ -166,6 +166,18 @@ class Transition(BaseModel):
     target_state: str
     guard: str = Field(description="Boolean expression over signal ids and parameter ids")
     effect: str | None = None
+
+    #: True when this transition is not in the customer's specification: it is a declared
+    #: fallback added under SA-05 because the specified guard was *proved* unreachable and the
+    #: sequence would otherwise deadlock. The specified transition is always kept exactly as
+    #: written and evaluated first; this one only catches what it cannot.
+    declared_fallback: bool = False
+    fallback_for: str | None = Field(
+        default=None, description="Id of the specified transition this one backs up"
+    )
+    #: Seconds in the source state after which a declared fallback fires. Derived from how
+    #: long the quantity actually took to reach its limit in the trace, not picked.
+    dwell_timeout: float | None = None
     #: For a split: the region states entered concurrently. For a join: the states awaited.
     forks: list[str] = Field(default_factory=list)
     joins: list[str] = Field(default_factory=list)

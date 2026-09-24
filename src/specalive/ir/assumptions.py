@@ -191,21 +191,32 @@ class AssumptionLog:
         the run had just proved. Renumber instead, and carry the assumption -> question
         back-references across with the new ids.
         """
+        # De-duplicate by content, not by id. A run can build the model more than once (a
+        # declared fallback triggers a second pass), and the emitter re-files the same
+        # inferences every time. Twelve assumptions where there are six reads as if we
+        # guessed twice as much as we did.
+        seen_q = {(q.subject, q.question): q.id for q in model.questions}
+        seen_a = {(a.subject, a.basis, a.statement) for a in model.assumptions}
+
         renamed: dict[str, str] = {}
-        next_q = len(model.questions)
         for q in self.questions:
-            next_q += 1
-            new_id = f"Q-{next_q:02d}"
+            key = (q.subject, q.question)
+            if key in seen_q:
+                renamed[q.id] = seen_q[key]
+                continue
+            new_id = f"Q-{len(model.questions) + 1:02d}"
             renamed[q.id] = new_id
+            seen_q[key] = new_id
             q.id = new_id
             model.questions.append(q)
 
-        next_a = len(model.assumptions)
         for a in self.assumptions:
-            next_a += 1
-            a.id = f"ASM-{next_a:02d}"
             if a.question_id:
                 a.question_id = renamed.get(a.question_id, a.question_id)
+            if (a.subject, a.basis, a.statement) in seen_a:
+                continue
+            seen_a.add((a.subject, a.basis, a.statement))
+            a.id = f"ASM-{len(model.assumptions) + 1:02d}"
             model.assumptions.append(a)
 
     @property

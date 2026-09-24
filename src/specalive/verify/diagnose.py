@@ -58,6 +58,37 @@ class Diagnosis:
     verdict: str
     detail: str
     shortfall_pct: float
+    #: How long the quantity spent actually moving: from the first appreciable change to the
+    #: last. This is what a declared fallback dwell is derived from -- the time the plant
+    #: genuinely needed to reach its limit, rather than a number somebody chose.
+    rise_seconds: float = 0.0
+    #: Absolute time of the last appreciable change, for the report.
+    settled_at: float = 0.0
+
+
+def _motion_window(times: list[float], series: list[float]) -> tuple[float, float]:
+    """(first move, last move) in seconds -- the interval the quantity spent actually moving.
+
+    Measured against where it started and where it ended up, not sample to sample. The first
+    version compared consecutive samples against a fraction of the whole excursion, which on
+    a smooth ramp is never exceeded by any single step: it reported a rise time of zero for a
+    tank that took 600 s to fill, and a fallback dwell derived from that fired almost
+    immediately and cut the fill short.
+    """
+    if len(series) < 2 or len(times) < len(series):
+        return 0.0, (times[-1] if times else 0.0)
+    span = max(series) - min(series)
+    if span <= 0:
+        return 0.0, times[-1]
+    eps = _FLAT_FRACTION * span
+    begin, final = series[0], series[-1]
+
+    first = next((times[i] for i, v in enumerate(series) if abs(v - begin) >= eps), times[0])
+    last = next(
+        (times[i] for i in range(len(series) - 1, -1, -1) if abs(series[i] - final) >= eps),
+        times[-1],
+    )
+    return first, max(first, last)
 
 
 def _tail_is_flat(series: list[float], span: float) -> bool:
@@ -93,6 +124,7 @@ def diagnose(model: SystemModel, card: Any, cols: dict[str, list[float]]) -> lis
         remaining = abs(target - extreme)
         span = max(series) - min(series)
         shortfall = 100.0 * remaining / needed if needed else 0.0
+        t_first, t_last = _motion_window(cols.get("time") or [], series)
 
         if needed == 0 or travelled <= _FLAT_FRACTION * max(needed, 1e-12):
             verdict = "stalled"
@@ -122,20 +154,44 @@ def diagnose(model: SystemModel, card: Any, cols: dict[str, list[float]]) -> lis
                 f"({shortfall:.1f}% short), and stopped changing"
             )
         out.append(
-            Diagnosis(res.check_id, sig, target, sense, start, extreme, verdict, detail, shortfall)
+            Diagnosis(
+                res.check_id, sig, target, sense, start, extreme, verdict, detail, shortfall,
+                rise_seconds=max(0.0, t_last - t_first),
+                settled_at=t_last,
+            )
         )
     return out
 
 
 def record(
-    model: SystemModel, diagnoses: list[Diagnosis], log: AssumptionLog | None = None
+    model: SystemModel,
+    diagnoses: list[Diagnosis],
+    log: AssumptionLog | None = None,
+    *,
+    already_known: set[str] | None = None,
+    pass_no: int = 1,
 ) -> list[Gap]:
     """File the contradictions as gaps, and ask about them. Knock-ons are noted, not shouted.
 
     One gap per *root cause*. Several checks can fail on the same unreachable setpoint and on
     the same stalled predecessor, and a report that lists each one separately buries the
     finding it should be leading with.
+
+    `already_known` carries the check ids whose contradiction a previous pass already proved.
+    They are skipped rather than re-diagnosed: once a declared fallback is in place the step
+    exits early, so the final trace no longer contains the evidence, and re-reading it would
+    downgrade a proved contradiction to "still moving when the run ended". The finding
+    belongs to the pass that earned it.
     """
+    known = already_known or set()
+    diagnoses = [d for d in diagnoses if d.check_id not in known]
+    seq = sum(1 for g in model.gaps if g.id.startswith("GAP-GUARD-"))
+
+    def _gid() -> str:
+        nonlocal seq
+        seq += 1
+        return f"GAP-GUARD-{seq:02d}"
+
     gaps: list[Gap] = []
     unreachable = [d for d in diagnoses if d.verdict == "unreachable"]
     stalled = [d for d in diagnoses if d.verdict == "stalled"]
@@ -147,10 +203,11 @@ def record(
         )
         gaps.append(
             Gap(
-                id=f"GAP-GUARD-{len(gaps) + 1:02d}",
+                id=_gid(),
                 kind="unreachable_guard",
                 subject=subject,
-                detail=d.detail + ".",
+                detail=d.detail
+                + (f". Proved on pass {pass_no}." if pass_no > 1 else "."),
                 severity="blocking",
                 workaround=(
                     "Not resolved here. Moving the setpoint to one the plant can reach would "
@@ -183,7 +240,7 @@ def record(
     if stalled:
         gaps.append(
             Gap(
-                id=f"GAP-GUARD-{len(gaps) + 1:02d}",
+                id=_gid(),
                 kind="unreachable_guard",
                 subject=", ".join(sorted({d.check_id for d in stalled})),
                 detail=(
@@ -199,7 +256,7 @@ def record(
     if unsettled:
         gaps.append(
             Gap(
-                id=f"GAP-GUARD-{len(gaps) + 1:02d}",
+                id=_gid(),
                 kind="unreachable_guard",
                 subject=", ".join(sorted({d.check_id for d in unsettled})),
                 detail=(
