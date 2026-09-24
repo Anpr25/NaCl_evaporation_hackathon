@@ -354,6 +354,11 @@ def _probe_script(loads: str, keys: list[str]) -> str:
             f'print("@@RES " + res{i} + "\\n");{NL}'
             f"com{i} := getClassComment({key});{NL}"
             f'print("@@COM " + com{i} + "\\n");{NL}'
+            # Authoritative partial flag, straight from the compiler. Name heuristics miss
+            # partial classes that are not called Partial* and do not live under BaseClasses
+            # -- Modelica.Thermal.HeatTransfer.Interfaces.Element1D is the one that bit us.
+            f"par{i} := isPartial({key});{NL}"
+            f'print("@@PAR " + String(par{i}) + "\\n");{NL}'
             f"cmp{i} := getComponents({key});{NL}"
             f'print("@@INH\\n");{NL}'
             f"inh{i} := getInheritedClasses({key});"
@@ -372,13 +377,17 @@ def _build_entries(meta_out: str, restrictions: tuple[str, ...]) -> list[Catalog
         raw[key] = {
             "restriction": _first(own, "@@RES").strip().strip(chr(34)),
             "comment": _first(own, "@@COM").strip().strip(chr(34)),
+            "is_partial": _first(own, "@@PAR").strip().strip(chr(34)) == "true",
             "rows": _parse_components(_components_echo(own)),
             "parents": _parse_omc_list(_first_brace_line(inherited)),
         }
 
     entries: list[CatalogEntry] = []
     for key, info in raw.items():
-        if info["restriction"] not in restrictions or _parent_only(key):
+        # Emit-time filter only. Partial classes are still probed above, because MSL declares
+        # connectors in partial bases and _collect_rows walks the inheritance chain through
+        # `raw` to recover them (D24). Filtering them earlier strips ports off their children.
+        if info["restriction"] not in restrictions or _parent_only(key) or info["is_partial"]:
             continue
         params: list[CatalogParam] = []
         ports: list[CatalogPort] = []

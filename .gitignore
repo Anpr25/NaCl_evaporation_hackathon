@@ -20,7 +20,6 @@ out/
 *_init.xml
 *_info.json
 
-# Keep the warmed replay cache: it is what makes the demo reproducible offline.
 # The warmed response cache IS committed on purpose: it is what makes `--provider replay`
 # reproduce a known-good run offline in ~50 s instead of 13 minutes, with no daemon, no keys
 # and no quota. 155 KB, and it is the demo-day safety net.
