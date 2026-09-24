@@ -141,6 +141,25 @@ class DocxAdapter(Adapter):
             doc.blocks.append(
                 DocBlock("table", render_table(rows), Locator(section=f"table{ti}"), rows=rows)
             )
+        # A diagram pasted into a design note is exactly the kind of evidence the vision tier
+        # needs; without this, the doc's prose reaches extraction but any embedded P&ID clone
+        # or sketch would silently vanish.
+        for ii, rel in enumerate((r for r in d.part.rels.values() if "image" in r.reltype), 1):
+            label = f"{path.name} image{ii}"
+            try:
+                from PIL import Image
+
+                img = Image.open(io.BytesIO(rel.target_part.blob))
+                buf = io.BytesIO()
+                img.convert("RGB").save(buf, format="PNG")
+                png_bytes = buf.getvalue()
+            except Exception as exc:
+                doc.warnings.append(f"embedded image {ii} could not be read ({exc}); skipped")
+                continue
+            blocks, warn = _image_blocks(png_bytes, label, Locator(section=f"image{ii}"))
+            doc.blocks.extend(blocks)
+            if warn:
+                doc.warnings.append(f"tiling skipped for embedded image {ii}: {warn}")
         return doc
 
 
@@ -315,44 +334,54 @@ class ModelicaAdapter(Adapter):
         return doc
 
 
+def _image_blocks(data: bytes, label: str, base_locator: Locator) -> tuple[list[DocBlock], str | None]:
+    """Full image plus (if large) overlapping 2x2 tiles, as image DocBlocks.
+
+    Shared by ImageAdapter (standalone image files) and DocxAdapter (images embedded in a Word
+    doc): a P&ID at full page scale loses small tag bubbles; overlapping tiles recover them
+    without a bigger model. Returns (blocks, warning) rather than writing to doc.warnings
+    directly, since this has no Document of its own to write to.
+    """
+    blocks = [DocBlock("image", f"[{label}]", base_locator, image=data)]
+    try:
+        from PIL import Image
+
+        img = Image.open(io.BytesIO(data))
+        w, h = img.size
+        if w * h > 1_400_000:
+            cols, rows_n, ov = 2, 2, 0.12
+            for r in range(rows_n):
+                for c in range(cols):
+                    x0 = max(0, int(c * w / cols - ov * w))
+                    y0 = max(0, int(r * h / rows_n - ov * h))
+                    x1 = min(w, int((c + 1) * w / cols + ov * w))
+                    y1 = min(h, int((r + 1) * h / rows_n + ov * h))
+                    buf = io.BytesIO()
+                    img.crop((x0, y0, x1, y1)).save(buf, format="PNG")
+                    blocks.append(
+                        DocBlock(
+                            "image",
+                            f"[{label} tile r{r}c{c}]",
+                            Locator(bbox=(x0, y0, x1, y1), section=base_locator.section),
+                            image=buf.getvalue(),
+                        )
+                    )
+    except Exception as exc:
+        return blocks, str(exc)
+    return blocks, None
+
+
 class ImageAdapter(Adapter):
     name = "image"
     suffixes = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".tif", ".tiff")
 
     def parse(self, path: Path, source: Source) -> Document:
-        """Emit bytes only. Interpretation happens in extract/, on the vision tier.
-
-        Large drawings are also tiled, because a P&ID at full page scale loses small tag
-        bubbles; overlapping tiles recover them without a bigger model.
-        """
+        """Emit bytes only. Interpretation happens in extract/, on the vision tier."""
         doc = Document(source=source)
-        raw = path.read_bytes()
-        doc.blocks.append(DocBlock("image", f"[{path.name}]", Locator(), image=raw))
-        try:
-            from PIL import Image
-
-            img = Image.open(io.BytesIO(raw))
-            w, h = img.size
-            if w * h > 1_400_000:
-                cols, rows_n, ov = 2, 2, 0.12
-                for r in range(rows_n):
-                    for c in range(cols):
-                        x0 = max(0, int(c * w / cols - ov * w))
-                        y0 = max(0, int(r * h / rows_n - ov * h))
-                        x1 = min(w, int((c + 1) * w / cols + ov * w))
-                        y1 = min(h, int((r + 1) * h / rows_n + ov * h))
-                        buf = io.BytesIO()
-                        img.crop((x0, y0, x1, y1)).save(buf, format="PNG")
-                        doc.blocks.append(
-                            DocBlock(
-                                "image",
-                                f"[{path.name} tile r{r}c{c}]",
-                                Locator(bbox=(x0, y0, x1, y1)),
-                                image=buf.getvalue(),
-                            )
-                        )
-        except Exception as exc:
-            doc.warnings.append(f"tiling skipped: {exc}")
+        blocks, warn = _image_blocks(path.read_bytes(), path.name, Locator())
+        doc.blocks.extend(blocks)
+        if warn:
+            doc.warnings.append(f"tiling skipped: {warn}")
         return doc
 
 

@@ -60,17 +60,30 @@ class Document:
         out = "\n\n".join(b.text for b in self.blocks if b.text)
         return out[:limit] if limit else out
 
-    def chunks(self, max_chars: int = 6000, overlap: int = 400) -> Iterable[tuple[str, Locator]]:
+    def chunks(
+        self,
+        max_chars: int = 6000,
+        overlap: int = 400,
+        kinds: tuple[str, ...] | None = None,
+    ) -> Iterable[tuple[str, Locator]]:
         """Chunk for model consumption, preserving the locator of the first block in each chunk.
 
         Chunks never straddle a table: tables go through whole, because half a table is worse
         than no table and small models will confidently misread a split one.
+
+        `kinds`, when given, restricts which block kinds are chunked at all -- e.g. the model
+        extraction path only wants prose (`heading`/`paragraph`/`list`), never a table (already
+        deterministic), a keyvalue/graph block (also deterministic), an image placeholder, or a
+        raw code dump. A block is excluded because of *what it is*, not because its text happens
+        to match something already extracted.
         """
         buf: list[str] = []
         anchor: Locator | None = None
         size = 0
         for b in self.blocks:
             if not b.text:
+                continue
+            if kinds is not None and b.kind not in kinds:
                 continue
             if b.kind == "table" and buf:
                 yield "\n".join(buf), anchor or b.locator

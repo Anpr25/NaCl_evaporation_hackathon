@@ -12,16 +12,23 @@ Two paths, and the split is the whole point:
 An extractor reports what a document *says*. It never decides what is *true*; that is the
 reconciler's job, and keeping the two apart is what makes the decision log trustworthy.
 
-Owner: A.  STATUS: deterministic path implemented; model path is scaffolded and marked TODO.
+Owner: A.  STATUS: deterministic path and model path (text + vision) both implemented.
 """
 
 from __future__ import annotations
 
 import re
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from ..ir.evidence import EvidenceClaim, Locator
 from ..ingest.base import DocBlock, Document
+from ..llm.base import LLMError
+
+#: Block kinds the model text path is allowed to see. Everything else (table/keyvalue/graph/
+#: code/image) is either already handled deterministically or goes through the vision path
+#: instead -- sending it to the text model would be a wasted call at best and a source of
+#: duplicate or garbled claims at worst.
+_PROSE_KINDS: tuple[str, ...] = ("heading", "paragraph", "list")
 
 # --------------------------------------------------------------------------- header matching
 
@@ -344,9 +351,115 @@ TEXT
 {chunk}
 """
 
+DIAGRAM_PROMPT = """\
+You are reading an engineering diagram (a P&ID, schematic or similar image).
+
+Rules:
+- Extract only components, ports and connections you can actually see labelled in the image.
+- `quote` must be the visible label or tag text next to the element -- never a description.
+- If a label is not legible, do not invent one; omit that element instead.
+- For a connection between two tags A and B, use predicate "connects_to" with subject = A and
+  value = B.
+- Only use kind: "component", "port", "connection", "domain_hint" or "note".
+"""
+
+_DIAGRAM_KINDS = {"component", "port", "connection", "domain_hint", "note"}
+
+#: Model-reported confidence is neither calibrated nor trustworthy across providers; a fixed
+#: value per path keeps EvidenceClaim.confidence meaningful (and always inside Pydantic's
+#: [0, 1] bound) regardless of what a given model happened to put in the "confidence" field.
+_TEXT_CONFIDENCE = 0.6
+_VISION_CONFIDENCE = 0.4
+
+
+def _normalise_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip())
+
+
+def _quote_ok(quote: str, haystack: str) -> bool:
+    """Whitespace-insensitive substring check: the actual fabrication guard.
+
+    Whitespace is collapsed on both sides because a chunk joins several blocks with "\\n", so a
+    real quote spanning that join (or containing an odd double space) would otherwise be a false
+    negative. Nothing else is forgiven: an invented word, number or unit still fails.
+    """
+    q = _normalise_ws(quote)
+    return bool(q) and q in _normalise_ws(haystack)
+
+
+def _quote_is_verbatim(chunk: str) -> Callable[[Any], tuple[bool, str]]:
+    """Router-level validator: only escalate/retry when a response is *entirely* useless.
+
+    Per-claim rejection happens separately, after a response has already validated -- one
+    fabricated quote among many good ones should not throw away the good ones and cost a second
+    model call.
+    """
+
+    def validate(data: Any) -> tuple[bool, str]:
+        claims = (data or {}).get("claims", [])
+        if claims and not any(_quote_ok(c.get("quote", ""), chunk) for c in claims):
+            return False, "none of the returned quotes are verbatim substrings of the source text"
+        return True, ""
+
+    return validate
+
+
+def _diagram_claims_are_plausible(data: Any) -> tuple[bool, str]:
+    for i, c in enumerate((data or {}).get("claims", [])):
+        if c.get("kind") not in _DIAGRAM_KINDS:
+            return False, f"claims[{i}]: kind '{c.get('kind')}' is not plausible from an image alone"
+        if not str(c.get("quote") or "").strip():
+            return False, f"claims[{i}]: empty quote (must cite the visible label)"
+    return True, ""
+
+
+def _to_claims(
+    data: Any,
+    doc: Document,
+    locator: Locator,
+    seq: Iterable[int],
+    tier: str,
+    confidence: float,
+    quote_check: Callable[[str], bool] | None = None,
+) -> tuple[list[EvidenceClaim], int]:
+    """Convert a validated `{"claims": [...]}` payload into EvidenceClaims.
+
+    `quote_check`, when given, drops individual claims that fail it (the verbatim check, applied
+    per-claim rather than per-response) and returns how many were dropped, so the caller can
+    record an honest warning instead of silently losing evidence.
+    """
+    claims: list[EvidenceClaim] = []
+    dropped = 0
+    for c in (data or {}).get("claims", []):
+        subject = str(c.get("subject") or "").strip()
+        quote = str(c.get("quote") or "")
+        if not subject:
+            dropped += 1
+            continue
+        if quote_check is not None and not quote_check(quote):
+            dropped += 1
+            continue
+        claims.append(
+            EvidenceClaim(
+                id=f"CLM-{next(iter(seq)):05d}",
+                source_id=doc.source.id,
+                locator=locator,
+                kind=c.get("kind", "note"),
+                subject=subject,
+                predicate=str(c.get("predicate") or ""),
+                value=c.get("value"),
+                unit=c.get("unit"),
+                quote=quote,
+                confidence=confidence,
+                extracted_by=tier,
+            )
+        )
+    return claims, dropped
+
 
 def extract_claims(docs: list[Document], router: Any | None = None) -> list[EvidenceClaim]:
-    """Run the deterministic path over everything, then the model path over unstructured prose."""
+    """Run the deterministic path over everything, then the model path over unstructured prose
+    and the vision path over any images (P&IDs, rasterised scanned pages)."""
     counter = _Counter()
     out: list[EvidenceClaim] = []
 
@@ -360,17 +473,45 @@ def extract_claims(docs: list[Document], router: Any | None = None) -> list[Evid
     if router is None:
         return out
 
-    # TODO(A): the model path.
-    #   for doc in docs:
-    #       for chunk, locator in doc.chunks():
-    #           if _already_covered(chunk, out): continue      # do not pay twice for a table
-    #           resp = router.run("extract_claim", EXTRACT_PROMPT.format(chunk=chunk),
-    #                             schema=CLAIM_SCHEMA, validator=_quote_is_verbatim(chunk))
-    #           out.extend(_to_claims(resp.data, doc, locator, resp.tier))
-    #   Then the vision path for doc.images() via router.run("read_diagram", ..., images=[...]).
-    #   The validator matters more than the prompt: reject any claim whose `quote` is not a
-    #   literal substring of the chunk. That single check removes almost all small-model
-    #   fabrication, and it is free.
+    for doc in docs:
+        for chunk, locator in doc.chunks(kinds=_PROSE_KINDS):
+            try:
+                resp = router.run(
+                    "extract_claim",
+                    EXTRACT_PROMPT.format(chunk=chunk),
+                    schema=CLAIM_SCHEMA,
+                    validator=_quote_is_verbatim(chunk),
+                )
+            except LLMError as exc:
+                doc.warnings.append(f"extract_claim failed for a chunk: {exc}")
+                continue
+            claims, dropped = _to_claims(
+                resp.data, doc, locator, counter, resp.tier, _TEXT_CONFIDENCE,
+                quote_check=lambda q, chunk=chunk: _quote_ok(q, chunk),
+            )
+            out.extend(claims)
+            if dropped:
+                doc.warnings.append(f"dropped {dropped} non-verbatim claim(s) from a chunk")
+
+        for block in doc.images():
+            try:
+                resp = router.run(
+                    "read_diagram",
+                    DIAGRAM_PROMPT,
+                    schema=CLAIM_SCHEMA,
+                    images=[block.image],
+                    validator=_diagram_claims_are_plausible,
+                )
+            except LLMError as exc:
+                doc.warnings.append(f"read_diagram failed for an image: {exc}")
+                continue
+            claims, dropped = _to_claims(
+                resp.data, doc, block.locator, counter, resp.tier, _VISION_CONFIDENCE,
+            )
+            out.extend(claims)
+            if dropped:
+                doc.warnings.append(f"dropped {dropped} implausible claim(s) from a diagram")
+
     return out
 
 

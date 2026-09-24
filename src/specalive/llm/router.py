@@ -194,8 +194,13 @@ class Router:
         retries = int(self.limits.get("max_retries_same_tier", 1))
         errors: list[str] = []
         previous_tier: str | None = None
+        #: Tiers a provider was actually called for. Skips (cache miss aside, replay-only,
+        #: unavailable, quota-exhausted) don't count -- the escalation cap limits how many real
+        #: model calls a task can make, not how far down a long chain of dead tiers we may walk
+        #: to find one that's actually up.
+        attempted = 0
 
-        for depth, tier in enumerate(chain[: max_esc + 1]):
+        for depth, tier in enumerate(chain):
             req = LLMRequest(
                 task=task,
                 prompt=prompt,
@@ -223,6 +228,11 @@ class Router:
                 errors.append(f"{tier}: quota exhausted")
                 previous_tier = tier
                 continue
+
+            if attempted >= max_esc + 1:
+                errors.append(f"{tier}: escalation cap reached ({max_esc + 1} tiers already tried)")
+                break
+            attempted += 1
 
             provider = self.provider(tier)
             assert provider is not None
