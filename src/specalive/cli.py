@@ -474,6 +474,10 @@ def ir_diff(
         ("states", {s.id for sm in a.state_machines for s in sm.states},
          {s.id for sm in b.state_machines for s in sm.states}),
         ("parameters", {p.id for p in a.parameters}, {p.id for p in b.parameters}),
+        # Naming-independent: node-to-node routes with lumped paths collapsed, and the series
+        # element set each route carries. Port and path names may differ; topology may not.
+        ("topology", set(_routes(a)), set(_routes(b))),
+        ("series groups", {(k, v) for k, v in _routes(a).items() if v}, {(k, v) for k, v in _routes(b).items() if v}),
     ):
         hit = len(got & want)
         total_hit += hit
@@ -483,6 +487,29 @@ def ir_diff(
                   f"{100 * hit // max(len(want), 1)}%", ", ".join(missing) or "-")
     con.print(t)
     con.print(f"overall recall: [bold]{100 * total_hit // max(total_ref, 1)}%[/]")
+
+
+def _routes(m) -> dict[tuple[str, str], frozenset[str]]:
+    """(source part, target part) -> series elements, collapsing lumped path blocks: a block with
+    exactly one inbound and one outbound connection whose outbound side carries series elements."""
+    ins: dict[str, list] = {}
+    outs: dict[str, list] = {}
+    for c in m.connections:
+        outs.setdefault(c.source.split(".")[0], []).append(c)
+        ins.setdefault(c.target.split(".")[0], []).append(c)
+    lumped = {b for b in outs if len(outs[b]) == 1 and len(ins.get(b, [])) == 1 and outs[b][0].series_elements}
+    routes: dict[tuple[str, str], frozenset[str]] = {}
+    for c in m.connections:
+        src, dst = c.source.split(".")[0], c.target.split(".")[0]
+        if src in lumped:
+            continue
+        series = set(c.series_elements)
+        while dst in lumped:
+            nxt = outs[dst][0]
+            series |= set(nxt.series_elements)
+            dst = nxt.target.split(".")[0]
+        routes[(src, dst)] = frozenset(series)
+    return routes
 
 
 if __name__ == "__main__":

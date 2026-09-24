@@ -83,42 +83,119 @@ def parse_value(raw: str) -> tuple[Any, str | None]:
 # --------------------------------------------------------------------------- deterministic
 
 
+#: Small tables are registers; long ones are datasets (a 600-row trace is not 600 facts).
+_REGISTER_MAX_ROWS = 200
+_HEADER_UNIT = re.compile(r"^(?P<base>.*?)\s*\((?P<unit>[^()]{1,12})\)\s*$")
+
+
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", (text or "").lower()).strip("_")
+
+
+def column_predicates(header: list[str]) -> tuple[dict[int, str], dict[int, str], int]:
+    """Map every named column of a table to a predicate, not just the recognised ones.
+
+    Returns (predicate per column, unit declared in the header per column, number of columns
+    that matched the shared vocabulary). Three rules keep this lossless without guessing:
+
+      * a header carrying its own unit, 'Area (m^2)', is a quantity and is named by its own
+        words ('area'), never by a synonym that happens to share a first word;
+      * an unrecognised header keeps its own name as the predicate, so a column the vocabulary
+        has never seen still reaches the reconciler instead of being silently dropped;
+      * two columns may not claim the same predicate: the exact synonym match keeps it and the
+        other falls back to its own name ('From' -> from, 'From Port' -> from_port).
+    """
+    preds: dict[int, str] = {}
+    units: dict[int, str] = {}
+    exact: dict[str, int] = {}
+    recognised = 0
+    for j, raw in enumerate(header):
+        raw = (raw or "").strip()
+        if not raw:
+            continue
+        if m := _HEADER_UNIT.match(raw):
+            units[j] = m.group("unit").strip()
+            preds[j] = _slug(m.group("base")) or _slug(raw)
+            continue
+        canonical = normalise_header(raw)
+        if canonical is None:
+            preds[j] = _slug(raw)
+            continue
+        recognised += 1
+        is_exact = _slug(raw).replace("_", " ") in HEADER_SYNONYMS[canonical]
+        holder = exact.get(canonical)
+        if holder is None:
+            preds[j], exact[canonical] = canonical, j
+        elif is_exact and _slug(header[holder]).replace("_", " ") not in HEADER_SYNONYMS[canonical]:
+            preds[holder], preds[j], exact[canonical] = _slug(header[holder]), canonical, j
+        else:
+            preds[j] = _slug(raw)
+    return preds, units, recognised
+
+
 def claims_from_table(doc: Document, block: DocBlock, seq: Iterable[int]) -> list[EvidenceClaim]:
-    """Lift one table into claims, one per non-empty cell under a recognised header."""
+    """Lift one table into claims, one per non-empty cell under a named header.
+
+    The subject of a row is its id column, or -- when no column is recognisably an id -- its
+    first column, which is where every register we have seen puts the row's name.
+    """
     rows = block.rows or []
-    if len(rows) < 2:
+    if len(rows) < 2 or (block.data or {}).get("role") == "timeseries":
         return []
 
     # Find the header row: the one with the most recognisable column names in the first 5 rows.
-    best_idx, best_map = 0, {}
+    best_idx, best_map, best_units, best_hits = 0, {}, {}, 0
     for i, row in enumerate(rows[:5]):
-        mapping = {j: normalise_header(c) for j, c in enumerate(row)}
-        mapping = {j: p for j, p in mapping.items() if p}
-        if len(mapping) > len(best_map):
-            best_idx, best_map = i, mapping
-    if len(best_map) < 2:
-        return []
+        preds, units, hits = column_predicates(row)
+        if hits > best_hits:
+            best_idx, best_map, best_units, best_hits = i, preds, units, hits
+    if best_hits < 2:
+        # Too few familiar headers to trust a vocabulary match. A short table still has a header:
+        # by convention the first row with at least two named columns.
+        if len(rows) > _REGISTER_MAX_ROWS:
+            return []
+        first = next((i for i, row in enumerate(rows[:5]) if sum(1 for c in row if (c or "").strip()) >= 2), None)
+        if first is None:
+            return []
+        best_idx = first
+        best_map, best_units, _ = column_predicates(rows[first])
 
     id_col = next((j for j, p in best_map.items() if p == "id"), None)
+    if id_col is None:
+        # An identifier has to identify: take the first column whose values are all distinct
+        # ('Tank | B1', 'Tank | B2' is keyed by the second column, not the first).
+        body = rows[best_idx + 1 :]
+        for j in sorted(best_map):
+            vals = [(r[j] or "").strip() for r in body if j < len(r) and (r[j] or "").strip()]
+            if vals and len(vals) == len(set(vals)):
+                id_col = j
+                break
+        if id_col is None:
+            return []
     out: list[EvidenceClaim] = []
     sheet = (block.data or {}).get("sheet") or block.locator.sheet
 
     for r, row in enumerate(rows[best_idx + 1 :], start=best_idx + 2):
-        subject = (row[id_col].strip() if id_col is not None and id_col < len(row) else "")
+        subject = (row[id_col].strip() if id_col < len(row) else "")
         if not subject:
             continue
         for j, predicate in best_map.items():
-            if predicate == "id" or j >= len(row):
+            if j == id_col or j >= len(row):
                 continue
             cell = (row[j] or "").strip()
             if not cell:
                 continue
             value, unit = parse_value(cell)
+            if unit is None and j in best_units and isinstance(value, (int, float)):
+                unit = best_units[j]
             out.append(
                 EvidenceClaim(
                     id=f"CLM-{next(iter(seq)):05d}",
                     source_id=doc.source.id,
-                    locator=Locator(sheet=sheet, cell=f"{_col_letter(j)}{r}", page=block.locator.page),
+                    locator=Locator(
+                        sheet=sheet, cell=f"{_col_letter(j)}{r}", page=block.locator.page,
+                        section=block.locator.section,
+                    ),
                     kind=_kind_for(predicate),
                     subject=subject,
                     predicate=predicate,
