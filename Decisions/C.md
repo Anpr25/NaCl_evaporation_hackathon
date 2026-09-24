@@ -16,7 +16,66 @@ gracefully.
 
 ---
 
-## 2026-09-24 (latest) — C-AI-1..5 built and measured, plus a diagram layout
+## 2026-09-24 (latest) — what is left in C, and what I propose we drop
+
+**Two tasks measured their way off the list, two stay, one is new and urgent.**
+
+### ⚠ The finding that matters most — for everyone, not just C
+
+The pipeline now runs **without `--reference-ir`** and reports `HARD GATE MET`. That is true
+and it is hollow:
+
+```
+specalive run <packet> --provider none            (no fixture IR)
+  ok   modelica  L0=9, L1=6
+  ok   compile   + simulate
+  HARD GATE MET
+  warn verify    0/10 acceptance checks passed     <- nothing actually happens
+```
+
+83% IR recall is enough to build a model that compiles and **not** enough to build one that
+runs a batch. The missing 17% is load-bearing: `cmd_heater`, `cmd_coolB6`, `cmd_coolB7` and
+four `Bn.out -> L_Vn.port_a` connections. No heater command means no evaporation, so every
+threshold check fails.
+
+With the fixture IR it is 11/12. Without it, 0/10.
+
+**This is a demo risk, not a scoring detail.** A judge supplies a spec; we will not have a
+reference IR for it. And "HARD GATE MET" printed above "0/10" is the one thing in this repo
+that currently reads as a silent pass. C owns the gate's meaning, so I am taking it.
+
+### Dropping C2 (embeddings) — measured, not assumed
+
+Binding is **identical** with the picker live and with it off, on both packets:
+
+| | BM25 only | picker live (Groq) |
+|:--|:--|:--|
+| NaCl, no fixture IR | L0=9, L1=6 | L0=9, L1=6 |
+| drivetrain | L0=6 | L0=6 |
+
+The 5/10 I measured earlier was on hand-written *probe* queries, not on blocks the pipeline
+actually binds. On real blocks BM25 and the picker agree every time. Embeddings would also
+need Ollama, which is not on this machine. **Unproven value, real cost — dropped.**
+`scripts/retrieval_probe.py` stays as the scoreboard if anyone wants to revisit it.
+
+### Dropping C3 (L1 templates for rotational / thermal / electrical)
+
+The drivetrain binds **6 of 6 at L0**, straight to harvested MSL classes. The templates were
+insurance against catalog gaps in those domains and the gap has not appeared. Writing them now
+would be work whose only evidence is that it might help on a packet we have not seen — and the
+L0→L1→L2 cascade already degrades safely if it does. **Dropped.**
+
+### What stays
+
+| # | Task | Why it stays |
+|:--|:--|:--|
+| **C10** | Make the gate honest: a model that compiles but does nothing must not read as a pass | The 0/10 finding above. Highest priority in C |
+| **C5** | More deterministic fixers, aimed at the three faults still reaching the model | Each one is a model call never made — the thesis, literally. And the fault matrix names the targets |
+| **C6** | Tier-2 acausal `Modelica.Fluid` + WaterNaCl | Stretch. Closes OPEN-ISSUE-03 and -04, and REQ-MOD-003 explicitly asks for the pump-start defect to be documented. A working prototype already exists |
+
+---
+
+## 2026-09-24 (earlier) — C-AI-1..5 built and measured, plus a diagram layout
 
 **Status: implemented.** Groq is live (`t3_cloud_reasoning: up, openai/gpt-oss-120b`).
 94 fast tests green, gate green, both benches green.
