@@ -288,3 +288,141 @@ def test_liveness_survives_a_result_file_it_cannot_read(tmp_path):
 
     assert not liveness(tmp_path / "missing.csv").ok
     assert not liveness(_csv(tmp_path, "head.csv", ["time", "a"], [])).ok
+
+
+# ------------------------------------------------- C5: fixes that used to cost a model call
+
+
+class _Port:
+    def __init__(self, name, type_):
+        self.name, self.type = name, type_
+
+
+class _Param:
+    def __init__(self, name):
+        self.name, self.type = name, "Real"
+
+
+class _Cat:
+    """A two-class catalog: a vessel with directional ports and the path that mates with it."""
+
+    def __init__(self):
+        self._e = {
+            "SpecAlive.Vessels.Reservoir": type("E", (), {
+                "key": "SpecAlive.Vessels.Reservoir",
+                "params": [_Param(n) for n in ("area", "levelMax", "level_start")],
+                "ports": [_Port("inlet", "SpecAlive.Interfaces.Inlet"),
+                          _Port("outlet", "SpecAlive.Interfaces.Outlet")],
+            })(),
+            "SpecAlive.Transport.Path": type("E", (), {
+                "key": "SpecAlive.Transport.Path",
+                "params": [_Param("m_flow_nominal")],
+                "ports": [_Port("port_a", "SpecAlive.Interfaces.Suction"),
+                          _Port("port_b", "SpecAlive.Interfaces.Discharge")],
+            })(),
+        }
+        self.entries = list(self._e.values())
+
+    def get(self, key):
+        return self._e.get(key)
+
+
+# Two transfer legs, not one. The type-compatibility fixer learns which connectors mate from
+# the model's own working connects, so it needs at least one intact example of the pair it is
+# trying to resolve -- a real limitation, and the reason this fixture is not smaller.
+_PLANT = """model Plant
+  SpecAlive.Vessels.Reservoir B1(area = 0.07);
+  SpecAlive.Vessels.Reservoir B3(area = 0.05);
+  SpecAlive.Vessels.Reservoir B4(area = 0.055);
+  SpecAlive.Transport.Path L_V8(m_flow_nominal = 0.02);
+  SpecAlive.Transport.Path L_V11(m_flow_nominal = 0.06);
+equation
+  connect(B1.outlet[1], L_V8.port_a);
+  connect(L_V8.port_b, B3.inlet[1]);
+  connect(B3.outlet[1], L_V11.port_a);
+  connect(L_V11.port_b, B4.inlet[1]);
+end Plant;
+"""
+
+
+def test_a_misspelled_class_is_corrected_against_the_catalog():
+    """Used to cost a model round trip. The catalog holds every class that exists, so the
+    correction is a lookup and cannot invent a class we did not harvest."""
+    from specalive.repair.loop import fix_unknown_class
+
+    src = _PLANT.replace("Vessels.Reservoir B1", "Vessels.Resevoir B1")
+    diag = Diagnostic(kind="undeclared",
+                      message="Error: Class SpecAlive.Vessels.Resevoir not found in scope Plant.",
+                      line=2, raw="")
+    out = fix_unknown_class(src, diag, _Cat())
+    assert out is not None
+    assert "SpecAlive.Vessels.Reservoir B1" in out[0]
+    assert "Resevoir" not in out[0]
+
+
+def test_a_renamed_modifier_is_corrected_by_containment_not_edit_distance():
+    """`surfaceArea` and `area` score 0.53 on difflib -- below any cutoff worth trusting --
+    yet one name contains the other and the intent is unmistakable. Checking containment
+    before the ratio is what lets the ratio cutoff stay strict."""
+    from specalive.repair.loop import _closest, fix_wrong_modifier
+
+    import difflib
+    assert difflib.SequenceMatcher(None, "surfaceArea", "area").ratio() < 0.8
+    assert _closest("surfaceArea", ["area", "levelMax"]) == "area"
+
+    src = _PLANT.replace("B1(area", "B1(surfaceArea")
+    diag = Diagnostic(kind="other",
+                      message="Error: Modified element surfaceArea not found in class Reservoir.",
+                      line=2, raw="")
+    out = fix_wrong_modifier(src, diag, _Cat())
+    assert out is not None and "B1(area = 0.07)" in out[0]
+
+
+def test_an_unknown_connector_is_resolved_by_type_compatibility():
+    """The interesting one. `nonexistent_port` resembles neither `inlet` nor `outlet`, so a
+    fuzzy match would guess or give up. But the peer on the other end has a type, and the
+    file's own working connects say which types mate -- leaving exactly one candidate.
+    Nothing here knows what a fluid is: the compatibility relation is read off the model."""
+    from specalive.repair.loop import _observed_pairs, fix_unknown_connector
+
+    pairs = _observed_pairs(_PLANT, _Cat())
+    assert "SpecAlive.Interfaces.Outlet" in pairs["SpecAlive.Interfaces.Suction"]
+
+    src = _PLANT.replace("B1.outlet[1]", "B1.nonexistent_port[1]")
+    diag = Diagnostic(kind="undeclared",
+                      message="Error: Variable B1.nonexistent_port[1] not found in scope Plant.",
+                      line=6, raw="")
+    out = fix_unknown_connector(src, diag, _Cat())
+    assert out is not None
+    assert "connect(B1.outlet[1], L_V8.port_a)" in out[0], out[0]
+    assert "declared by SpecAlive.Vessels.Reservoir" in out[1]
+
+
+def test_a_dropped_semicolon_is_added_to_the_line_before_the_reported_token():
+    """omc reports the position of the token it DID find, which starts the next statement, so
+    the terminator belongs on the previous line. Getting that offset wrong is why this looked
+    semantic and was going to a model."""
+    from specalive.repair.loop import fix_missing_semicolon
+
+    src = "model P\n  parameter Real a = 1 \"m\"\n  parameter Real b = 2;\nend P;\n"
+    diag = Diagnostic(kind="syntax", message="Error: Missing token: SEMICOLON", line=3, raw="")
+    out = fix_missing_semicolon(src, diag)
+    assert out is not None
+    assert 'parameter Real a = 1 "m";' in out[0]
+
+
+def test_a_dropped_semicolon_is_classified_as_syntax_so_it_outranks_its_cascade():
+    """It was classified `other`, which sorts LAST in the repair priority, so the loop chased
+    an `undeclared` error that the missing semicolon had caused. A syntax error is always the
+    root: everything after an unparseable line is a symptom."""
+    from specalive.verify.omc import parse_diagnostics
+
+    d = parse_diagnostics("[f.mo:8:5-8:5:writable] Error: Missing token: SEMICOLON")
+    assert d and d[0].kind == "syntax"
+
+
+def test_closest_refuses_when_nothing_is_close():
+    """A fixer that always answers is worse than one that declines: a wrong rename compiles."""
+    from specalive.repair.loop import _closest
+
+    assert _closest("completelyUnrelated", ["area", "levelMax"]) is None

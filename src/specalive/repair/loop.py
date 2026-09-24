@@ -21,7 +21,7 @@ import difflib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from ..verify.omc import Diagnostic, OmcResult, OmcRunner
 
@@ -182,14 +182,218 @@ def fix_missing_initial_condition(src: str, diag: Diagnostic) -> tuple[str, str]
     )
 
 
+def fix_missing_semicolon(src: str, diag: Diagnostic) -> tuple[str, str] | None:
+    """C5. `Missing token: SEMICOLON`.
+
+    omc reports the position of the token it *did* find, which is the start of the next
+    statement, so the terminator belongs on the previous non-blank line -- not the one the
+    diagnostic points at. Getting that offset wrong is why this looked like a semantic
+    failure and was going to a model.
+    """
+    if "SEMICOLON" not in diag.message.upper() or not diag.line:
+        return None
+    lines = src.splitlines()
+    i = diag.line - 2  # -1 for 0-based, -1 again for "the line before the reported token"
+    while i >= 0 and not lines[i].strip():
+        i -= 1
+    if i < 0:
+        return None
+    text = lines[i].rstrip()
+    if not text or text.endswith((";", "{", "}", "(", ",")) or text.lstrip().startswith("//"):
+        return None
+    lines[i] = text + ";"
+    return "\n".join(lines) + "\n", f"added the missing semicolon on line {i + 1}"
+
+
 DETERMINISTIC_FIXERS: tuple[Fixer, ...] = (
     fix_discrete_loop,
     fix_missing_inner,
     fix_undeclared_typo,
     fix_partial_type_binding,
     fix_missing_initial_condition,
+    fix_missing_semicolon,
     fix_unbalanced_system,
     fix_unit_annotation,
+)
+
+
+# ------------------------------------------------------------------ catalog-grounded fixes
+#
+# C5. These need the harvested catalog, so they take it as a third argument and run after the
+# plain fixers. The reason they belong in code rather than in a prompt: the compiler names the
+# thing it could not find, and the catalog holds the verified list of what *does* exist. A
+# closest-match lookup against ground truth is exact, free and offline -- and a model asked the
+# same question can only recall the list, which is the one thing it is worst at.
+#
+# Each of these was recovered by the model before, at a round trip apiece. Every one moved here
+# is a model call never made.
+
+CatalogFixer = Callable[[str, Diagnostic, Any], "tuple[str, str] | None"]
+
+
+def _closest(name: str, options: Iterable[str], cutoff: float = 0.8) -> str | None:
+    """Nearest name, by case, then containment, then edit distance.
+
+    Edit distance alone is the wrong instrument and it is worth saying why: `surfaceArea` and
+    `area` score 0.53, below any cutoff you would trust, yet the intent is unmistakable --
+    one name contains the other. Containment catches the rename-with-a-prefix case that pure
+    ratio misses, and checking it before the ratio means the cutoff can stay strict.
+    """
+    opts = sorted(set(options))
+    if not opts:
+        return None
+    lower = name.lower()
+    for o in opts:
+        if o.lower() == lower:
+            return o
+    contained = [o for o in opts if o.lower() in lower or lower in o.lower()]
+    if len(contained) == 1:
+        return contained[0]
+    if contained:
+        return max(contained, key=len)
+    hit = difflib.get_close_matches(name, opts, n=1, cutoff=cutoff)
+    return hit[0] if hit else None
+
+
+def _observed_pairs(src: str, index: Any) -> dict[str, set[str]]:
+    """Connector-type pairs this file already uses, learned from its own working connects.
+
+    Used instead of hardcoding which connector mates with which. The model under repair is
+    full of `connect()` statements that *do* compile; reading the connector types off both
+    ends of those gives the compatibility relation for whatever domain this is, without the
+    fixer knowing anything about fluids, flanges or heat ports.
+    """
+    pairs: dict[str, set[str]] = {}
+    for a_comp, a_port, b_comp, b_port in re.findall(
+        r"connect\(\s*(\w+)\.(\w+)(?:\[\d+\])?\s*,\s*(\w+)\.(\w+)(?:\[\d+\])?\s*\)", src
+    ):
+        ta = _connector_type(src, index, a_comp, a_port)
+        tb = _connector_type(src, index, b_comp, b_port)
+        if ta and tb:
+            pairs.setdefault(ta, set()).add(tb)
+            pairs.setdefault(tb, set()).add(ta)
+    return pairs
+
+
+def _connector_type(src: str, index: Any, component: str, port: str) -> str | None:
+    cls = _declared_class_of(src, component)
+    entry = index.get(cls) if cls and index else None
+    if entry is None:
+        return None
+    return next((p.type for p in entry.ports if p.name == port), None)
+
+
+def _declared_class_of(src: str, component: str) -> str | None:
+    """The Modelica class a component was declared with, read back out of the source."""
+    m = re.search(rf'^\s*([\w.]+)\s+{re.escape(component)}\s*[(\[;"]', src, re.M)
+    return m.group(1) if m else None
+
+
+def fix_unknown_class(src: str, diag: Diagnostic, index: Any) -> tuple[str, str] | None:
+    """`Class SpecAlive.Vessels.Resevoir not found in scope Plant.`
+
+    The catalog knows every class that exists. A single-edit distance from one of them is a
+    typo, and correcting it against the catalog cannot invent a class -- the replacement is
+    by construction one we harvested.
+    """
+    if index is None:
+        return None
+    m = re.search(r"Class ([\w.]+) not found", diag.message)
+    if not m:
+        return None
+    missing = m.group(1)
+    keys = [e.key for e in getattr(index, "entries", [])]
+    best = _closest(missing, keys, cutoff=0.85)
+    if not best or best == missing:
+        return None
+    return (
+        re.sub(rf"(?<![\w.]){re.escape(missing)}(?![\w.])", best, src),
+        f"corrected class '{missing}' to '{best}' (nearest in the catalog)",
+    )
+
+
+def fix_wrong_modifier(src: str, diag: Diagnostic, index: Any) -> tuple[str, str] | None:
+    """`Modified element surfaceArea not found in class Reservoir.`
+
+    omc gives the class's short name, so the full path comes from the declaring line, and the
+    catalog then gives the real parameter list. Scoped to that one line: the same modifier
+    name may be correct on a different class elsewhere in the file.
+    """
+    if index is None or not diag.line:
+        return None
+    m = re.search(r"Modified element (\w+) not found in class ([\w.]+)", diag.message)
+    if not m:
+        return None
+    bad = m.group(1)
+    lines = src.splitlines()
+    i = diag.line - 1
+    if not 0 <= i < len(lines) or bad not in lines[i]:
+        return None
+    cls = re.match(r"\s*([\w.]+)\s+\w+\s*\(", lines[i])
+    entry = index.get(cls.group(1)) if cls else None
+    if entry is None:
+        return None
+    best = _closest(bad, [p.name for p in entry.params])
+    if not best:
+        return None
+    lines[i] = re.sub(rf"\b{re.escape(bad)}\b(\s*=)", rf"{best}\1", lines[i], count=1)
+    return (
+        "\n".join(lines) + "\n",
+        f"renamed modifier '{bad}' to '{best}' on {cls.group(1)} (from the catalog)",
+    )
+
+
+def fix_unknown_connector(src: str, diag: Diagnostic, index: Any) -> tuple[str, str] | None:
+    """`Variable B1.nonexistent_port[1] not found in scope Plant.`
+
+    Find what class B1 was declared with, ask the catalog for its real connectors, take the
+    nearest. The array subscript is preserved: `inlet[1]` and `inlet` are the same connector.
+    """
+    if index is None:
+        return None
+    m = re.search(r"Variable ([A-Za-z_]\w*)\.([A-Za-z_]\w*)(\[\d+\])? not found", diag.message)
+    if not m:
+        return None
+    comp, port, sub = m.group(1), m.group(2), m.group(3) or ""
+    cls = _declared_class_of(src, comp)
+    entry = index.get(cls) if cls else None
+    if entry is None:
+        return None
+    names = [p.name for p in entry.ports]
+
+    # Prefer type compatibility over name similarity. `nonexistent_port` resembles neither
+    # `inlet` nor `outlet`, so a fuzzy match would either guess or give up -- but the peer on
+    # the other side of the connect has a type, and the file's own working connects say which
+    # types mate. When that leaves exactly one candidate the answer is not a guess.
+    best: str | None = None
+    peer = re.search(
+        rf"connect\(\s*{re.escape(comp)}\.{re.escape(port)}(?:\[\d+\])?\s*,\s*(\w+)\.(\w+)|"
+        rf"connect\(\s*(\w+)\.(\w+)(?:\[\d+\])?\s*,\s*{re.escape(comp)}\.{re.escape(port)}",
+        src,
+    )
+    if peer:
+        pc, pp = (peer.group(1), peer.group(2)) if peer.group(1) else (peer.group(3), peer.group(4))
+        peer_type = _connector_type(src, index, pc, pp)
+        if peer_type:
+            mates = _observed_pairs(src, index).get(peer_type, set())
+            viable = [p.name for p in entry.ports if p.type in mates]
+            if len(viable) == 1:
+                best = viable[0]
+
+    if best is None:
+        best = _closest(port, names, cutoff=0.6)
+    if not best or best == port:
+        return None
+    return (
+        src.replace(f"{comp}.{port}{sub}", f"{comp}.{best}{sub}"),
+        f"corrected connector '{comp}.{port}' to '{comp}.{best}' (declared by {cls})",
+    )
+
+
+CATALOG_FIXERS: tuple[CatalogFixer, ...] = (
+    fix_unknown_class,
+    fix_wrong_modifier,
+    fix_unknown_connector,
 )
 
 
@@ -424,6 +628,17 @@ class RepairLoop:
                 continue
             if result is not None:
                 return result[0], "deterministic", result[1]
+
+        # C5. Then the ones that need ground truth. Still no tokens spent: the compiler names
+        # what it could not find and the catalog holds what exists, so the correction is a
+        # lookup, not a recollection.
+        for cfixer in CATALOG_FIXERS:
+            try:
+                result = cfixer(source, diag, self.index)
+            except Exception:
+                continue
+            if result is not None:
+                return result[0], "catalog", result[1]
 
         if self.router is None:
             return None, "deterministic", "no deterministic fixer matched and no router configured"

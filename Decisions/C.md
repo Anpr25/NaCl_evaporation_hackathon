@@ -16,7 +16,74 @@ gracefully.
 
 ---
 
-## 2026-09-24 (latest) — C10 done: the gate now says when a model runs but does nothing
+## 2026-09-25 — C5 done: four more fixes that no longer cost a model call
+
+**Status: implemented, not committed.** 105 fast tests green, gate green, both benches green.
+
+```
+                    before C5      after C5
+no model at all        2/8           6/8
+with the agent         5/8           7/8
+```
+
+Four of the eight faults moved out of the model's hands entirely, and the agent's own score
+went up too — because it now spends its budget on the one thing left that is genuinely
+semantic instead of on renames.
+
+| Fault | Was | Now |
+|:--|:--|:--|
+| F02 renamed connector | model | **catalog** |
+| F06 dropped semicolon | unfixed | **deterministic** |
+| F07 unknown class | model | **catalog** |
+| F08 wrong parameter | model | **catalog** |
+| F04 partial type | gap | model, 3 iterations |
+| F09 dropped connection | gap | gap — correctly |
+
+F09 stays a gap and should: a deleted `connect()` leaves nothing to infer the intent from.
+
+### A new fixer family: catalog-grounded
+
+`CATALOG_FIXERS` run after the plain ones and take the harvested catalog as a third argument.
+The reason they belong in code rather than a prompt: **the compiler names the thing it could
+not find, and the catalog holds the verified list of what does exist.** A lookup against ground
+truth is exact, free and offline; a model asked the same question can only recall the list,
+which is the one thing it is worst at.
+
+### Three things that did not work, and what replaced them
+
+**Edit distance is the wrong instrument for renames.** `surfaceArea` and `area` score **0.53**
+on difflib — below any cutoff worth trusting — yet one name contains the other and the intent
+is unmistakable. `_closest` now tries exact-ignoring-case, then containment, then the ratio.
+Checking containment first is what lets the cutoff stay strict instead of being lowered until
+it starts producing wrong renames.
+
+**Fuzzy matching cannot resolve a connector at all.** `nonexistent_port` resembles neither
+`inlet` nor `outlet`; any similarity threshold either guesses or gives up. What works is
+**type compatibility learned from the model's own working connects**: read the connector types
+off both ends of every `connect()` that does compile, which gives the mating relation for
+whatever domain this is, then intersect with the broken component's connectors. On the NaCl
+plant that leaves exactly one candidate — `B1.outlet` — and it is not a guess. Nothing in the
+fixer knows what a fluid is; the relation is read off the model. Documented limitation: it
+needs at least one intact example of the pair, which is why the unit-test fixture has two
+transfer legs rather than one.
+
+**A correct fixer is useless if the loop never reaches its diagnostic.** `fix_missing_semicolon`
+worked from the first attempt and F06 still failed, because omc words that error
+`Missing token: SEMICOLON`, which matched no pattern and was classified `other` — **last** in
+the repair priority. The loop kept picking an `undeclared` error that the missing semicolon
+had *caused*. Everything after an unparseable line is a symptom, so `Missing token` is now
+classified `syntax`, which sorts first. One word in a regex, and the fault went from unfixable
+to fixed in one iteration.
+
+### ⚠ Affects you
+
+**D — `RepairStep.method` has a third value, `"catalog"`,** alongside `deterministic` and
+`model`. Worth splitting out in the report: it is the tier that costs nothing and is not a
+regex, and the three-way breakdown is a better architecture slide than a two-way one.
+
+---
+
+## 2026-09-24 — C10 done: the gate now says when a model runs but does nothing
 
 **Status: implemented.** 99 fast tests green, gate green, both benches green.
 

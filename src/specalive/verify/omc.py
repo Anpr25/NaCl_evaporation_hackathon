@@ -123,7 +123,11 @@ _PATTERNS: tuple[tuple[DiagKind, re.Pattern[str]], ...] = (
     ("unbalanced_system", re.compile(r"has (\d+) equation\(s\) and (\d+) variable\(s\)", re.I)),
     ("initialization", re.compile(r"initialization .*(failed|problem)|too many initial", re.I)),
     ("unit", re.compile(r"[Uu]nit .*(inconsistent|mismatch)", re.I)),
-    ("syntax", re.compile(r"Parse error|syntax error|unexpected token", re.I)),
+    # `Missing token: SEMICOLON` is a parse failure, and omc words it differently from its
+    # other syntax errors. Classified as `other` it sorted LAST in the repair priority, so the
+    # loop chased an `undeclared` cascade instead of the one error causing it -- a dropped
+    # semicolon makes everything after it unparseable. A syntax error is always the root.
+    ("syntax", re.compile(r"Parse error|syntax error|unexpected token|Missing token", re.I)),
     ("build", re.compile(r"Failed to build model", re.I)),
     ("runtime", re.compile(r"Simulation (?:execution )?failed|solver failed|nonlinear system.*fail", re.I)),
 )
