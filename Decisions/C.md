@@ -82,13 +82,83 @@ of the hard gate, and standing rule 6 says the gate is sacred. So it lands behin
 green on the bench. It becomes the demo path only once it is. That is a sequencing
 constraint, not a hedge against C-08 itself.
 
-**What C needs from B** (→ `Decisions/B.md`): the SysML surface becomes a **contract** under
-C-08, not just an output artefact. Specifically — (a) anything load-bearing currently emitted
-as a `//` comment needs to become real syntax or a stable, documented comment form, because the
-reader will depend on it; `// @lowering` and `// tier L0` are the ones I can see; (b) tell me
-whether you want to own the reader (it belongs next to the emitter) or have me write it
-against your output; (c) once C-08 lands, an emitter change that drops a field silently breaks
-the Modelica build, so emitter changes want a test.
+### C-08 audit — what the emitted SysML actually carries
+
+Done against `out/nacl/NaClEvaporationPlant.sysml` (618 lines) by enumerating every field
+`ModelicaEmitter` reads from `SystemModel` and looking for it. Four verdicts: **OK** (real
+syntax, parser just reads it), **COMMENT** (present but as a `//`, so it is a contract we have
+to freeze), **LOSSY** (present but mangled beyond unambiguous recovery), **ABSENT**.
+
+| Field the Modelica emitter needs | Carried as | Verdict |
+|:--|:--|:--|
+| block id, kind, description | `part B1 : tank { doc /* … */ }` | OK |
+| block parameters → Modelica modifiers | `attribute redefines area = 0.07; // m2` | OK |
+| `modelica_class` | `allocation B1_impl allocate B1 to Modelica::SpecAlive.Vessels.Reservoir` | OK |
+| connections | `interface C_L_V8_a connect B1.out to L_V8.port_a;` | OK *(but see D-1)* |
+| states, regions, transitions, guards | `transition T1 first Step1 if LIS_301 >= SP_B3_LVL_WATER then Step2;` | OK |
+| acceptance checks | `verification def BAT09_01 { attribute expression : String default "…"; }` | OK |
+| signal name + datatype | `attribute LIS_301 : Real;` | OK |
+| `binding_tier` | `// tier L1` | COMMENT |
+| `Connection.series_elements` | `// @series V8` | COMMENT |
+| `Signal.role` (sensor/actuator) | `// sensor` | COMMENT |
+| `Signal.binding` | `// bound to B3.level` | COMMENT |
+| **interlocks** | `// @interlock permissive on cmd_heater: …` | COMMENT |
+| state action values | `do action set_cmd_V8 { /* cmd_V8 := true */ }` — name real, value in comment | COMMENT |
+| `provenance.requirement_ids` | `// @trace satisfies REQ_THM_001` (was `REQ-THM-001`) | COMMENT + LOSSY |
+| **port name vs port id** | see D-1 below | **BROKEN** |
+| `StateMachine.scan_period` | — | ABSENT |
+| `Scenario.stop_time / interval / tolerance / solver` | — | ABSENT |
+
+**Verdict: C-08 is feasible, and the audit was worth doing first — it found a live defect.**
+
+#### D-1 · The SysML connects ports it never declares *(defect, independent of C-08)*
+
+`_emit_part_defs` declares ports using `_ident(p.name)`; `_emit_connection` references them
+using `_ident(p.id)`. For the 15 ports in the reference IR where `id != name`, those are
+different strings:
+
+```
+part def tank {
+    port inlet_1_  : FluidInPort;      <-- declared from p.name "inlet[1]"
+    port outlet_1_ : FluidOutPort;
+}
+...
+interface C_L_V8_a connect B1.out to L_V8.port_a;   <-- references p.id "out"
+```
+
+`B1.out` is not a declared port of `tank`. The SysML is internally inconsistent today and
+would fail validation in a real SysML v2 tool. `round_trip_check` does not catch it because it
+renders the expected pair with the same id-based function it is checking against.
+
+This is C-04 resurfacing one layer up, and it is a **hard blocker for C-08**: a reader cannot
+resolve `B1.out` to a Modelica connector, because the mapping `out → outlet[1]` exists only in
+the IR.
+
+It is also **LOSSY in the other direction**: `_ident("inlet[1]")` → `inlet_1_`, and
+`inlet_1_` cannot be mapped back to `inlet[1]` unambiguously — a component could legitimately
+have a connector called `inlet_1_`. So even fixing the id/name confusion is not enough; the
+subscript has to survive.
+
+**What C needs from B** (→ `Decisions/B.md`), in priority order:
+
+1. **Fix D-1.** Declare and reference the *same* thing. My suggestion: declare ports by IR
+   **id** (stable, already what interfaces use) and carry the Modelica connector name
+   explicitly, e.g. `port out : FluidOutPort; // @connector outlet[1]`. That keeps the SysML
+   self-consistent and makes the id→name mapping recoverable. Worth fixing on its own merits
+   even if C-08 slipped.
+2. **Freeze the COMMENT forms** listed above, or promote them to real syntax. Seven fields ride
+   in comments and four of them are load-bearing: `// @series`, `// sensor`, `// bound to` and
+   `// @interlock`. The interlocks are the ones that worry me — they carry REQ-SAF-001/003/004/005,
+   and a reader that misses them produces a model with the **safety interlocks silently
+   removed**, which compiles and simulates perfectly.
+3. **Decide where ABSENT fields live.** `scan_period`, `stop_time`, `tolerance`, `solver` are
+   simulation concerns, not system-model ones, so I am happy for these to stay on the IR side
+   and be passed to the emitter separately — but that must be a stated decision, not an
+   accident, or C-08 is not a clean derivation.
+4. **Reader ownership.** It belongs next to your emitter, since they change together. Tell me
+   if you want it; otherwise I write it and you review.
+5. Once C-08 lands, an emitter change that drops a field breaks the Modelica build. Emitter
+   changes want a test.
 
 ### Repair
 
