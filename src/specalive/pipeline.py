@@ -71,10 +71,12 @@ class PipelineConfig:
     skip_simulation: bool = False
 
 
-#: A pass is only repeated when it added a declared fallback, and `apply_declared_fallbacks`
-#: never backs up the same transition twice, so this terminates on its own. The cap is here
-#: so a bug cannot turn that into an unbounded loop of omc invocations.
-MAX_BUILD_PASSES = 3
+#: A pass is only repeated when it added a declared fallback, and each blocked transition is
+#: backed up at most once, so this terminates on its own. It needs room to run because
+#: fallbacks are applied one step per region per pass -- fixing a cascade in one go measures
+#: downstream steps against a trace where their predecessor was still deadlocked. The cap is
+#: here so a bug cannot turn that into an unbounded loop of omc invocations.
+MAX_BUILD_PASSES = 6
 
 
 @dataclass
@@ -339,12 +341,17 @@ class Pipeline:
             g for g in model.gaps
             if not (g.id.startswith("GAP-GUARD-") and g.severity != "blocking")
         ]
+        # Plan the fallbacks before recording anything: a verdict on a step downstream of a
+        # deadlock we are about to remove is not evidence, and recording it would lock in a
+        # contradiction that the next pass disproves.
+        plan = apply_declared_fallbacks(model, diagnoses, diag_log)
         model.gaps.extend(
             record(model, diagnoses, diag_log,
-                   already_known=self._contradicted, pass_no=self._pass)
+                   already_known=self._contradicted | plan.deferred, pass_no=self._pass)
         )
         self._contradicted.update(
-            d.check_id for d in diagnoses if d.verdict == "unreachable"
+            d.check_id for d in diagnoses
+            if d.verdict == "unreachable" and d.check_id not in plan.deferred
         )
         self.result.diagnoses = diagnoses
 
@@ -366,7 +373,7 @@ class Pipeline:
         # exactly as written and adds a marked fallback beside it. The contradiction stays
         # flagged and the setpoint stays untouched; what changes is how much of the sequence
         # we can actually exercise and show. See ir/fallback.py.
-        fallbacks = apply_declared_fallbacks(model, diagnoses, diag_log)
+        fallbacks = plan.added
         diag_log.attach(model)
         if fallbacks:
             yield self._emit(

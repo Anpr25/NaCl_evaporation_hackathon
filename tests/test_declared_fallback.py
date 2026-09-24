@@ -99,7 +99,7 @@ def test_the_specified_guard_is_never_touched():
 
 def test_the_fallback_is_a_separate_marked_transition():
     m = _plant()
-    (fb,) = apply_declared_fallbacks(m, [_unreachable()], AssumptionLog())
+    (fb,) = apply_declared_fallbacks(m, [_unreachable()], AssumptionLog()).added
     assert fb.declared_fallback and fb.fallback_for == "T56"
     assert (fb.source_state, fb.target_state) == ("Step5", "Step6")
     assert "SA-05" in (fb.provenance.note or "")
@@ -107,18 +107,18 @@ def test_the_fallback_is_a_separate_marked_transition():
 
 def test_the_dwell_comes_from_the_observed_rise_not_a_constant():
     m = _plant()
-    (fb,) = apply_declared_fallbacks(m, [_unreachable(rise=216.0)], AssumptionLog())
+    (fb,) = apply_declared_fallbacks(m, [_unreachable(rise=216.0)], AssumptionLog()).added
     assert fb.dwell_timeout == 270.0  # 216 * 1.25
 
     m2 = _plant()
-    (fb2,) = apply_declared_fallbacks(m2, [_unreachable(rise=400.0)], AssumptionLog())
+    (fb2,) = apply_declared_fallbacks(m2, [_unreachable(rise=400.0)], AssumptionLog()).added
     assert fb2.dwell_timeout == 500.0
 
 
 def test_a_fast_signal_still_gets_a_floor():
     """A dwell of nearly zero would pre-empt a guard that was about to become true."""
     m = _plant()
-    (fb,) = apply_declared_fallbacks(m, [_unreachable(rise=0.1)], AssumptionLog())
+    (fb,) = apply_declared_fallbacks(m, [_unreachable(rise=0.1)], AssumptionLog()).added
     assert fb.dwell_timeout == 2.0  # 20 scans of 0.1 s
 
 
@@ -127,15 +127,38 @@ def test_only_unreachable_verdicts_get_a_fallback():
     m = _plant()
     d = _unreachable()
     d.verdict = "stalled"
-    assert apply_declared_fallbacks(m, [d], AssumptionLog()) == []
+    assert apply_declared_fallbacks(m, [d], AssumptionLog()).added == []
 
 
 def test_applying_twice_adds_one_fallback():
     """The second build pass must not stack a fallback on top of a fallback."""
     m = _plant()
     apply_declared_fallbacks(m, [_unreachable()], AssumptionLog())
-    assert apply_declared_fallbacks(m, [_unreachable()], AssumptionLog()) == []
+    assert apply_declared_fallbacks(m, [_unreachable()], AssumptionLog()).added == []
     assert sum(t.declared_fallback for t in m.state_machines[0].transitions) == 1
+
+
+def test_only_the_earliest_blocked_step_in_a_region_is_fixed_per_pass():
+    """A downstream step is measured against a trace where its predecessor was deadlocked,
+    so its dwell is meaningless and its verdict is not evidence. It waits for the next pass."""
+    m = _plant()
+    m.parameters.append(
+        Parameter(id="SP_COMP", name="SP_COMP", quantity=Quantity(value=0.9, unit="kg/kg"))
+    )
+    m.signals.append(Signal(id="QIS_502", name="QIS_502", role="sensor", binding="B5.w"))
+    m.state_machines[0].states.append(State(id="Step7", name="Step7"))
+    m.state_machines[0].transitions.append(
+        Transition(id="T67", source_state="Step6", target_state="Step7",
+                   guard="QIS_502 >= SP_COMP")
+    )
+    d_late = Diagnosis(
+        check_id="CHK_LATE", signal="B5.w", target=0.9, sense="rising", start=0.0,
+        extreme=0.1, verdict="unreachable", detail="", shortfall_pct=88.0,
+        rise_seconds=10.0, settled_at=100.0,
+    )
+    plan = apply_declared_fallbacks(m, [_unreachable(), d_late], AssumptionLog())
+    assert [t.fallback_for for t in plan.added] == ["T56"], "only the earliest, Step5"
+    assert plan.deferred == {"CHK_LATE"}, "the later step's verdict must not be recorded"
 
 
 def test_the_assumption_is_declared_against_the_register():
