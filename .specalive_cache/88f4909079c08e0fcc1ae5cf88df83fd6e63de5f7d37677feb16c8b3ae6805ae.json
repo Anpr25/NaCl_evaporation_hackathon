@@ -1,0 +1,228 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B1\",\n      \"predicate\": \"contains\",\n      \"value\": \"water-rich initial charge\",\n      \"quote\": \"B1 contains the water-rich initial charge\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B2\",\n      \"predicate\": \"contains\",\n      \"value\": \"concentrated NaCl initial charge\",\n      \"quote\": \"B2 contains the concentrated NaCl initial charge\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"V26\",\n      \"predicate\": \"is closed\",\n      \"value\": \"closed\",\n      \"quote\": \"manual drain valves V26 and V27 are closed\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"V27\",\n      \"predicate\": \"is closed\",\n      \"value\": \"closed\",\n      \"quote\": \"manual drain valves V26 and V27 are closed\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"V13\",\n      \"predicate\": \"is aligned for service\",\n      \"value\": \"aligned for service\",\n      \"quote\": \"cooling-water valves V13, V17 and V29 are aligned for service\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"V17\",\n      \"predicate\": \"is aligned for service\",\n      \"value\": \"aligned for service\",\n      \"quote\": \"cooling-water valves V13, V17 and V29 are aligned for service\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"V29\",\n      \"predicate\": \"is aligned for service\",\n      \"value\": \"aligned for service\",\n      \"quote\": \"cooling-water valves V13, V17 and V29 are aligned for service\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"FIS-801\",\n      \"predicate\": \"is available\",\n      \"value\": \"available\",\n      \"quote\": \"condenser cooling-water flow indication FIS-801 is available\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B6\",\n      \"predicate\": \"is sufficiently empty\",\n      \"value\": \"sufficiently empty\",\n      \"quote\": \"B6 and B7 are sufficiently empty for the next batch\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B7\",\n      \"predicate\": \"is sufficiently empty\",\n      \"value\": \"sufficiently empty\",\n      \"quote\": \"B6 and B7 are sufficiently empty for the next batch\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B3\",\n      \"predicate\": \"fill/mix\",\n      \"value\": \"fill/mix\",\n      \"quote\": \"B3 fill/mix -> B4 buffer -> B5 charge -> heating/evaporation -> simultaneous condensate/concentrate finishing branches -> return pumping\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B4\",\n      \"predicate\": \"buffer\",\n      \"value\": \"buffer\",\n      \"quote\": \"B3 fill/mix -> B4 buffer -> B5 charge -> heating/evaporation -> simultaneous condensate/concentrate finishing branches -> return pumping\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"B5\",\n      \"predicate\": \"charge\",\n      \"value\": \"charge\",\n      \"quote\": \"B3 fill/mix -> B4 buffer -> B5 charge -> heating/evaporation -> simultaneous condensate/concentrate finishing branches -> return pumping\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"heating/evaporation\",\n      \"predicate\": \"is active\",\n      \"value\": \"heating/evaporation\",\n      \"quote\": \"B3 fill/mix -> B4 buffer -> B5 charge -> heating/evaporation -> simultaneous condensate/concentrate finishing branches -> return pumping\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"simultaneous condensate/concentrate finishing branches\",\n      \"predicate\": \"are active\",\n      \"value\": \"simultaneous condensate/concentrate finishing branches\",\n      \"quote\": \"B3 fill/mix -> B4 buffer -> B5 charge -> heating/evaporation -> simultaneous condensate/concentrate finishing branches -> return pumping\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"return pumping\",\n      \"predicate\": \"is active\",\n      \"value\": \"return pumping\",\n      \"quote\": \"B3 fill/mix -> B4 buffer -> B5 charge -> heating/evaporation -> simultaneous condensate/concentrate finishing branches -> return pumping\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"controller\",\n      \"predicate\": \"owns\",\n      \"value\": \"automated valve set\",\n      \"quote\": \"The controller owns the automated valve set\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"automated valve set\",\n      \"predicate\": \"do not manually override\",\n      \"value\": \"do not manually override\",\n      \"quote\": \"do not manually override an automated valve during an acceptance run\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"repeated tiny integration steps near a tank port level\",\n      \"predicate\": \"may indicate\",\n      \"value\": \"missing hysteresis or non-regularized port loss equations\",\n      \"quote\": \"Repeated tiny integration steps near a tank port level may indicate missing hysteresis or non-regularized port loss equations\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"oscillation at the B5 boiling transition\",\n      \"predicate\": \"may indicate\",\n      \"value\": \"missing Q_up anti-chattering logic\",\n      \"quote\": \"Oscillation at the B5 boiling transition may indicate missing Q_up anti-chattering logic\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"WaterNaCl simulation\",\n      \"predicate\": \"stalls at pump start\",\n      \"value\": \"known legacy numerical issue\",\n      \"quote\": \"A WaterNaCl simulation that stalls at pump start is a known legacy numerical issue\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"WaterNaCl simulation\",\n      \"predicate\": \"first validate\",\n      \"value\": \"StandardWater\",\n      \"quote\": \"first validate the same topology with StandardWater\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"return-routing questions\",\n      \"predicate\": \"do not resolve\",\n      \"value\": \"pump location alone\",\n      \"quote\": \"Do not resolve return-routing questions from pump location alone\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"return-routing questions\",\n      \"predicate\": \"check\",\n      \"value\": \"approved routing change record\",\n      \"quote\": \"check the approved routing change record\",\n      \"unit\": \"null\",\n      \"confidence\": 0.9\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 746,
+  "completion_tokens": 1918,
+  "latency_s": 76.88275122642517,
+  "data": {
+    "claims": [
+      {
+        "kind": "requirement",
+        "subject": "B1",
+        "predicate": "contains",
+        "value": "water-rich initial charge",
+        "quote": "B1 contains the water-rich initial charge",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "B2",
+        "predicate": "contains",
+        "value": "concentrated NaCl initial charge",
+        "quote": "B2 contains the concentrated NaCl initial charge",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "V26",
+        "predicate": "is closed",
+        "value": "closed",
+        "quote": "manual drain valves V26 and V27 are closed",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "V27",
+        "predicate": "is closed",
+        "value": "closed",
+        "quote": "manual drain valves V26 and V27 are closed",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "V13",
+        "predicate": "is aligned for service",
+        "value": "aligned for service",
+        "quote": "cooling-water valves V13, V17 and V29 are aligned for service",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "V17",
+        "predicate": "is aligned for service",
+        "value": "aligned for service",
+        "quote": "cooling-water valves V13, V17 and V29 are aligned for service",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "V29",
+        "predicate": "is aligned for service",
+        "value": "aligned for service",
+        "quote": "cooling-water valves V13, V17 and V29 are aligned for service",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "FIS-801",
+        "predicate": "is available",
+        "value": "available",
+        "quote": "condenser cooling-water flow indication FIS-801 is available",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "B6",
+        "predicate": "is sufficiently empty",
+        "value": "sufficiently empty",
+        "quote": "B6 and B7 are sufficiently empty for the next batch",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "B7",
+        "predicate": "is sufficiently empty",
+        "value": "sufficiently empty",
+        "quote": "B6 and B7 are sufficiently empty for the next batch",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "B3",
+        "predicate": "fill/mix",
+        "value": "fill/mix",
+        "quote": "B3 fill/mix -> B4 buffer -> B5 charge -> heating/evaporation -> simultaneous condensate/concentrate finishing branches -> return pumping",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "B4",
+        "predicate": "buffer",
+        "value": "buffer",
+        "quote": "B3 fill/mix -> B4 buffer -> B5 charge -> heating/evaporation -> simultaneous condensate/concentrate finishing branches -> return pumping",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "B5",
+        "predicate": "charge",
+        "value": "charge",
+        "quote": "B3 fill/mix -> B4 buffer -> B5 charge -> heating/evaporation -> simultaneous condensate/concentrate finishing branches -> return pumping",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "heating/evaporation",
+        "predicate": "is active",
+        "value": "heating/evaporation",
+        "quote": "B3 fill/mix -> B4 buffer -> B5 charge -> heating/evaporation -> simultaneous condensate/concentrate finishing branches -> return pumping",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "simultaneous condensate/concentrate finishing branches",
+        "predicate": "are active",
+        "value": "simultaneous condensate/concentrate finishing branches",
+        "quote": "B3 fill/mix -> B4 buffer -> B5 charge -> heating/evaporation -> simultaneous condensate/concentrate finishing branches -> return pumping",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "return pumping",
+        "predicate": "is active",
+        "value": "return pumping",
+        "quote": "B3 fill/mix -> B4 buffer -> B5 charge -> heating/evaporation -> simultaneous condensate/concentrate finishing branches -> return pumping",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "controller",
+        "predicate": "owns",
+        "value": "automated valve set",
+        "quote": "The controller owns the automated valve set",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "requirement",
+        "subject": "automated valve set",
+        "predicate": "do not manually override",
+        "value": "do not manually override",
+        "quote": "do not manually override an automated valve during an acceptance run",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "note",
+        "subject": "repeated tiny integration steps near a tank port level",
+        "predicate": "may indicate",
+        "value": "missing hysteresis or non-regularized port loss equations",
+        "quote": "Repeated tiny integration steps near a tank port level may indicate missing hysteresis or non-regularized port loss equations",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "note",
+        "subject": "oscillation at the B5 boiling transition",
+        "predicate": "may indicate",
+        "value": "missing Q_up anti-chattering logic",
+        "quote": "Oscillation at the B5 boiling transition may indicate missing Q_up anti-chattering logic",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "note",
+        "subject": "WaterNaCl simulation",
+        "predicate": "stalls at pump start",
+        "value": "known legacy numerical issue",
+        "quote": "A WaterNaCl simulation that stalls at pump start is a known legacy numerical issue",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "note",
+        "subject": "WaterNaCl simulation",
+        "predicate": "first validate",
+        "value": "StandardWater",
+        "quote": "first validate the same topology with StandardWater",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "note",
+        "subject": "return-routing questions",
+        "predicate": "do not resolve",
+        "value": "pump location alone",
+        "quote": "Do not resolve return-routing questions from pump location alone",
+        "unit": "null",
+        "confidence": 0.9
+      },
+      {
+        "kind": "note",
+        "subject": "return-routing questions",
+        "predicate": "check",
+        "value": "approved routing change record",
+        "quote": "check the approved routing change record",
+        "unit": "null",
+        "confidence": 0.9
+      }
+    ]
+  }
+}

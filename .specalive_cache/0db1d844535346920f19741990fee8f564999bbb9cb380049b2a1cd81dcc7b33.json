@@ -1,0 +1,52 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"note\",\n      \"subject\": \"StateGraph\",\n      \"predicate\": \"routing\",\n      \"value\": \"P1 branch (B7) -> V18/V23/V22 + V1/V3 -> B1\\nP2 branch (B6) -> V20/V24/V25 + V5/V6 -> B2\",\n      \"quote\": \"The old StateGraph note still says:\\n  P1 branch (B7) -> V18/V23/V22 + V1/V3 -> B1\\n  P2 branch (B6) -> V20/V24/V25 + V5/V6 -> B2\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"B6\",\n      \"predicate\": \"cooling setpoint\",\n      \"value\": \"20 C\",\n      \"quote\": \"B6 <= 20 C\",\n      \"confidence\": 0.8\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"B7\",\n      \"predicate\": \"cooling setpoint\",\n      \"value\": \"25 C\",\n      \"quote\": \"B7 <= 25 C\",\n      \"confidence\": 0.8\n    },\n    {\n      \"kind\": \"supersession\",\n      \"subject\": \"StateGraph\",\n      \"predicate\": \"routing\",\n      \"value\": \"legacy\",\n      \"quote\": \"The legacy StateGraph routing text is superseded\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"acceptance_check\",\n      \"subject\": \"CR-017\",\n      \"predicate\": \"approved\",\n      \"value\": \"true\",\n      \"quote\": \"CR-017 is approved\",\n      \"confidence\": 0.9\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 930,
+  "completion_tokens": 409,
+  "latency_s": 21.643924951553345,
+  "data": {
+    "claims": [
+      {
+        "kind": "note",
+        "subject": "StateGraph",
+        "predicate": "routing",
+        "value": "P1 branch (B7) -> V18/V23/V22 + V1/V3 -> B1\nP2 branch (B6) -> V20/V24/V25 + V5/V6 -> B2",
+        "quote": "The old StateGraph note still says:\n  P1 branch (B7) -> V18/V23/V22 + V1/V3 -> B1\n  P2 branch (B6) -> V20/V24/V25 + V5/V6 -> B2",
+        "confidence": 0.9
+      },
+      {
+        "kind": "parameter",
+        "subject": "B6",
+        "predicate": "cooling setpoint",
+        "value": "20 C",
+        "quote": "B6 <= 20 C",
+        "confidence": 0.8
+      },
+      {
+        "kind": "parameter",
+        "subject": "B7",
+        "predicate": "cooling setpoint",
+        "value": "25 C",
+        "quote": "B7 <= 25 C",
+        "confidence": 0.8
+      },
+      {
+        "kind": "supersession",
+        "subject": "StateGraph",
+        "predicate": "routing",
+        "value": "legacy",
+        "quote": "The legacy StateGraph routing text is superseded",
+        "confidence": 0.9
+      },
+      {
+        "kind": "acceptance_check",
+        "subject": "CR-017",
+        "predicate": "approved",
+        "value": "true",
+        "quote": "CR-017 is approved",
+        "confidence": 0.9
+      }
+    ]
+  }
+}

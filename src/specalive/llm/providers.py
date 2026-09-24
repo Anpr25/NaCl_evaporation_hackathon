@@ -1,4 +1,5 @@
-"""Concrete backends: Ollama (local), Groq (free tier), Gemini (free tier), Replay (cache-only).
+"""Concrete backends: Ollama (local), Groq (free tier), Gemini (free tier), OpenRouter (paid,
+multi-model gateway), Replay (cache-only).
 
 Each provider is deliberately thin. Retries, escalation, schema validation and quota bookkeeping
 all live in router.py so that behaviour is identical no matter which backend serves a request.
@@ -260,6 +261,91 @@ class GroqProvider(Provider):
         )
 
 
+# ------------------------------------------------------------------------------------ OpenRouter
+
+
+class OpenRouterProvider(Provider):
+    """OpenRouter: OpenAI-compatible, but proxies many backends -- including vision-capable
+    models -- through one endpoint and one key. Useful as a single fallback tier when neither a
+    local Ollama daemon nor Groq/Gemini keys are available."""
+
+    kind = "openrouter"
+    ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
+
+    def __init__(self, name: str, cfg: dict[str, Any]) -> None:
+        super().__init__(name, cfg)
+        self.api_key = os.getenv(cfg.get("api_key_env", "OPENROUTER_API_KEY"), "")
+        self.timeout = cfg.get("timeout_s", 120)
+
+    def available(self) -> bool:
+        return bool(self.api_key)
+
+    def complete(self, req: LLMRequest) -> LLMResponse:
+        if not self.api_key:
+            raise ProviderUnavailable("OPENROUTER_API_KEY not set")
+
+        content: Any
+        if req.images:
+            content = [{"type": "text", "text": req.prompt}]
+            for img in req.images:
+                content.append(
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:image/png;base64,{base64.b64encode(img).decode()}"},
+                    }
+                )
+        else:
+            content = req.prompt
+
+        messages = [
+            {"role": "system", "content": req.system or json_only_system(req.schema)},
+            {"role": "user", "content": content},
+        ]
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": req.temperature,
+            "max_tokens": req.max_tokens,
+        }
+        if req.schema:
+            # OpenRouter forwards OpenAI-style response_format when the underlying model
+            # supports it; the router's own validator enforces the schema regardless.
+            payload["response_format"] = {"type": "json_object"}
+        if req.stop:
+            payload["stop"] = req.stop
+
+        t0 = time.time()
+        try:
+            r = httpx.post(
+                self.ENDPOINT,
+                json=payload,
+                headers={"Authorization": f"Bearer {self.api_key}"},
+                timeout=self.timeout,
+            )
+        except httpx.ConnectError as exc:
+            raise ProviderUnavailable("openrouter unreachable (offline?)") from exc
+        except httpx.TimeoutException as exc:
+            raise LLMError("openrouter timed out") from exc
+
+        if r.status_code == 429:
+            raise QuotaExhausted(f"openrouter rate limited: {r.text[:200]}")
+        if r.status_code in (401, 403):
+            raise ProviderUnavailable(f"openrouter auth rejected: {r.status_code}")
+        if r.status_code >= 400:
+            raise LLMError(f"openrouter HTTP {r.status_code}: {r.text[:300]}")
+
+        body = r.json()
+        usage = body.get("usage", {})
+        return LLMResponse(
+            text=_strip_fences(body["choices"][0]["message"]["content"] or ""),
+            tier=self.name,
+            model=body.get("model", self.model),
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            latency_s=time.time() - t0,
+        )
+
+
 # ------------------------------------------------------------------------------------ Gemini
 
 
@@ -398,6 +484,7 @@ PROVIDER_KINDS: dict[str, type[Provider]] = {
     "ollama_embed": OllamaProvider,
     "groq": GroqProvider,
     "gemini": GeminiProvider,
+    "openrouter": OpenRouterProvider,
     "replay": ReplayProvider,
 }
 

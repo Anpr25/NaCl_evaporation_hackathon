@@ -12,9 +12,10 @@ Owner: B.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Callable, Literal
 
 from .evidence import Gap
 from .system import SystemModel
@@ -223,8 +224,12 @@ def check_units(m: SystemModel, r: ValidationReport) -> None:
 
 
 def check_binding_coverage(m: SystemModel, r: ValidationReport) -> None:
+    """An attempted binding that failed is an error. A block nobody has tried to bind yet is not:
+    validation runs before the Modelica emitter binds, and an extracted IR arrives unbound."""
     for b in m.simulatable_blocks():
-        if b.binding_tier == "unbound":
+        if b.binding_tier == "unbound" and b.binding_rationale is None:
+            r.add("binding", "info", b.id, "binding pending: the Modelica emitter binds this block")
+        elif b.binding_tier == "unbound":
             r.add(
                 "binding",
                 "error",
@@ -240,40 +245,43 @@ def check_binding_coverage(m: SystemModel, r: ValidationReport) -> None:
 
 
 def check_guard_reachability(m: SystemModel, r: ValidationReport) -> None:
-    """Coarse conservation screen: can a 'fill to level/charge/quantity X' guard ever be met?
+    """Coarse conservation screen: can a 'fill to level / charge to voltage / spin up to speed'
+    guard ever be met?
 
-    Domain-agnostic form: for each transition whose guard is a monotone threshold on a
-    conserved accumulation (``level``, ``mass``, ``charge``, ``energy``), sum the capacity of
-    every upstream supplier feeding that block in the current sequence step. If the supply
-    ceiling is below the threshold the guard can never fire and the sequence deadlocks.
+    Domain-agnostic form: for each transition whose guard requires a stored quantity to rise to a
+    threshold, add up every inventory that could ever reach that store -- its own, plus every
+    storing block upstream of it, transitively, through any number of non-storing elements
+    (paths, valves, resistors, clutches). That total is an upper bound on what the store can
+    ever hold. If it is still below the threshold the guard can never fire and the sequence
+    deadlocks. The stores it understands are listed in `STORES`: geometric volume, electrical
+    charge, rotational and translational kinetic energy, and plain mass.
 
-    This is what found OPEN-ISSUE-01 in the NaCl packet. It is deliberately conservative: it
-    only reports when it can prove insufficiency from declared numbers, never on a hunch.
+    This is how OPEN-ISSUE-01 is argued in the NaCl packet. It is deliberately conservative:
+    it reports only when it can prove insufficiency from declared numbers -- a missing capacity,
+    a missing initial state, or an upstream source of unknown size all mean "cannot prove", never
+    "defect". A guard with an `or` alternative is skipped: the other branch may fire.
     """
-    accum = ("level", "mass", "charge", "volume", "energy", "inventory")
     for sm in m.state_machines:
         for t in sm.transitions:
-            match = re.match(r"\s*([A-Za-z_][\w.]*)\s*(>=|>)\s*([0-9.eE+-]+)", t.guard)
-            if not match:
+            if re.search(r"\bor\b", t.guard):
                 continue
-            sig_ref, _, threshold_txt = match.groups()
-            sig = m.signal(sig_ref)
-            if sig is None or not sig.binding:
-                continue
-            if not any(a in sig.binding.lower() or a in sig.name.lower() for a in accum):
-                continue
-            ceiling = _supply_ceiling(m, sig.binding.split(".")[0])
-            if ceiling is None:
-                continue
-            if ceiling < float(threshold_txt):
+            for sig_ref, op, rhs in re.findall(r"([A-Za-z_][\w.]*)\s*(>=|>)\s*([A-Za-z_][\w.]*|[0-9.eE+-]+)", t.guard):
+                threshold = _resolve_number(m, rhs)
+                sig = m.signal(sig_ref)
+                if threshold is None or sig is None or not sig.binding or "." not in sig.binding:
+                    continue
+                block_id, _, variable = sig.binding.partition(".")
+                ceiling = _supply_ceiling(m, block_id, variable)
+                if ceiling is None or ceiling >= threshold:
+                    continue
                 r.add(
                     "guard-reachability",
                     "warning",
                     t.id,
                     (
-                        f"guard '{t.guard}' needs {threshold_txt} but the upstream supply ceiling for "
-                        f"'{sig.binding}' is {ceiling:.4g}; the transition can never fire and the "
-                        f"sequence will deadlock at state '{t.source_state}'"
+                        f"guard '{t.guard}' needs {sig_ref} {op} {threshold:.4g} but everything that can "
+                        f"ever reach '{sig.binding}' amounts to at most {ceiling:.4g}; the transition can "
+                        f"never fire and the sequence will deadlock at state '{t.source_state}'"
                     ),
                     suggestion=(
                         "raise this with the customer as a source-data defect, and emit a declared "
@@ -282,33 +290,104 @@ def check_guard_reachability(m: SystemModel, r: ValidationReport) -> None:
                 )
 
 
-def _supply_ceiling(m: SystemModel, block_id: str) -> float | None:
-    """Best-effort upstream capacity for `block_id`, in the same unit as its accumulation.
+@dataclass(frozen=True)
+class Store:
+    """How one conserved quantity is held by a block and read back by a guard."""
 
-    TODO(C+B): today this only understands a single geometric upstream vessel, which covers the
-    process case. Generalise to electrical charge and rotational energy when those benches land.
-    Returning None means 'cannot prove anything', which must never be reported as a defect.
+    domain: str
+    capacity: tuple[str, ...]      # the storage constant: area, capacitance, inertia, mass
+    initial: tuple[str, ...]       # the initial state: level, voltage, speed
+    inventory: Callable[[float, float], float]   # (capacity, state)  -> conserved amount
+    reading: Callable[[float, float], float]     # (capacity, amount) -> the variable a guard reads
+
+
+_GEOMETRIC = (("area", "A", "cross_section"), ("level_start", "level0", "h_start", "level.start"))
+_CAPACITOR = (("C", "capacitance"), ("v_start", "v.start", "voltage_start", "v0"))
+_INERTIA = (("J", "inertia"), ("w_start", "w.start", "omega_start", "speed_start"))
+_MASS = (("m", "mass"), ("v_start", "v.start", "velocity_start"))
+
+#: guard variable -> the stores that could hold it. Tried in order; the first whose capacity
+#: parameter the receiving block declares is used.
+STORES: dict[str, tuple[Store, ...]] = {
+    "level": (Store("fluid", *_GEOMETRIC, lambda a, h: a * h, lambda a, vol: vol / a),),
+    "volume": (Store("fluid", *_GEOMETRIC, lambda a, h: a * h, lambda a, vol: vol),),
+    "v": (Store("electrical", *_CAPACITOR, lambda c, v: c * v, lambda c, q: q / c),),
+    "voltage": (Store("electrical", *_CAPACITOR, lambda c, v: c * v, lambda c, q: q / c),),
+    "q": (Store("electrical", *_CAPACITOR, lambda c, v: c * v, lambda c, q: q),),
+    "charge": (Store("electrical", *_CAPACITOR, lambda c, v: c * v, lambda c, q: q),),
+    "w": (Store("rotational", *_INERTIA, lambda j, w: 0.5 * j * w * w, lambda j, e: math.sqrt(2 * e / j)),),
+    "speed": (Store("rotational", *_INERTIA, lambda j, w: 0.5 * j * w * w, lambda j, e: math.sqrt(2 * e / j)),),
+    "energy": (
+        Store("rotational", *_INERTIA, lambda j, w: 0.5 * j * w * w, lambda j, e: e),
+        Store("translational", *_MASS, lambda mm, v: 0.5 * mm * v * v, lambda mm, e: e),
+    ),
+    "mass": (Store("fluid", ("m_start", "mass_start"), ("m_start", "mass_start"), lambda m0, _: m0, lambda _, mm: mm),),
+}
+
+
+def _param(blk, names: tuple[str, ...]) -> float | None:
+    for p in blk.parameters:
+        if p.name in names and isinstance(p.quantity.value, (int, float)) and not isinstance(p.quantity.value, bool):
+            return float(p.quantity.value)
+    return None
+
+
+def _resolve_number(m: SystemModel, token: str) -> float | None:
+    try:
+        return float(token)
+    except ValueError:
+        pass
+    p = next((p for p in m.parameters if token in (p.id, p.name)), None)
+    v = p.quantity.value if p else None
+    return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+
+def _supply_ceiling(m: SystemModel, block_id: str, variable: str = "level") -> float | None:
+    """Upper bound on `block_id.variable` from every inventory that can ever flow into it.
+
+    Returns None -- "cannot prove anything" -- whenever a number is missing: the receiver has no
+    declared capacity or initial state, an upstream storing block lacks one, or an upstream
+    origin stores nothing we can size (a boundary source is effectively unbounded). None must
+    never be reported as a defect.
     """
-    feeders = [c.source.split(".")[0] for c in m.connections if c.target.startswith(f"{block_id}.")]
-    if not feeders:
-        return None
-    total = 0.0
-    for fid in feeders:
-        blk = m.block(fid)
-        if blk is None:
-            return None
-        params = {p.name: p.quantity.value for p in blk.parameters}
-        area, level = params.get("area"), params.get("level_start")
-        if not isinstance(area, (int, float)) or not isinstance(level, (int, float)):
-            return None
-        total += float(area) * float(level)
     here = m.block(block_id)
     if here is None:
         return None
-    my_area = next((p.quantity.value for p in here.parameters if p.name == "area"), None)
-    if not isinstance(my_area, (int, float)) or my_area == 0:
+    store = next((s for s in STORES.get(variable, ()) if _param(here, s.capacity) is not None), None)
+    if store is None:
         return None
-    return total / float(my_area)
+    cap_here, init_here = _param(here, store.capacity), _param(here, store.initial)
+    if not cap_here or init_here is None:
+        return None
+    total = store.inventory(cap_here, init_here)
+
+    simulated = {b.id for b in m.simulatable_blocks()}
+    feeds: dict[str, list[str]] = {}
+    for c in m.connections:
+        if c.domain not in (store.domain, "unknown"):
+            continue
+        src, dst = c.source.split(".")[0], c.target.split(".")[0]
+        if src in simulated and dst in simulated:
+            feeds.setdefault(dst, []).append(src)
+    if not feeds.get(block_id):
+        return None
+
+    seen, frontier = {block_id}, list(feeds[block_id])
+    while frontier:
+        fid = frontier.pop()
+        if fid in seen:
+            continue
+        seen.add(fid)
+        blk = m.block(fid)
+        if blk is None:
+            return None
+        cap, init = _param(blk, store.capacity), _param(blk, store.initial)
+        if cap is not None and init is not None:
+            total += store.inventory(cap, init)
+        elif cap is not None or not feeds.get(fid):
+            return None   # a store of unknown content, or an origin of unknown size
+        frontier.extend(feeds.get(fid, []))
+    return store.reading(cap_here, total)
 
 
 def check_reference_data_consistency(m: SystemModel, r: ValidationReport) -> None:

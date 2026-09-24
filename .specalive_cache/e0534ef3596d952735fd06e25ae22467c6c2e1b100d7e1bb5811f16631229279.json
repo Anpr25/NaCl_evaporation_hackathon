@@ -1,0 +1,60 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"note\",\n      \"subject\": \"Water-NaCl Medium and Tank Modeling Note - Rev A\",\n      \"predicate\": \"scope\",\n      \"value\": \"The benchmark uses a custom water-NaCl medium because a suitable mixture was not available in the baseline Modelica.Media set used by the source study. Intended hierarchy: PartialMedium -> PartialMixtureMedium -> PartialMixtureTwoPhaseMedium -> WaterNaCl, with a one-phase specialization where required.\",\n      \"quote\": \"The benchmark uses a custom water-NaCl medium because a suitable mixture was not available in the baseline Modelica.Media set used by the source study. Intended hierarchy: PartialMedium -> PartialMixtureMedium -> PartialMixtureTwoPhaseMedium -> WaterNaCl, with a one-phase specialization where required.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"Water-NaCl Medium and Tank Modeling Note - Rev A\",\n      \"predicate\": \"tank balance equations\",\n      \"value\": \"medium.p = p_ambient; V = area*level + V0; m = V*medium.d; mXi = m*medium.Xi; U = m*medium.u; der(m) = sum(topPorts.m_flow) + sum(ports.m_flow); der(U) = sum(H_flow) - p_ambient*der(V); For an incompressible formulation, the p_ambient*der(V) contribution may be omitted to avoid small artificial temperature changes.\",\n      \"quote\": \"medium.p = p_ambient; V = area*level + V0; m = V*medium.d; mXi = m*medium.Xi; U = m*medium.u; der(m) = sum(topPorts.m_flow) + sum(ports.m_flow); der(U) = sum(H_flow) - p_ambient*der(V); For an incompressible formulation, the p_ambient*der(V) contribution may be omitted to avoid small artificial temperature changes.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"Water-NaCl Medium and Tank Modeling Note - Rev A\",\n      \"predicate\": \"port crossing and numerical robustness\",\n      \"value\": \"Preferred treatment: asymmetric loss factors with a regularized quadratic flow law. When a port is above liquid level, use a very large outflow loss factor (default 1e5) and small inflow factor (default 0.01). Apply hysteresis based on port diameter around level crossing. State-machine and declarative curve-switch alternatives are historical options only.\",\n      \"quote\": \"Preferred treatment: asymmetric loss factors with a regularized quadratic flow law. When a port is above liquid level, use a very large outflow loss factor (default 1e5) and small inflow factor (default 0.01). Apply hysteresis based on port diameter around level crossing. State-machine and declarative curve-switch alternatives are historical options only.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"Water-NaCl Medium and Tank Modeling Note - Rev A\",\n      \"predicate\": \"evaporator/condensation logic\",\n      \"value\": \"HeatB5.Q_flow = if controller.actuators.T5_Heater then 20000 else 0; if Q_up > heatPort.Q_flow then m_con = 0; else m_con = -(heatPort.Q_flow - Q_up) / (hv - hl + Xi[1]*(cp*dT_dX + dhl_dX)); end if; Q_up suppresses repeated switching around the boiling point when colder feed enters. K1 is physically separate, while the legacy simulation combines condenser behavior into the B5 evaporator model and exports condensate through an additional fluid port.\",\n      \"quote\": \"HeatB5.Q_flow = if controller.actuators.T5_Heater then 20000 else 0; if Q_up > heatPort.Q_flow then m_con = 0; else m_con = -(heatPort.Q_flow - Q_up) / (hv - hl + Xi[1]*(cp*dT_dX + dhl_dX)); end if; Q_up suppresses repeated switching around the boiling point when colder feed enters. K1 is physically separate, while the legacy simulation combines condenser behavior into the B5 evaporator model and exports condensate through an additional fluid port.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"Water-NaCl Medium and Tank Modeling Note - Rev A\",\n      \"predicate\": \"composition-dependent properties\",\n      \"value\": \"Required properties: density rho(T,p,w), enthalpy h(T,p,w), cp(T,w), saturation pressure p_sat(T,w), and viscosity eta(T,w). Some source correlations omit numeric coefficients and those coefficients are intentionally absent from this benchmark evidence. eta(T,w) = exp(c1*T^3 + c2*T^2 + c3*T + c4 + c5*w + c6*w^2 + c7*w^3) c1=-6.83241E-07 c2=0.000765676 c3=-0.297018665 c4=-0.299730079 c5=2.065267182 c6=1.546491257 c7=31.57571595\",\n      \"quote\": \"Required properties: density rho(T,p,w), enthalpy h(T,p,w), cp(T,w), saturation pressure p_sat(T,w), and viscosity eta(T,w). Some source correlations omit numeric coefficients and those coefficients are intentionally absent from this benchmark evidence. eta(T,w) = exp(c1*T^3 + c2*T^2 + c3*T + c4 + c5*w + c6*w^2 + c7*w^3) c1=-6.83241E-07 c2=0.000765676 c3=-0.297018665 c4=-0.299730079 c5=2.065267182 c6=1.546491257 c7=31.57571595\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"Water-NaCl Medium and Tank Modeling Note - Rev A\",\n      \"predicate\": \"known issue\",\n      \"value\": \"The legacy study reports that the full plant runs with StandardWater but the WaterNaCl configuration can stop when a return pump is scheduled to start. Treat this as a known numerical/modeling issue, not evidence that the physical pump should be omitted.\",\n      \"quote\": \"The legacy study reports that the full plant runs with StandardWater but the WaterNaCl configuration can stop when a return pump is scheduled to start. Treat this as a known numerical/modeling issue, not evidence that the physical pump should be omitted.\",\n      \"confidence\": 1.0\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 1137,
+  "completion_tokens": 1558,
+  "latency_s": 67.28157162666321,
+  "data": {
+    "claims": [
+      {
+        "kind": "note",
+        "subject": "Water-NaCl Medium and Tank Modeling Note - Rev A",
+        "predicate": "scope",
+        "value": "The benchmark uses a custom water-NaCl medium because a suitable mixture was not available in the baseline Modelica.Media set used by the source study. Intended hierarchy: PartialMedium -> PartialMixtureMedium -> PartialMixtureTwoPhaseMedium -> WaterNaCl, with a one-phase specialization where required.",
+        "quote": "The benchmark uses a custom water-NaCl medium because a suitable mixture was not available in the baseline Modelica.Media set used by the source study. Intended hierarchy: PartialMedium -> PartialMixtureMedium -> PartialMixtureTwoPhaseMedium -> WaterNaCl, with a one-phase specialization where required.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "note",
+        "subject": "Water-NaCl Medium and Tank Modeling Note - Rev A",
+        "predicate": "tank balance equations",
+        "value": "medium.p = p_ambient; V = area*level + V0; m = V*medium.d; mXi = m*medium.Xi; U = m*medium.u; der(m) = sum(topPorts.m_flow) + sum(ports.m_flow); der(U) = sum(H_flow) - p_ambient*der(V); For an incompressible formulation, the p_ambient*der(V) contribution may be omitted to avoid small artificial temperature changes.",
+        "quote": "medium.p = p_ambient; V = area*level + V0; m = V*medium.d; mXi = m*medium.Xi; U = m*medium.u; der(m) = sum(topPorts.m_flow) + sum(ports.m_flow); der(U) = sum(H_flow) - p_ambient*der(V); For an incompressible formulation, the p_ambient*der(V) contribution may be omitted to avoid small artificial temperature changes.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "note",
+        "subject": "Water-NaCl Medium and Tank Modeling Note - Rev A",
+        "predicate": "port crossing and numerical robustness",
+        "value": "Preferred treatment: asymmetric loss factors with a regularized quadratic flow law. When a port is above liquid level, use a very large outflow loss factor (default 1e5) and small inflow factor (default 0.01). Apply hysteresis based on port diameter around level crossing. State-machine and declarative curve-switch alternatives are historical options only.",
+        "quote": "Preferred treatment: asymmetric loss factors with a regularized quadratic flow law. When a port is above liquid level, use a very large outflow loss factor (default 1e5) and small inflow factor (default 0.01). Apply hysteresis based on port diameter around level crossing. State-machine and declarative curve-switch alternatives are historical options only.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "note",
+        "subject": "Water-NaCl Medium and Tank Modeling Note - Rev A",
+        "predicate": "evaporator/condensation logic",
+        "value": "HeatB5.Q_flow = if controller.actuators.T5_Heater then 20000 else 0; if Q_up > heatPort.Q_flow then m_con = 0; else m_con = -(heatPort.Q_flow - Q_up) / (hv - hl + Xi[1]*(cp*dT_dX + dhl_dX)); end if; Q_up suppresses repeated switching around the boiling point when colder feed enters. K1 is physically separate, while the legacy simulation combines condenser behavior into the B5 evaporator model and exports condensate through an additional fluid port.",
+        "quote": "HeatB5.Q_flow = if controller.actuators.T5_Heater then 20000 else 0; if Q_up > heatPort.Q_flow then m_con = 0; else m_con = -(heatPort.Q_flow - Q_up) / (hv - hl + Xi[1]*(cp*dT_dX + dhl_dX)); end if; Q_up suppresses repeated switching around the boiling point when colder feed enters. K1 is physically separate, while the legacy simulation combines condenser behavior into the B5 evaporator model and exports condensate through an additional fluid port.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "note",
+        "subject": "Water-NaCl Medium and Tank Modeling Note - Rev A",
+        "predicate": "composition-dependent properties",
+        "value": "Required properties: density rho(T,p,w), enthalpy h(T,p,w), cp(T,w), saturation pressure p_sat(T,w), and viscosity eta(T,w). Some source correlations omit numeric coefficients and those coefficients are intentionally absent from this benchmark evidence. eta(T,w) = exp(c1*T^3 + c2*T^2 + c3*T + c4 + c5*w + c6*w^2 + c7*w^3) c1=-6.83241E-07 c2=0.000765676 c3=-0.297018665 c4=-0.299730079 c5=2.065267182 c6=1.546491257 c7=31.57571595",
+        "quote": "Required properties: density rho(T,p,w), enthalpy h(T,p,w), cp(T,w), saturation pressure p_sat(T,w), and viscosity eta(T,w). Some source correlations omit numeric coefficients and those coefficients are intentionally absent from this benchmark evidence. eta(T,w) = exp(c1*T^3 + c2*T^2 + c3*T + c4 + c5*w + c6*w^2 + c7*w^3) c1=-6.83241E-07 c2=0.000765676 c3=-0.297018665 c4=-0.299730079 c5=2.065267182 c6=1.546491257 c7=31.57571595",
+        "confidence": 1.0
+      },
+      {
+        "kind": "note",
+        "subject": "Water-NaCl Medium and Tank Modeling Note - Rev A",
+        "predicate": "known issue",
+        "value": "The legacy study reports that the full plant runs with StandardWater but the WaterNaCl configuration can stop when a return pump is scheduled to start. Treat this as a known numerical/modeling issue, not evidence that the physical pump should be omitted.",
+        "quote": "The legacy study reports that the full plant runs with StandardWater but the WaterNaCl configuration can stop when a return pump is scheduled to start. Treat this as a known numerical/modeling issue, not evidence that the physical pump should be omitted.",
+        "confidence": 1.0
+      }
+    ]
+  }
+}

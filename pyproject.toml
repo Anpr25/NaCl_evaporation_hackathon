@@ -17,6 +17,7 @@ dependencies = [
     "openpyxl>=3.1",
     "python-docx>=1.1",
     "pillow>=10.3",
+    "pypdfium2>=4.30",
     # web
     "fastapi>=0.111",
     "uvicorn[standard]>=0.30",
@@ -44,5 +45,8 @@ target-version = "py310"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["slow: requires OpenModelica; ~40s. Run with `pytest -m slow`."]
-addopts = "-m 'not slow' -q"
+markers = [
+    "slow: requires OpenModelica; ~40s. Run with `pytest -m slow`.",
+    "live: hits a real network API; requires OPENROUTER_API_KEY. Run with `pytest -m live`.",
+]
+addopts = "-m 'not slow and not live' -q"

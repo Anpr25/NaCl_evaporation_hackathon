@@ -95,12 +95,34 @@ tiers:
     base_url: http://localhost:11434
     good_at: [diagram_reading]
 
+  # ---------------------------------------------------------------- OpenRouter
+  # A single-key gateway to many hosted models (text and vision), used when neither a local
+  # Ollama daemon nor Groq/Gemini keys are available. Confirm slugs against
+  # https://openrouter.ai/models before a live run -- the catalog changes over time.
+  t3_openrouter:
+    kind: openrouter
+    model: openai/gpt-4o-mini
+    api_key_env: OPENROUTER_API_KEY
+    structured_output: json_object
+    max_tokens: 8192
+    timeout_s: 120
+    good_at: [conflict_adjudication, equation_synthesis, repair_diff, topology_inference]
+
+  t4_openrouter_vision:
+    kind: openrouter
+    model: openai/gpt-4o-mini
+    api_key_env: OPENROUTER_API_KEY
+    structured_output: json_object
+    max_tokens: 8192
+    timeout_s: 180
+    good_at: [diagram_reading, scanned_page_ocr]
+
 # Task -> ordered escalation chain. First entry is tried first.
 routes:
   parse_structured:      [t0_deterministic]
-  extract_claim:         [t1_local_small, t2_local_mid, t3_cloud_reasoning]
+  extract_claim:         [t1_local_small, t2_local_mid, t3_cloud_reasoning, t3_openrouter]
   extract_prose:         [t2_local_mid, t3_cloud_reasoning]
-  read_diagram:          [t4_cloud_vision, t4_local_vision]
+  read_diagram:          [t4_cloud_vision, t4_openrouter_vision, t4_local_vision]
   catalog_retrieve:      [t0_deterministic, t1_local_embed]
   catalog_pick:          [t1_local_small, t3_cloud_reasoning]
   adjudicate_conflict:   [t3_cloud_reasoning, t2_local_mid]
@@ -110,10 +132,18 @@ routes:
 
 # Provider selection modes, chosen with `specalive --provider`.
 modes:
-  auto:   {allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid, t3_cloud_reasoning, t4_cloud_vision, t4_local_vision]}
+  auto:   {allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid, t3_cloud_reasoning, t4_cloud_vision, t4_local_vision, t3_openrouter, t4_openrouter_vision]}
   local:  {allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid, t4_local_vision]}
-  cloud:  {allow: [t0_deterministic, t3_cloud_reasoning, t4_cloud_vision]}
-  replay: {allow: [t0_deterministic], replay_only: true}   # demo-safe: cache hits or bust
+  cloud:  {allow: [t0_deterministic, t3_cloud_reasoning, t4_cloud_vision, t3_openrouter, t4_openrouter_vision]}
+  # Replay must allow the SAME tiers as auto. `replay_only` is what prevents a live call,
+  # and the router checks it *after* the cache lookup. Listing only t0 here left the tier
+  # chain empty, so run() raised before ever opening the cache and every model-derived claim
+  # silently vanished -- a replay that looked fast because it did nothing.
+  replay:
+    allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid,
+            t3_cloud_reasoning, t4_cloud_vision, t4_local_vision,
+            t3_openrouter, t4_openrouter_vision]
+    replay_only: true
   none:   {allow: [t0_deterministic]}                      # deterministic-only smoke path
 
 cache:

@@ -1,0 +1,14 @@
+{
+  "text": "{\n  \"choice\": \"\",\n  \"confidence\": 0.0,\n  \"reason\": \"The component is a charging tank with fluid ports and specific parameters. None of the listed Modelica classes match the description of a simple tank with inlet/outlet ports and the given parameters.\",\n  \"parameter_map\": {}\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 1417,
+  "completion_tokens": 65,
+  "latency_s": 14.84909725189209,
+  "data": {
+    "choice": "",
+    "confidence": 0.0,
+    "reason": "The component is a charging tank with fluid ports and specific parameters. None of the listed Modelica classes match the description of a simple tank with inlet/outlet ports and the given parameters.",
+    "parameter_map": {}
+  }
+}

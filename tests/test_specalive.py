@@ -11,12 +11,18 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 
 from specalive.emit.sysml import SysMLEmitter, round_trip_check
 from specalive.extract.claims import extract_claims, normalise_header, parse_value
+from specalive.ingest.base import DocBlock, Document
 from specalive.ingest.registry import load_packet
+from specalive.ir.evidence import Locator, Source
 from specalive.ir.system import SystemModel
 from specalive.ir.validate import validate
+from specalive.llm.base import LLMError, LLMResponse, Provider
+from specalive.llm.providers import PROVIDER_KINDS
+from specalive.llm.router import NoTierSucceeded, Router
 from specalive.reconcile.precedence import build_supersession_map
 from specalive.repair.loop import fix_discrete_loop
 from specalive.verify.acceptance import evaluate, screen_reference
@@ -51,6 +57,50 @@ def test_pid_image_is_offered_to_the_vision_tier():
     assert pid.images(), "the P&ID must reach the vision tier as bytes"
 
 
+def test_docx_embedded_image_reaches_the_vision_tier(tmp_path):
+    """A diagram pasted into a design note is exactly the evidence the vision tier needs; before
+    this, DocxAdapter only read paragraphs and tables and any embedded picture vanished."""
+    docx = pytest.importorskip("docx")
+    PIL_Image = pytest.importorskip("PIL.Image")
+
+    img_path = tmp_path / "fig.png"
+    PIL_Image.new("RGB", (40, 40), color="white").save(img_path)
+    doc_path = tmp_path / "note.docx"
+    d = docx.Document()
+    d.add_paragraph("Design note with an embedded diagram.")
+    d.add_picture(str(img_path))
+    d.save(str(doc_path))
+
+    from specalive.ingest.adapters import DocxAdapter
+
+    source = Source(id="SRC-01", filename="note.docx", media_type="application/vnd.docx")
+    doc = DocxAdapter().parse(doc_path, source)
+    assert doc.images(), "an image embedded in a .docx must reach the vision path"
+    assert not doc.warnings, doc.warnings
+
+
+def test_chunks_can_be_restricted_to_prose_kinds():
+    """The model text path must only ever see prose -- a table/keyvalue/graph/code/image block
+    is either already deterministic or belongs to the vision path, never the text model."""
+    doc = Document(source=Source(id="SRC-01", filename="x.txt", media_type="text/plain"))
+    doc.blocks = [
+        DocBlock("heading", "Overview"),
+        DocBlock("paragraph", "Free text about the system."),
+        DocBlock("table", "a | b", rows=[["a", "b"]]),
+        DocBlock("keyvalue", "k = v", data={"path": "k", "value": "v"}),
+        DocBlock("graph", "A -> B", rows=[["from", "to"], ["A", "B"]]),
+        DocBlock("code", "x = 1;"),
+        DocBlock("image", "[fig1]", image=b"not-really-an-image"),
+    ]
+    text = "\n".join(c for c, _ in doc.chunks(kinds=("heading", "paragraph", "list")))
+    assert "Overview" in text and "Free text" in text
+    assert "a | b" not in text
+    assert "k = v" not in text
+    assert "A -> B" not in text
+    assert "x = 1" not in text
+    assert "[fig1]" not in text
+
+
 def test_value_parsing():
     assert parse_value("0.18 kg/kg") == (0.18, "kg/kg")
     assert parse_value("20000") == (20000, None)
@@ -82,6 +132,116 @@ def test_supersession_direction_is_not_inverted():
     assert {"REQ-ROU-001", "REQ-ROU-002"} <= sup["CR-017"]
     # and never the other way round
     assert "REQ-ROU-001" not in sup or "CR-017" not in sup.get("REQ-ROU-001", set())
+
+
+# --------------------------------------------------------------- extract: model path (A1/A2)
+
+
+class _FakeRouter:
+    """Duck-typed stand-in for llm.router.Router -- extract_claims only ever calls .run()."""
+
+    def __init__(self, claims_by_task: dict[str, list[dict]], tier: str = "t_fake", fail_tasks=()):
+        self.claims_by_task = claims_by_task
+        self.tier = tier
+        self.fail_tasks = set(fail_tasks)
+        self.calls: list[str] = []
+
+    def run(self, task, prompt, *, schema=None, validator=None, images=None, **_):
+        self.calls.append(task)
+        if task in self.fail_tasks:
+            raise NoTierSucceeded("forced failure for this test")
+        data = {"claims": self.claims_by_task.get(task, [])}
+        if validator is not None:
+            ok, why = validator(data)
+            assert ok, why
+        return LLMResponse(text="", tier=self.tier, model="fake", data=data)
+
+
+def _doc(text: str) -> Document:
+    doc = Document(source=Source(id="SRC-01", filename="x.txt", media_type="text/plain"))
+    doc.blocks = [DocBlock("paragraph", text, Locator(line_start=1))]
+    return doc
+
+
+def test_quote_ok_is_whitespace_insensitive_but_not_forgiving():
+    from specalive.extract.claims import _quote_ok
+
+    chunk = "The motor M-1 draws\na rated current of 12 A at 400 V."
+    assert _quote_ok("The motor M-1 draws a rated current of 12 A", chunk)  # spans a line join
+    assert not _quote_ok("M-1 draws about 12 amps", chunk)  # paraphrase
+    assert not _quote_ok("a rated current of 15 A", chunk)  # changed number
+    assert not _quote_ok("", chunk)
+
+
+def test_extract_claims_drops_only_the_fabricated_claim_not_the_whole_response():
+    """The rule: reject any *claim* whose quote isn't verbatim -- not the whole batch it arrived
+    in. One bad quote among good ones must not cost every other fact in that response."""
+    chunk_text = "The motor M-1 draws a rated current of 12 A at 400 V."
+    router = _FakeRouter(
+        {
+            "extract_claim": [
+                {"kind": "parameter", "subject": "M-1", "predicate": "rated_current",
+                 "value": 12, "unit": "A", "quote": "rated current of 12 A"},
+                {"kind": "parameter", "subject": "M-1", "predicate": "rated_current",
+                 "value": 15, "unit": "A", "quote": "rated current of 15 A"},  # fabricated
+            ]
+        }
+    )
+    doc = _doc(chunk_text)
+    claims = extract_claims([doc], router=router)
+    assert len(claims) == 1
+    assert claims[0].value == 12
+    assert claims[0].extracted_by == "t_fake"
+    assert any("dropped 1 non-verbatim" in w for w in doc.warnings)
+
+
+def test_extract_claims_is_not_specific_to_the_nacl_domain():
+    """Nothing about the extractor may be load-bearing for one packet: the real evaluation
+    packet is a different, unknown domain. A synthetic HVAC-flavoured fact must work exactly
+    like a chemical-process one."""
+    chunk_text = "Heat exchanger HX-3 has a design duty of 45 kW."
+    router = _FakeRouter(
+        {
+            "extract_claim": [
+                {"kind": "parameter", "subject": "HX-3", "predicate": "design_duty",
+                 "value": 45, "unit": "kW", "quote": "design duty of 45 kW"},
+            ]
+        }
+    )
+    claims = extract_claims([_doc(chunk_text)], router=router)
+    assert len(claims) == 1
+    assert claims[0].subject == "HX-3" and claims[0].value == 45
+
+
+def test_extract_claims_vision_loop_sets_bbox_locator_from_the_tile():
+    doc = Document(source=Source(id="SRC-01", filename="p&id.png", media_type="image/png"))
+    doc.blocks = [DocBlock("image", "[p&id.png tile r0c0]", Locator(bbox=(1, 2, 3, 4)), image=b"fake")]
+    router = _FakeRouter(
+        {"read_diagram": [{"kind": "component", "subject": "P-101", "predicate": "label",
+                            "value": None, "quote": "P-101"}]}
+    )
+    claims = extract_claims([doc], router=router)
+    assert len(claims) == 1
+    assert claims[0].locator.bbox == (1, 2, 3, 4)
+    assert claims[0].extracted_by == "t_fake"
+
+
+def test_extract_claims_records_a_tier_failure_and_continues():
+    """A chunk or image that never validates on any tier must not abort the whole document --
+    it becomes a warning, and every other block still gets a chance."""
+    doc = Document(source=Source(id="SRC-01", filename="x.txt", media_type="text/plain"))
+    doc.blocks = [
+        DocBlock("paragraph", "Pump P-2 runs at 50 Hz.", Locator(line_start=1)),
+        DocBlock("image", "[fig1]", Locator(), image=b"fake"),
+    ]
+    router = _FakeRouter(
+        {"read_diagram": [{"kind": "component", "subject": "K-1", "predicate": "label",
+                            "value": None, "quote": "K-1"}]},
+        fail_tasks={"extract_claim"},
+    )
+    claims = extract_claims([doc], router=router)
+    assert len(claims) == 1 and claims[0].subject == "K-1"
+    assert any("extract_claim failed" in w for w in doc.warnings)
 
 
 @pytest.mark.skipif(not REF_IR.exists(), reason="reference IR not built")
@@ -190,6 +350,98 @@ def test_diagnostics_are_classified_and_located():
     diags = parse_diagnostics(raw)
     assert diags and diags[0].kind == "undeclared"
     assert diags[0].line == 176 and diags[0].file.endswith("Gen.mo")
+
+
+# --------------------------------------------------------------------------- llm router
+
+
+class _FakeUnavailable(Provider):
+    kind = "fake_unavail"
+
+    def available(self) -> bool:
+        return False
+
+    def complete(self, req):  # pragma: no cover - must never be reached
+        raise AssertionError(f"{self.name}: an unavailable provider must never be called")
+
+
+class _FakeAlwaysOk(Provider):
+    kind = "fake_ok"
+
+    def available(self) -> bool:
+        return True
+
+    def complete(self, req):
+        return LLMResponse(text="{}", tier=self.name, model=self.model, data={})
+
+
+class _FakeFailing(Provider):
+    """Available, but every call fails -- used to prove the escalation cap counts real
+    attempts, not chain position."""
+
+    kind = "fake_failing"
+    log: list[str] = []
+
+    def available(self) -> bool:
+        return True
+
+    def complete(self, req):
+        _FakeFailing.log.append(self.name)
+        raise LLMError("boom")
+
+
+def _write_router_config(tmp_path: Path, tiers: dict) -> Path:
+    cfg = {
+        "tiers": {"t0_deterministic": {"kind": "deterministic"}, **tiers},
+        "routes": {"test_task": list(tiers)},
+        "modes": {"auto": {"allow": ["t0_deterministic", *tiers]}},
+        "cache": {"enabled": False},
+        "limits": {"max_escalations_per_task": 2, "max_retries_same_tier": 1},
+    }
+    path = tmp_path / "models.yaml"
+    path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    return path
+
+
+def test_router_skips_unavailable_tiers_without_spending_the_escalation_cap(tmp_path, monkeypatch):
+    """Regression: the cap used to be applied to chain *position*, cutting the chain to
+    `max_escalations + 1` entries before unavailable tiers were skipped. Three unavailable tiers
+    ahead of a real one used to starve the run before it ever reached the fourth tier -- which is
+    exactly where OpenRouter sits behind Ollama/Groq/Gemini in the real config."""
+    monkeypatch.setitem(PROVIDER_KINDS, "fake_unavail", _FakeUnavailable)
+    monkeypatch.setitem(PROVIDER_KINDS, "fake_ok", _FakeAlwaysOk)
+    cfg_path = _write_router_config(
+        tmp_path,
+        {
+            "tA": {"kind": "fake_unavail", "model": "a"},
+            "tB": {"kind": "fake_unavail", "model": "b"},
+            "tC": {"kind": "fake_unavail", "model": "c"},
+            "tD": {"kind": "fake_ok", "model": "d"},
+        },
+    )
+    router = Router(config_path=cfg_path, mode="auto")
+    resp = router.run("test_task", "prompt")
+    assert resp.tier == "tD"
+
+
+def test_router_escalation_cap_still_limits_real_attempts(tmp_path, monkeypatch):
+    """The cap must still do its job when tiers are actually reachable: with
+    max_escalations_per_task=2, at most 3 tiers may ever be called for one task."""
+    monkeypatch.setitem(PROVIDER_KINDS, "fake_failing", _FakeFailing)
+    _FakeFailing.log = []
+    cfg_path = _write_router_config(
+        tmp_path,
+        {
+            "tA": {"kind": "fake_failing", "model": "a"},
+            "tB": {"kind": "fake_failing", "model": "b"},
+            "tC": {"kind": "fake_failing", "model": "c"},
+            "tD": {"kind": "fake_failing", "model": "d"},
+        },
+    )
+    router = Router(config_path=cfg_path, mode="auto")
+    with pytest.raises(NoTierSucceeded):
+        router.run("test_task", "prompt")
+    assert set(_FakeFailing.log) == {"tA", "tB", "tC"}
 
 
 # ---------------------------------------------------------------------------- acceptance
@@ -367,43 +619,6 @@ def test_probe_script_escapes_newlines_for_mos():
     assert "inh0 := getInheritedClasses(" in script
 
 
-def test_partial_classes_are_excluded_by_the_compiler_not_by_their_name():
-    """C7. Name heuristics catch `*.BaseClasses.*` and `Partial*`, but MSL has partial classes
-    that match neither -- Modelica.Thermal.HeatTransfer.Interfaces.Element1D is partial, is not
-    named Partial*, and does not live under BaseClasses. It reached the catalog and outranked
-    ThermalConductor. `isPartial()` from omc makes the filter exact instead of approximate.
-
-    The partial flag must be read at EMIT time only: partial bases are still probed, because
-    _collect_rows walks the inheritance chain through them to recover ports (D24)."""
-    from specalive.catalog.harvest import _build_entries, _probe_script
-
-    # The probe must ask omc, and must not wrap the answer in a bare String() of a list.
-    script = _probe_script("loadModel(Modelica);\n", ["Modelica.Fluid.Vessels.OpenTank"])
-    assert "par0 := isPartial(Modelica.Fluid.Vessels.OpenTank);" in script
-    assert r'@@PAR " + String(par0)' in script
-
-    # A partial class is probed (its rows are available to children) but never emitted.
-    meta = (
-        "@@KEY Demo.PartialThing\n"
-        '@@RES "model"\n'
-        '@@COM "shared base"\n'
-        "@@PAR true\n"
-        '{{"Modelica.Thermal.HeatTransfer.Interfaces.HeatPort_a","port_a","a port",'
-        '"public","false","false","false","false","unspecified","none","unspecified"},{}}\n'
-        "@@INH\n"
-        "{}\n"
-        "@@KEY Demo.RealThing\n"
-        '@@RES "model"\n'
-        '@@COM "an instantiable component"\n'
-        "@@PAR false\n"
-        '{{"Modelica.Units.SI.Length","L","length","public","false","false","false","false",'
-        '"parameter","none","unspecified"},{}}\n'
-        "@@INH\n"
-        "{}\n"
-    )
-    keys = {e.key for e in _build_entries(meta, ("model",))}
-    assert "Demo.RealThing" in keys
-    assert "Demo.PartialThing" not in keys, "a partial class must not reach the catalog"
 # --------------------------------------------------------------- reference-data screens (D4)
 
 
@@ -487,3 +702,40 @@ def test_a_trace_with_nothing_screenable_is_not_silently_endorsed(tmp_path):
     ok, notes = screen_reference(_csv(tmp_path, "opaque.csv", ["time", "some_column"], rows))
     assert ok, "we cannot reject what we cannot check"
     assert any("neither endorsed nor rejected" in n for n in notes), notes
+def test_partial_classes_are_excluded_by_the_compiler_not_by_their_name():
+    """C7. Name heuristics catch `*.BaseClasses.*` and `Partial*`, but MSL has partial classes
+    that match neither -- Modelica.Thermal.HeatTransfer.Interfaces.Element1D is partial, is not
+    named Partial*, and does not live under BaseClasses. It reached the catalog and outranked
+    ThermalConductor. `isPartial()` from omc makes the filter exact instead of approximate.
+
+    The partial flag must be read at EMIT time only: partial bases are still probed, because
+    _collect_rows walks the inheritance chain through them to recover ports (D24)."""
+    from specalive.catalog.harvest import _build_entries, _probe_script
+
+    # The probe must ask omc, and must not wrap the answer in a bare String() of a list.
+    script = _probe_script("loadModel(Modelica);\n", ["Modelica.Fluid.Vessels.OpenTank"])
+    assert "par0 := isPartial(Modelica.Fluid.Vessels.OpenTank);" in script
+    assert r'@@PAR " + String(par0)' in script
+
+    # A partial class is probed (its rows are available to children) but never emitted.
+    meta = (
+        "@@KEY Demo.PartialThing\n"
+        '@@RES "model"\n'
+        '@@COM "shared base"\n'
+        "@@PAR true\n"
+        '{{"Modelica.Thermal.HeatTransfer.Interfaces.HeatPort_a","port_a","a port",'
+        '"public","false","false","false","false","unspecified","none","unspecified"},{}}\n'
+        "@@INH\n"
+        "{}\n"
+        "@@KEY Demo.RealThing\n"
+        '@@RES "model"\n'
+        '@@COM "an instantiable component"\n'
+        "@@PAR false\n"
+        '{{"Modelica.Units.SI.Length","L","length","public","false","false","false","false",'
+        '"parameter","none","unspecified"},{}}\n'
+        "@@INH\n"
+        "{}\n"
+    )
+    keys = {e.key for e in _build_entries(meta, ("model",))}
+    assert "Demo.RealThing" in keys
+    assert "Demo.PartialThing" not in keys, "a partial class must not reach the catalog"

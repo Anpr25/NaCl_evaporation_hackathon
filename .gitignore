@@ -20,8 +20,10 @@ out/
 *_init.xml
 *_info.json
 
-# Keep the warmed replay cache: it is what makes the demo reproducible offline.
-# .specalive_cache/
+# The warmed response cache IS committed on purpose: it is what makes `--provider replay`
+# reproduce a known-good run offline in ~50 s instead of 13 minutes, with no daemon, no keys
+# and no quota. 155 KB, and it is the demo-day safety net.
+!.specalive_cache/
 
-# Visual Studio scratch
+# Visual Studio per-user workspace state (created when the folder is opened in VS).
 .vs/

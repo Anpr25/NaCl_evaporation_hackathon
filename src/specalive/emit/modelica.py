@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from ..catalog.retrieve import PICK_PROMPT, PICK_SCHEMA, CatalogIndex
+from ..ir.evidence import Gap
 from ..ir.system import Block, StateMachine, SystemModel
 
 IND = "  "
@@ -196,12 +197,17 @@ class Binder:
     # ------------------------------------------------------------------ L1
     def _try_l1(self, block: Block) -> BindingResult | None:
         text = f"{block.name} {block.kind} {block.description or ''}".lower()
-        best: tuple[int, str, dict[str, Any]] | None = None
+        head = f"{block.name} {block.kind}".lower()
+        best: tuple[tuple[bool, int, int], str, dict[str, Any]] | None = None
         for key, tpl in L1_TEMPLATES.items():
-            score = sum(1 for kw in tpl["keywords"] if kw in text)
-            # A more specific template (heated/cooled vessel) must win over the generic one.
-            score += key.count(".")
-            if score > 1 and (best is None or score > best[0]):
+            hits = sum(1 for kw in tpl["keywords"] if kw in text)
+            if not hits:
+                continue  # specificity ranks matching templates; it is not itself a match
+            # What the part *is* (name, kind) outranks what its description mentions ('decouples
+            # mixing from evaporator availability' is not an evaporator); among those, a more
+            # specific template (heated/cooled vessel) must win over the generic one.
+            score = (any(kw in head for kw in tpl["keywords"]), key.count("."), hits)
+            if best is None or score > best[0]:
                 best = (score, key, tpl)
         if best is None:
             return None
@@ -235,14 +241,177 @@ def _literal(v: Any) -> str:
     return f'"{v}"'
 
 
+
+# --------------------------------------------------------------------------- port resolution
+
+#: Connector type suffixes that mark which end of a component a port is. Acausal domains use
+#: an a/b convention with no physical direction; causal ones name the direction outright.
+_IN_SIDE = ("inlet", "suction", "_a", "port_a", "flange_a", "positivepin", "pin_p", "plug_p",
+            "input", "in")
+_OUT_SIDE = ("outlet", "discharge", "_b", "port_b", "flange_b", "negativepin", "pin_n",
+             "plug_n", "output", "out")
+#: Parameters our templates use to size a connector array.
+_COUNT_PARAM = {"inlet": ("nIn", "nPorts", "n"), "outlet": ("nOut", "nPorts", "n")}
+
+
+#: Connector types that carry a control signal rather than a physical stream. These must be
+#: kept out of the physical pools: `Path` declares `open:BooleanInput` before `port_a`, and a
+#: substring match on "input" made the first process connection bind to the valve's command,
+#: producing `connect(B1.outlet[1], L_V8.open)` -- two incompatible connectors.
+_SIGNAL_TYPES = ("booleaninput", "booleanoutput", "realinput", "realoutput",
+                 "integerinput", "integeroutput")
+
+
+def _subscript(name: str) -> int:
+    """The [n] on a connector reference, or 0 when it is a scalar."""
+    m = re.search(r"\[(\d+)\]", name)
+    return int(m.group(1)) if m else 0
+
+
+def _side_of(name: str, type_name: str) -> str:
+    """Which end of the component a connector belongs to: 'in', 'out', 'signal' or 'other'."""
+    leaf = type_name.rsplit(".", 1)[-1].lower()
+    if leaf in _SIGNAL_TYPES:
+        return "signal"
+    hay = f"{name} {leaf}"
+    for suffix in _OUT_SIDE:
+        if suffix in hay:
+            return "out"
+    for suffix in _IN_SIDE:
+        if suffix in hay:
+            return "in"
+    return "other"
+
+
+def resolve_ports(model: SystemModel, index: CatalogIndex | None) -> list[str]:
+    """Rewrite each block port's `name` to a connector that the bound class really has.
+
+    The IR keeps the document's own word for a port -- 'bottom port' -- because that is what
+    the evidence says and the SysML model should show it. Modelica needs the class's actual
+    connector, so the two are reconciled here, once, after binding:
+
+      * connectors are grouped into in-side and out-side by name and by connector type;
+      * the block's ports are assigned within their own side, in declaration order;
+      * where the class sizes a connector array with nIn/nOut, the subscript is written and
+        the count modifier is set to match, so the array is never too small.
+
+    Port `id` is untouched: connections reference ids, and SysML keeps reporting the
+    document's name. Returns a list of problems for the caller to declare as gaps.
+    """
+    problems: list[str] = []
+    # A port only earns an array slot if something is actually wired to it. The IR lists every
+    # port a register mentions, which is right for SysML, but sizing nIn/nOut from that count
+    # leaves empty array elements whose inputs nothing defines -- an under-determined model.
+    emitted = {b.id for b in model.simulatable_blocks()}
+    wired: set[str] = set()
+    for conn in model.connections:
+        # A connection to a part we do not emit -- a utility header outside the plant
+        # boundary, or a valve that was lowered into a series group -- is not a wire in the
+        # executable model. Counting it would size an array for a slot nothing ever fills.
+        ends = [ref.split(".", 1)[0] for ref in (conn.source, conn.target)]
+        if not all(e in emitted for e in ends):
+            continue
+        wired.update((conn.source, conn.target))
+
+    for block in model.simulatable_blocks():
+        if not block.ports or not block.modelica_class:
+            continue
+        entry = index.get(block.modelica_class) if index else None
+        if entry is None or not entry.ports:
+            continue
+
+        available: dict[str, list[str]] = {"in": [], "out": [], "signal": [], "other": []}
+        for cp in entry.ports:
+            available[_side_of(cp.name, cp.type)].append(cp.name)
+
+        params = {prm.name for prm in entry.params}
+        used: dict[str, int] = {}
+        connected = [p for p in block.ports if f"{block.id}.{p.id}" in wired]
+        dangling = [p for p in block.ports if p not in connected]
+        for port in dangling:
+            # Keep it in the IR (SysML should still show the port the register described)
+            # but give it no Modelica name, so nothing tries to emit a connection to it.
+            port.connector_type = None
+        # Resolution must be idempotent. A hand-built or previously-resolved IR already
+        # names real connectors, and re-deriving them by direction gets it wrong: an
+        # evaporator has two out-side connectors and the first out-port was reassigned from
+        # `outlet` to `vapor`, swapping the concentrate and vapour streams. If the name is
+        # already a connector this class declares, keep it and just count the slot.
+        declared = {cp.name for cp in entry.ports}
+        for port in connected:
+            base = port.name.split("[")[0]
+            if base in declared:
+                used[base] = max(used.get(base, 0), _subscript(port.name))
+                side_already = _side_of(base, next(c.type for c in entry.ports if c.name == base))
+                used[side_already] = used.get(side_already, 0) + 1
+                count_param = next((c for c in _COUNT_PARAM.get(base, ()) if c in
+                                    {prm.name for prm in entry.params}), None)
+                if count_param and _subscript(port.name):
+                    block.modelica_modifiers[count_param] = str(used[base])
+                continue
+            if port.domain in ("signal", "control"):
+                side = "signal"
+            else:
+                side = "in" if port.direction == "in" else "out" if port.direction == "out" else "other"
+            pool = available.get(side) or available.get("other") or []
+            if not pool and side != "signal":
+                # Acausal components (a rotational flange) have no in/out sense at all, so
+                # fall back to any PHYSICAL connector. Never fall back to a signal connector:
+                # a stream must not be wired into a command input.
+                pool = available["in"] + available["out"] + available["other"]
+            if not pool:
+                problems.append(f"{block.id}.{port.id}: {block.modelica_class} declares no connector")
+                continue
+
+            connector = pool[min(used.get(side, 0), len(pool) - 1)] if len(pool) > 1 else pool[0]
+            count_params = [c for c in _COUNT_PARAM.get(connector, ()) if c in params]
+            if count_params:
+                # Subscript counts uses of THIS array, not ports on this side. An evaporator
+                # has two out-side connectors, `vapor` and `outlet[]`; counting per side made
+                # the first use of `outlet` come out as outlet[2] and sized the array to 2,
+                # leaving outlet[1] undefined.
+                idx = used.get(connector, 0) + 1
+                port.name = f"{connector}[{idx}]"
+                block.modelica_modifiers[count_params[0]] = str(idx)
+                used[connector] = idx
+            else:
+                port.name = connector
+            used[side] = used.get(side, 0) + 1
+
+        # Any connector array the class declares but which nothing wired to must be sized 0,
+        # or its elements are undefined.
+        for connector, counts in _COUNT_PARAM.items():
+            count_param = next((c for c in counts if c in params), None)
+            if count_param and count_param not in block.modelica_modifiers:
+                block.modelica_modifiers[count_param] = "0"
+
+        for side in ("in", "out"):
+            if used.get(side, 0) > len(available[side]) and not any(
+                c in params for c in ("nIn", "nOut", "nPorts", "n")
+            ):
+                problems.append(
+                    f"{block.id}: {used[side]} {side}-ports but {block.modelica_class} declares "
+                    f"{len(available[side])} and is not an array"
+                )
+    return problems
+
+
 # --------------------------------------------------------------------------------- emission
 
 
 class ModelicaEmitter:
-    def __init__(self, model: SystemModel, package: str = "GeneratedPlant") -> None:
+    def __init__(self, model: SystemModel, package: str = "GeneratedPlant",
+                 index: Any | None = None) -> None:
         self.m = model
         self.package = package
+        self._index = index
         self.lines: list[str] = []
+        #: Every connector this emitter has already driven, by any route -- a signal
+        #: binding, a series-group conjunction, a connect(). The gap pass consults this
+        #: instead of trying to enumerate the ways a connector can acquire a value; it
+        #: bound seven `L_*.open` a second time because it did not know about series
+        #: lowering, and the model came out over-determined by exactly seven.
+        self._driven: set[str] = set()
 
     def _w(self, depth: int, text: str = "") -> None:
         self.lines.append(f"{IND * depth}{text}" if text else "")
@@ -354,6 +523,35 @@ class ModelicaEmitter:
         return re.sub(r"\s+", " ", out).strip()
 
     # ------------------------------------------------------------------ plant
+    def _unbound_signal_inputs(self) -> list[tuple[str, str, str]]:
+        """Component signal inputs that nothing drives: (component, connector).
+
+        A dangling `input` has no equation defining it, so omc reports the whole model as
+        under-determined. We would rather emit a stated assumption than a model that cannot
+        be built, so these are bound to zero and declared.
+        """
+        if self._index is None:
+            return []
+        wired = {r for c in self.m.connections for r in (c.source, c.target)}
+        # An actuator signal bound to `B5.heater` drives that connector by equation, not by
+        # connect(). Binding it again to 0 produced `B5.heater = 0.0` on a Boolean input.
+        driven = {s.binding for s in self.m.signals if s.binding}
+        out: list[tuple[str, str]] = []
+        for block in self.m.simulatable_blocks():
+            entry = self._index.get(block.modelica_class or "")
+            if entry is None:
+                continue
+            bound_here = {p.name for p in block.ports}
+            for cp in entry.ports:
+                leaf = cp.type.rsplit(".", 1)[-1].lower()
+                if not leaf.endswith("input"):
+                    continue
+                ref = f"{block.id}.{cp.name}"
+                if cp.name in bound_here or ref in wired or ref in driven or ref in self._driven:
+                    continue
+                out.append((block.id, cp.name, "false" if leaf.startswith("boolean") else "0.0"))
+        return out
+
     def _emit_plant(self) -> None:
         self._w(1, f"model Plant \"{self.m.description or self.m.name}\"")
         for b in self.m.simulatable_blocks():
@@ -370,7 +568,13 @@ class ModelicaEmitter:
             self._w(2, f"{_mid(sm.name)} {_mid(sm.id)};")
         self._w(0)
         self._w(1, "equation")
+        simulated = {b.id for b in self.m.simulatable_blocks()}
         for c in self.m.connections:
+            ends = {c.source.split(".")[0], c.target.split(".")[0]}
+            if not ends <= simulated:
+                # An architecture-only part (a boundary, a manual valve) has no instance here.
+                self._w(2, f"// architecture only: {c.id} ({c.source} -> {c.target}) is not simulated")
+                continue
             note = f"  // @series {', '.join(c.series_elements)}" if c.series_elements else ""
             self._w(2, f"connect({self._ref(c.source)}, {self._ref(c.target)});{note}")
         self._w(0)
@@ -384,8 +588,21 @@ class ModelicaEmitter:
                     self._w(2, f"{ctrl}.{_mid(s.name)} = {path};")
                 else:
                     self._w(2, f"{path} = {ctrl}.{_mid(s.name)};")
+                    self._driven.add(s.binding)
             self._w(0)
             self._emit_series_groups(ctrl)
+
+            # Sensor inputs the IR could not bind to anything in the plant.
+            for sig in self.m.signals:
+                if sig.role == "sensor" and not sig.binding:
+                    self._w(2, f"// GAP: {sig.name} has no plant binding; assuming 0 "
+                               f"(fail-safe reading for an interlock)")
+                    self._w(2, f"{ctrl}.{_mid(sig.name)} = 0.0;")
+
+        # Component signal inputs nothing drives.
+        for comp, connector, zero in self._unbound_signal_inputs():
+            self._w(2, f"// GAP: nothing drives {comp}.{connector}; assuming {zero}")
+            self._w(2, f"{_mid(comp)}.{connector} = {zero};")
         self._w(1, "end Plant;")
         self._w(0)
 
@@ -434,6 +651,7 @@ class ModelicaEmitter:
             expr = " and ".join(terms)
             self._w(2, f"// @lowering series group {{{', '.join(elements)}}} -> one command")
             self._w(2, f"{_mid(path_id)}.open = {expr};")
+            self._driven.add(f"{path_id}.open")
 
     def _emit_scenario(self, sc: Any) -> None:
         interval = sc.interval or max(sc.stop_time / 500.0, 1e-6)
@@ -487,7 +705,15 @@ def emit_modelica(
         b.synthesised_equations = res.synthesised
         tiers[res.tier] += 1
 
-    text = ModelicaEmitter(model, package).emit()
+    # Reconcile the document's port vocabulary with the bound class's real connectors
+    # BEFORE emitting. Skipping this writes `B1.bottom_port`, which no class declares.
+    for problem in resolve_ports(model, index):
+        model.gaps.append(
+            Gap(id=f"GAP-PORT-{len(model.gaps):02d}", kind="unmapped_component",
+                subject=problem.split(":")[0], detail=problem, severity="warn")
+        )
+
+    text = ModelicaEmitter(model, package, index).emit()
     p = Path(out_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
