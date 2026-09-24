@@ -16,7 +16,111 @@ gracefully.
 
 ---
 
-## 2026-09-24 (latest) — C8 done: the Modelica is now derived from the SysML
+## 2026-09-24 (latest) — the agentic plan for C: making the `.mo` recover when it goes wrong
+
+**Status: plan, not yet built.** `.env` created and loaded (`doctor` shows `Env file loaded`);
+waiting on the Groq key. Everything below is C's AI surface and the order I propose to build it.
+
+### The gap that matters most
+
+**If the model compiles but fails to build or simulate, nothing is repaired at all.** The
+pipeline gates repair on `omc checkModel`, and on a simulate failure it stops:
+
+```python
+if not sim.ok:
+    yield from self._finish(t0, runner)   # <- pipeline.py: no repair, no retry
+    return
+```
+
+That is exactly the class of failure C-07 already proved is real: binding a partial class
+**passes** `checkModel` and dies at build with `Component 'wall' has partial type`. The same
+is true of structurally singular systems, failed initialisation, division by zero at t=0 and
+index-reduction failures — the errors where the *physics* is wrong rather than the syntax, and
+precisely the ones a model is most useful on. Today they get no AI support whatsoever.
+
+### The principle, and why this is agentic rather than decorative
+
+> PRD §10: *"Planning, tool use, self-critique and multi-pass refinement are all in scope.
+> Using an agent where a single call would do is not automatically better."*
+
+So each AI touchpoint gets the **smallest shape that fits the problem**, and we should be able
+to say why:
+
+| Touchpoint | Shape | Why not more, why not less |
+|:--|:--|:--|
+| Catalog pick | **one call**, multiple choice | It *is* multiple choice. An agent loop here buys nothing and costs latency |
+| L2 synthesis | **generate → critique → verify** | Free generation is the risky one; a critique pass is cheap next to a failed compile |
+| Repair | **full agent loop** | The environment answers back. `omc` returns a different error after every patch, so the next action genuinely depends on the last result. That is the definition of an agent, and here it is justified |
+
+The thing that makes an agent *safe* in this repo: **it never declares its own success.** `omc`
+does. Every action is graded by a real compiler, so a confident wrong answer is caught by the
+environment rather than believed.
+
+### The degradation ladder — the whole story on one line
+
+```
+L0 catalog  →  L1 template  →  L2 synthesis  →  deterministic repair  →  agentic repair  →  declared gap
+  grounded      grounded        AI + critique     code, no tokens         AI + omc loop      honest
+```
+
+Every rung is verified before the next is tried, and the last rung is *telling the user* rather
+than guessing. "A declared gap beats a silent guess" is standing rule 4; this is it in code.
+
+### Plan
+
+**C-AI-1 · Close the simulate gap.** *Highest value; it is the literal answer to "what if
+something goes south making the .mo".* Repair currently ends at `checkModel`. Extend it to a
+two-stage gate — `check`, then `build + simulate` — and feed simulate-stage diagnostics into the
+same loop. Add deterministic fixers for the cheap ones first (partial-type binding, missing
+`fixed=true` on an initial condition, a zero denominator at t=0); the model handles the rest.
+
+**C-AI-2 · Turn the repair loop into a real agent.** It is 70% there: observe (`omc`) → act
+(patch) → verify (`omc`) → revise, bounded, keep-best. Three things missing, all of which are
+what a judge means by "agentic":
+
+- **Memory.** Each iteration currently starts blind. It should see its own rejected attempts
+  and *why* they were rejected — "patch raised errors 1→3, discarded" — so it stops proposing
+  the same fix twice. This is the cheapest of the three and probably the highest-value.
+- **Tool use.** `catalog_note` is pre-baked into the prompt today. Let the agent *ask*:
+  `catalog_lookup("SpecAlive.Vessels.Evaporator")` returns the verified parameter and connector
+  list. The model stops guessing an API and starts querying ground truth — the same
+  replace-a-guess-with-a-lookup move as C-07 and the D-1 residual.
+- **Planning before patching.** One classification call that names the strategy, then execution.
+  Only for errors the deterministic table does not recognise, so we never pay for planning on
+  something a regex already fixes.
+
+**C-AI-3 · L2 synthesis with self-critique (= C4).** The model writes *equations only*, inside a
+skeleton whose ports, units and connector balance we fixed. Then a second pass criticises its
+own output against connector balance and unit consistency before `omc` ever sees it. Cheap
+relative to a failed compile, and it is "self-critique" literally.
+
+**C-AI-4 · Retrieval escalation (= C2).** BM25 shortlist → embedding rerank → model picks *by
+class name* (D already made it answer by name so a fabricated answer is detectable) → validated
+against the catalog. Retrieval is 5/10 top-1 and two of the five misses sit at rank 4, which is
+exactly the rerank-then-pick case.
+
+**C-AI-5 · The evidence — a fault-injection harness.** This is the demo, and the number for the
+deck. Take a known-good generated `.mo`, break it in N documented ways — delete an `inner`,
+rename a connector, bind a partial class, remove an initial condition, introduce a discrete
+algebraic loop — and measure recovery **with AI off vs on**. Two honest numbers, e.g.
+"deterministic alone recovers 6/12; with the agent, 11/12; the twelfth is declared as a gap."
+Fault injection also exercises the paths that never fire on a packet that happens to work, and
+an untested fallback is not a fallback.
+
+### ⚠ Affects you
+
+**D — the router is about to get its first sustained real use, and `repair_modelica` is the
+task chain it will hit** (`[t0_deterministic, t3_cloud_reasoning, t4_cloud_vision]`). Two asks:
+the quota accounting should survive a 6-iteration loop without exhausting the tier mid-run, and
+`--provider replay` needs to reproduce a repair sequence offline for the demo. C-AI-5's harness
+is a good way to warm that cache with something worth caching.
+
+**Everyone — nothing here changes the default path.** The gate is `--provider none` today and
+stays that way. AI is the *fallback* when deterministic work runs out, never the first move.
+
+---
+
+## 2026-09-24 (earlier) — C8 done: the Modelica is now derived from the SysML
 
 **Status: C-08 implemented and measured.** `specalive run … --from-sysml` re-reads the SysML
 it just emitted and builds the Modelica from that text alone. Both benches pass on the new
