@@ -18,10 +18,13 @@ from pathlib import Path
 from typing import Optional
 
 import typer
+from dotenv import load_dotenv
 from rich.console import Console
 from rich.table import Table
 
 from .pipeline import Pipeline, PipelineConfig, PipelineEvent
+
+load_dotenv()  # picks up .env (e.g. OPENROUTER_API_KEY) without requiring a shell export
 
 app = typer.Typer(add_completion=False, help="From specs to live engineering models.")
 con = Console()
