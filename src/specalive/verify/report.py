@@ -101,7 +101,7 @@ def build_report(
 
     p.append(f"<h1>{_e(model.name)}</h1>")
     p.append(
-        f'<p class="sub">SpecAlive run &middot; {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} '
+        f'<p class="sub">ModelAlchemist run &middot; {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} '
         f"&middot; {len(model.sources)} evidence sources &middot; "
         f"domains: {_e(', '.join(model.domains))}</p>"
     )
@@ -357,7 +357,7 @@ def build_report(
     doc = (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>{_e(model.name)} &mdash; SpecAlive</title><style>{CSS}</style></head>"
+        f"<title>{_e(model.name)} &mdash; ModelAlchemist</title><style>{CSS}</style></head>"
         f"<body><div class='wrap'>{''.join(p)}</div></body></html>"
     )
     path = out_dir / "report.html"

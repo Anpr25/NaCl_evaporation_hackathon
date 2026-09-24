@@ -28,7 +28,8 @@ from .settings import load_env
 # any of them is built. Doing it here means every command gets it, including `doctor`.
 load_env()
 
-app = typer.Typer(add_completion=False, help="From specs to live engineering models.")
+app = typer.Typer(add_completion=False,
+                  help="ModelAlchemist - engineering evidence to SysML v2 and running Modelica.")
 con = Console()
 
 _STATUS_STYLE = {"ok": "green", "warn": "yellow", "fail": "red", "skip": "dim", "start": "cyan"}
@@ -64,7 +65,7 @@ def doctor() -> None:
     from .settings import key_status
     from .verify.omc import describe_environment
 
-    t = Table(title="SpecAlive environment", show_lines=False)
+    t = Table(title="ModelAlchemist environment", show_lines=False)
     t.add_column("Component")
     t.add_column("Status")
     t.add_column("Detail", overflow="fold")
@@ -445,7 +446,7 @@ def serve(
     import uvicorn
 
     os.environ["SPECALIVE_PROVIDER"] = provider
-    con.print(f"SpecAlive on http://{host}:{port}  (provider={provider})")
+    con.print(f"ModelAlchemist on http://{host}:{port}  (provider={provider})")
     uvicorn.run("specalive.web.app:app", host=host, port=port, log_level="warning")
 
 
