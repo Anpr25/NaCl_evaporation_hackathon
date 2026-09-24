@@ -150,8 +150,22 @@ class DocxAdapter(Adapter):
                 from PIL import Image
 
                 img = Image.open(io.BytesIO(rel.target_part.blob))
+                # convert("RGB") on its own DISCARDS alpha rather than compositing it -- a
+                # transparent-background diagram would silently turn into a black rectangle
+                # (whatever RGB values sat under alpha=0) with no error or warning. Composite
+                # onto white first, the way any normal viewer renders a transparent PNG.
+                has_alpha = img.mode in ("RGBA", "LA") or (
+                    img.mode == "P" and "transparency" in img.info
+                )
+                if has_alpha:
+                    img = img.convert("RGBA")
+                    canvas = Image.new("RGB", img.size, (255, 255, 255))
+                    canvas.paste(img, mask=img.split()[-1])
+                    img = canvas
+                else:
+                    img = img.convert("RGB")
                 buf = io.BytesIO()
-                img.convert("RGB").save(buf, format="PNG")
+                img.save(buf, format="PNG")
                 png_bytes = buf.getvalue()
             except Exception as exc:
                 doc.warnings.append(f"embedded image {ii} could not be read ({exc}); skipped")
