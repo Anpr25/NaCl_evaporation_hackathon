@@ -173,7 +173,7 @@ input. Current standing, measured on the autonomous run (no `--reference-ir`):
 
 | Clause | Behaviour | Evidence |
 |:--|:--|:--|
-| Missing info **inferred with a stated assumption** | 8 assumptions, each citing a convention registered in `config/assumptions.yaml` *before* the run | report §*Stated assumptions*; `assumptions_unfounded` = **0** |
+| Missing info **inferred with a stated assumption** | 6 assumptions, each citing a convention registered in `config/assumptions.yaml` *before* the run | report §*Stated assumptions*; `assumptions_unfounded` = **0** |
 | ...**or surfaced as a question** | 4 questions, 2 of them blocking, each with what we searched and what we did meanwhile | report §*Questions for the customer* |
 | **Never silently invented** | `assume()` raises on an unregistered basis; an unfounded inference is still recorded and counted, never hidden | `tests/test_assumptions_and_questions.py` |
 | **Contradictions flagged, not resolved arbitrarily** | 12 decision records naming a precedence rule; 2 setpoint contradictions proved from the trace and reported unresolved | report §*Conflict resolutions*, §*Declared gaps* |
@@ -190,12 +190,18 @@ guard is left exactly as written and evaluated first; a second, clearly marked t
 added beside it; and the model is built and run again. Both the Modelica and the SysML show
 the two exits side by side. The contradicted checks **still fail** — nothing turns green
 because we added an exit — but the twelve steps behind the deadlock now get exercised, which
-takes the autonomous run from **3/10 to 5/10**.
+takes the autonomous run from **3/10 to 8/10**.
 
-Of the five still red: two are the genuine contradictions, correctly reported as found. The
-other three are **extraction** gaps, not modelling ones — `K1.cw_flow` is undriven and B6/B7
-never receive a hot charge, so their temperatures never move. The report names them rather
-than absorbing them into the score.
+The two still red are the genuine contradictions (OPEN-ISSUE-01 and OPEN-ISSUE-07),
+correctly reported as found. Nothing turns green because we added an exit.
+
+Getting from 5/10 to 8/10 was extraction, not modelling, and it was one chain:
+`SP-K1-CW = 0.1 kg/s` was extracted and then never wired to `K1.cw_flow`; that input read
+zero; `FIS-801` — which no document gives a binding — read zero too; the heater permissive
+`FIS-801 >= 0.10` was false for the whole run; B5 never boiled; nothing condensed; B6 and B7
+never got the charge they were meant to cool. An unbound input now looks for a setpoint the
+evidence supplies before assuming, and a sensor compared against a setpoint we have already
+resolved is bound to that quantity. Both are evidence-backed recoveries, not assumptions.
 
 ---
 
@@ -387,7 +393,7 @@ Ordered by priority within each owner. `[!]` means it blocks someone else.
 
 ## 5. Findings we will present
 
-Two defects in the organisers' own data, both found by code in the repo, both declared in the
+Three defects in the organisers' own data, all found by code in the repo, all declared in the
 generated report rather than papered over. These are worth points under traceability and
 honesty and are worth a slide each.
 
@@ -397,13 +403,31 @@ B3 batch under a mass-consistent balance. B3 holds at most ~0.0091 m³ once it r
 a required 0.18 m. The two setpoints are mutually unsatisfiable as written. We add a declared
 fallback exit on B4 exhaustion so the sequence cannot deadlock.
 Found by `ir/validate.py::check_guard_reachability`, which generalises to any monotone
-threshold on a conserved accumulation.
+threshold on a conserved accumulation — and, independently and more convincingly, by
+`verify/diagnose.py` from the simulation itself: *"B5.level settled at 0.1476 against a
+required 0.18, having travelled 0.1426 of the 0.175 needed (18.5% short) and then stopped
+changing."* The static check needed upstream geometry the extractor does not always find; a
+plateau needs no such inference.
+
+**It is not an artifact of our own assumption.** The packet never states how much B1/B2 hold,
+so we assume 80% of the stated maximum (SA-02) and say so. Re-running with a **100%** charge
+gives `B5.level` max = **0.1476** — identical. The setpoint is unreachable however full the
+charging tanks start.
 
 **OPEN-ISSUE-02 — the reference trace is not mass-consistent.** Across the B5 evaporation
 phase, solute inventory rises 44% while concentration rises 0.080 → 0.180: NaCl is created.
 Signal RMSE against that trace is therefore not evidence of correctness.
 Found by `verify/acceptance.py::screen_reference`, which distinguishes a genuine concentration
 phase from an ordinary tank drain (the naive version flagged B3 emptying as a false positive).
+
+**OPEN-ISSUE-07 — the B7 pump permissive contradicts the step that depends on it.** Step7
+completes when `LIS-701 < 0.01 m`, but P1's permissive is `LIS-701 > 0.02 m`, so the pump
+that drains B7 stops at twice the level the step is waiting for. B7 settles at 0.02 m against
+a required 0.01 m (19.2% short) and the branch can never complete on the specified guard.
+Found by `verify/diagnose.py` on the autonomous run. This one was invisible until the
+diagnosis learned to measure the *approach* rather than the whole series: B7 starts at
+0.005 m, fills to 0.167 m and drains back to 0.02 m, so against sample zero its minimum looks
+identical to its start and the check was filed as "never moved".
 
 ---
 

@@ -9,7 +9,77 @@ know about; everything else is FYI.
 
 ---
 
-## 2026-09-24 (latest) — rules 6.2/6.3 compliance: assumptions and questions are first-class
+## 2026-09-24 (latest) — extraction: recover what the evidence already said
+
+**3/10 → 8/10** on the autonomous packet. Semantic recall **83% → 92%**. No ownership
+boundaries any more: A/B/C's areas were fair game and most of this lands in theirs.
+
+**First, the ruler was broken.** `ir-diff` compared connection endpoints and signal ids as
+strings, so it measured vocabulary, not extraction:
+
+- **connections 0%** against a *topologically identical* graph, because the extractor reads a
+  vessel's drain port off the drawing as `bottom_port` and the reference calls it `out`
+- three actuators reported **missing** that were present, correctly bound, and driving the
+  plant — `cmd_B5_Heater` and `cmd_heater` are the same signal if they drive the same
+  connector
+- `RET_A`/`RET_B` "missing" when the extractor had the same paths as `L_B6_B1`/`L_B7_B2`,
+  with identical series groups
+- `Step10` "missing" when the extractor kept the document's own combined name `Step10_11`
+- `SP-HEATER-LVL` "missing" when that name was **invented by the reference**; the extractor
+  inlines the literal `0.05` from the prose, which is arguably more honest
+
+Edges are now compared block-to-block with multiplicity, signals by role and binding, and
+naming agreement is reported separately and **not scored**. Nine of the nine points came from
+measuring properly. I stopped there deliberately: tuning the metric further to match our own
+output would be fitting the ruler to the plank.
+
+**Then the real defect, which was one chain.**
+
+```
+SP-K1-CW = 0.1 kg/s  "minimum cooling-water flow ... applies to K1"   <- extracted, then dropped
+K1.cw_flow = 0                                                        <- nothing "feeds" a boundary
+FIS-801 = 0                                                           <- no document binds an instrument tag
+FIS-801 >= 0.10  ->  false, always                                    <- heater permissive
+B5 never boils -> nothing condenses -> B6/B7 never get a hot charge   <- 5 checks red
+```
+
+Two fixes, both **evidence-backed recoveries rather than assumptions**: an unbound real input
+looks for a setpoint the evidence supplies for that block and quantity before falling back to
+the inert value; and a sensor compared against a setpoint we have *already* resolved is bound
+to that quantity. If the setpoint was never resolved, nothing happens and the declared
+assumption stands.
+
+**⚠ Affects you:** only *actuator* bindings now suppress an input's drive equation. A sensor
+binding is a read — treating `FIS_801 -> K1.cw_flow` as a write left the connector with no
+equation and the model under-determined.
+
+**The worst bug of the session, and it was mine.** We were manufacturing a contradiction and
+reporting it as the customer's. Step5 and Step6 both got a declared fallback in the *same*
+pass; Step6 is downstream, so its dwell was measured on a trace where Step5 was still
+deadlocked. The 172 s that came out cut the heater short and we filed B5.w as "58.2% short of
+a setpoint its own numbers forbid". It reaches **exactly 0.180** once Step5 can exit. Each
+pass now fixes the earliest blocked step per region and defers the rest — a verdict measured
+against a broken upstream is not evidence and is no longer recorded at all.
+
+**New defect in the packet — OPEN-ISSUE-07.** Step7 completes at `LIS-701 < 0.01 m`, but P1's
+permissive is `LIS-701 > 0.02 m`: the pump that drains B7 stops at twice the level the step
+waits for. Invisible until the diagnosis learned to measure the *approach* (max drawdown)
+rather than the whole series — B7 starts at 0.005 m, fills to 0.167 m, drains to 0.02 m, so
+against sample zero its minimum looked identical to its start.
+
+**Verified, because it changes what we may claim:** OPEN-ISSUE-01 is *not* an artifact of our
+80% initial-charge assumption. At a 100% charge `B5.level` max is 0.1476 either way.
+
+**End to end, through the web app as well as the CLI:** ingest → extract → reconcile →
+validate → SysML → Modelica → compile → simulate → verify → 3 build passes → report, all
+artifacts downloadable. Web run and CLI run agree exactly: 8/10, 6 assumptions (0 unfounded),
+4 questions (2 blocking).
+
+**Numbers.** 111 tests green. `bench`: drivetrain 7/7, nacl 11/12, hvac NO PACKET.
+
+---
+
+## 2026-09-24 — rules 6.2/6.3 compliance: assumptions and questions are first-class
 
 Read the input-handling rules against what we actually do. Two of the three clauses were
 already met; one was not, and the fix turned out to be worth more than compliance.
