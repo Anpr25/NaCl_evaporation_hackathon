@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from .evidence import DecisionRecord, EvidenceClaim, Gap, Source
+from .evidence import Assumption, DecisionRecord, EvidenceClaim, Gap, Question, Source
 
 SCHEMA_VERSION = "1.0.0"
 
@@ -247,6 +247,11 @@ class SystemModel(BaseModel):
     claims: list[EvidenceClaim] = Field(default_factory=list)
     decisions: list[DecisionRecord] = Field(default_factory=list)
     gaps: list[Gap] = Field(default_factory=list)
+    #: The brief requires missing information to be "inferred with a stated assumption, or
+    #: surfaced as a question". These are those two, kept apart from `gaps` so a reviewer can
+    #: find what we invented and what we are asking without reading every warning.
+    assumptions: list[Assumption] = Field(default_factory=list)
+    questions: list[Question] = Field(default_factory=list)
 
     requirements: list[Requirement] = Field(default_factory=list)
     parameters: list[Parameter] = Field(default_factory=list)
@@ -312,4 +317,8 @@ class SystemModel(BaseModel):
             "decisions_provisional": sum(1 for d in self.decisions if d.provisional),
             "gaps": len(self.gaps),
             "gaps_blocking": sum(1 for g in self.gaps if g.severity == "blocking"),
+            "assumptions": len(self.assumptions),
+            "assumptions_unfounded": sum(1 for a in self.assumptions if not a.basis),
+            "questions": len(self.questions),
+            "questions_blocking": sum(1 for q in self.questions if q.blocking),
         }

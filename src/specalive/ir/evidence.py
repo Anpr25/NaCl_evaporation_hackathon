@@ -184,3 +184,52 @@ class Gap(BaseModel):
     requirement_ids: list[str] = Field(default_factory=list)
     severity: Literal["info", "warn", "blocking"] = "warn"
     workaround: str | None = None
+
+
+class Assumption(BaseModel):
+    """Something the evidence did not say, that we filled in and said so.
+
+    The brief is explicit: missing information must be "inferred with a stated assumption,
+    or surfaced as a question", and never silently invented. An Assumption is the first of
+    those two, and it is a separate record from a Gap on purpose -- a gap is something we
+    could not do, an assumption is something we *did* on our own authority, and a reviewer
+    needs to find those without reading past twenty warnings.
+
+    `basis` is the important field. An assumption that cites a named standard convention is
+    defensible engineering; one that cites nothing is a guess wearing a label.
+    """
+
+    id: str
+    subject: str = Field(description="IR element the assumption was applied to")
+    statement: str = Field(description="What we assumed, in one sentence a reviewer can judge")
+    value: Any = None
+    unit: str | None = None
+    #: Id from config/assumptions.yaml, or None when nothing standard covered it.
+    basis: str | None = None
+    basis_text: str | None = None
+    what_was_missing: str = Field(description="The fact the evidence never stated")
+    impact_if_wrong: str | None = Field(
+        default=None, description="What a reviewer should re-check if they disagree"
+    )
+    #: The question we would ask to make this unnecessary. Links assumption to question.
+    question_id: str | None = None
+
+
+class Question(BaseModel):
+    """Something we could not settle and are asking the customer, rather than guessing.
+
+    The second half of the brief's rule. A question is not a failure: on an incomplete
+    packet it is often the correct output, and a system that asks three sharp questions is
+    worth more than one that silently invents three numbers.
+    """
+
+    id: str
+    subject: str
+    question: str = Field(description="Phrased so a process engineer could answer it directly")
+    why_it_matters: str
+    #: True when nothing downstream can be trusted until this is answered.
+    blocking: bool = False
+    #: Where we looked before asking, so the reader knows this is not laziness.
+    searched: list[str] = Field(default_factory=list)
+    #: What we did in the meantime, if anything.
+    interim: str | None = None

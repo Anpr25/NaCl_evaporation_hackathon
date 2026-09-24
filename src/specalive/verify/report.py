@@ -128,12 +128,99 @@ def build_report(
         )
     )
     cards.append(("Declared gaps", str(cov["gaps"]), "warn" if cov["gaps"] else "pass"))
+    # The brief requires missing information to be inferred with a stated assumption OR
+    # surfaced as a question. Both counts belong on the front page, not buried: an
+    # assumption nobody can find is indistinguishable from an invention.
+    cards.append(
+        (
+            "Stated assumptions",
+            f"{cov['assumptions']}"
+            + (f" ({cov['assumptions_unfounded']} unfounded)" if cov["assumptions_unfounded"] else ""),
+            "fail" if cov["assumptions_unfounded"] else ("warn" if cov["assumptions"] else "pass"),
+        )
+    )
+    cards.append(
+        (
+            "Questions raised",
+            str(cov["questions"]),
+            "warn" if cov["questions_blocking"] else "pass",
+        )
+    )
     p.append('<div class="gate">')
     for k, v, cls in cards:
         p.append(f'<div class="card"><div class="k">{_e(k)}</div><div class="v {cls}">{_e(v)}</div></div>')
     p.append("</div>")
 
     # ---------------------------------------------------------------- honesty first
+    #
+    # Questions come before assumptions, and assumptions before gaps, because that is the
+    # descending order of what a reviewer can act on. A question is work they can do in a
+    # minute; an assumption is a number they can overturn; a gap is something neither of us
+    # can fix today.
+    p.append("<h2>Questions for the customer</h2>")
+    if model.questions:
+        p.append(
+            '<p class="sub">The evidence did not settle these. Where a run still needed a '
+            'number, the interim value is named here and declared below &mdash; nothing was '
+            'filled in silently.</p>'
+        )
+        p.append(
+            _rows(
+                ["Id", "Subject", "Question", "Why it matters", "Searched", "Interim"],
+                [
+                    [_e(q.id), _e(q.subject),
+                     f"<strong>{_e(q.question)}</strong>", _e(q.why_it_matters),
+                     _e(", ".join(q.searched) if q.searched else "-"),
+                     _e(q.interim or "nothing assumed")]
+                    for q in model.questions
+                ],
+                ["no" if q.blocking else "" for q in model.questions],
+            )
+        )
+    else:
+        p.append(
+            '<div class="good">No open questions. Every value in the model came from the '
+            'evidence or from a declared standard assumption.</div>'
+        )
+
+    p.append("<h2>Stated assumptions</h2>")
+    if model.assumptions:
+        unfounded = [a for a in model.assumptions if not a.basis]
+        if unfounded:
+            p.append(
+                f'<div class="no">{len(unfounded)} of these cite no registered convention. '
+                "An assumption with no basis is a guess with a label on it. It is shown here "
+                "rather than hidden, but it should become a register entry or a question."
+                "</div>"
+            )
+        p.append(
+            '<p class="sub">Each row is something the evidence never stated. '
+            '<em>Basis</em> cites a convention declared in '
+            '<code>config/assumptions.yaml</code> <em>before</em> this run, so the reasoning '
+            'cannot have been invented to fit the result. <em>To disagree</em> is where to '
+            'look to overturn it.</p>'
+        )
+        p.append(
+            _rows(
+                ["Id", "Subject", "What was missing", "Assumed", "Basis", "To disagree", "Asked"],
+                [
+                    [_e(a.id), _e(a.subject), _e(a.what_was_missing),
+                     f"<strong>{_e(a.statement)}</strong>",
+                     (f'<span class="pill">{_e(a.basis)}</span> {_e(a.basis_text or "")}'
+                      if a.basis else '<span class="pill">UNFOUNDED</span>'),
+                     _e(a.impact_if_wrong or "-"),
+                     _e(a.question_id or "-")]
+                    for a in model.assumptions
+                ],
+                ["" if a.basis else "no" for a in model.assumptions],
+            )
+        )
+    else:
+        p.append(
+            '<div class="good">Nothing was assumed. Every value in the model is traceable to '
+            'a source.</div>'
+        )
+
     p.append("<h2>Declared gaps and deviations</h2>")
     if model.gaps:
         p.append(

@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from ..catalog.retrieve import PICK_PROMPT, PICK_SCHEMA, CatalogIndex
+from ..ir.assumptions import AssumptionLog
 from ..ir.complete import (
     fill_missing_initial_inventory,
     match_parameter,
@@ -412,10 +413,13 @@ def resolve_ports(model: SystemModel, index: CatalogIndex | None) -> list[str]:
 
 class ModelicaEmitter:
     def __init__(self, model: SystemModel, package: str = "GeneratedPlant",
-                 index: Any | None = None) -> None:
+                 index: Any | None = None, log: Any | None = None) -> None:
         self.m = model
         self.package = package
         self._index = index
+        #: Where inferences made during emission are declared. Emission is the last place
+        #: that can still invent a value, so it has to be able to say when it does.
+        self._log = log
         self.lines: list[str] = []
         #: Every connector this emitter has already driven, by any route -- a signal
         #: binding, a series-group conjunction, a connect(). The gap pass consults this
@@ -610,16 +614,33 @@ class ModelicaEmitter:
             # Sensor inputs the IR could not bind to anything in the plant.
             for sig in self.m.signals:
                 if sig.role == "sensor" and not sig.binding:
-                    self._w(2, f"// GAP: {sig.name} has no plant binding; assuming 0 "
-                               f"(fail-safe reading for an interlock)")
+                    self._w(2, f"// {self._declare_inert(sig.id, sig.name, '0.0')}")
                     self._w(2, f"{ctrl}.{_mid(sig.name)} = 0.0;")
 
         # Component signal inputs nothing drives.
         for comp, connector, zero in self._unbound_signal_inputs():
-            self._w(2, f"// GAP: nothing drives {comp}.{connector}; assuming {zero}")
+            self._w(2, f"// {self._declare_inert(f'{comp}.{connector}', connector, zero)}")
             self._w(2, f"{_mid(comp)}.{connector} = {zero};")
         self._w(1, "end Plant;")
         self._w(0)
+
+    def _declare_inert(self, subject: str, label: str, value: str) -> str:
+        """Bind an undriven input to its inert value, and say so in both places.
+
+        Returns the source comment, and -- when a log is attached -- also files the
+        assumption against SA-03 so it reaches the report. The comment alone was not enough:
+        a reviewer reading only the report could not tell that eleven inputs had been
+        invented, because the .mo is the one artefact nobody reads line by line.
+        """
+        if self._log is not None:
+            self._log.assume(
+                subject=subject,
+                statement=f"{subject} is bound to {value}, its inert value",
+                basis="SA-03-unbound-input-inert",
+                what_was_missing=f"anything in the evidence that drives {label}",
+                value=value,
+            )
+        return f"GAP: nothing drives {subject}; assuming {value} (ASM via SA-03)"
 
     def _ref(self, endpoint: str) -> str:
         """Resolve '<block_id>.<port_id>' to the concrete Modelica connector reference.
@@ -723,8 +744,9 @@ def emit_modelica(
     # First recover what the evidence DOES state but column extraction missed, then
     # assume only what is genuinely absent. Order matters: a recovered fact must never
     # be overwritten by an assumption.
+    log = AssumptionLog()
     model.gaps.extend(recover_stated_initial_values(model, index))
-    model.gaps.extend(fill_missing_initial_inventory(model, index))
+    model.gaps.extend(fill_missing_initial_inventory(model, index, log))
 
     # Reconcile the document's port vocabulary with the bound class's real connectors
     # BEFORE emitting. Skipping this writes `B1.bottom_port`, which no class declares.
@@ -734,7 +756,10 @@ def emit_modelica(
                 subject=problem.split(":")[0], detail=problem, severity="warn")
         )
 
-    text = ModelicaEmitter(model, package, index).emit()
+    text = ModelicaEmitter(model, package, index, log).emit()
+    # Attach AFTER emission: the emitter is the last stage that can invent a value, so
+    # anything it assumed has to be in the IR before the report reads it.
+    log.attach(model)
     p = Path(out_path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")

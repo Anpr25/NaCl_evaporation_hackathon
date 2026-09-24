@@ -1,0 +1,101 @@
+# Declared standard assumptions.
+#
+# The brief (6.3) allows missing information to be "inferred with a stated assumption" and
+# forbids fabricating anything "not derivable from the input or from a declared standard
+# assumption". This file is that declaration. It exists so that an inference cites a named,
+# pre-registered engineering convention instead of being invented at runtime to justify
+# whatever the code happened to do.
+#
+# The discipline that makes this worth anything:
+#   - An entry is written BEFORE the code that uses it, and is domain-general. If you cannot
+#     state it without naming this week's packet, it is not a standard assumption.
+#   - `applies_when` is the trigger a reviewer can check. `rule` is what we then do.
+#   - `challenge` says what a reviewer should look at to disagree. Every assumption must be
+#     cheap to overturn.
+#   - An inference with no matching entry is still allowed, but it is recorded with
+#     basis: null and counted as `assumptions_unfounded` in the report. That number should
+#     be zero, and when it is not, the report says so in the open.
+#
+# Owner: D.
+
+version: 1
+
+assumptions:
+
+  - id: SA-01-implicit-port
+    title: A component has the ports its function requires
+    applies_when: >
+      The evidence describes a component whose function is impossible without a port that no
+      document explicitly lists -- a tank that is drained but has no stated outlet, a pump with
+      no stated suction, a shaft-driven load with no stated flange.
+    rule: >
+      Add the port required by the component's function, typed from the domain of the
+      connection that needs it. Do not add ports that no connection or requirement needs.
+    basis: >
+      Standard engineering reading. Datasheets and P&IDs routinely omit connections that are
+      implied by the component class; the brief names this case explicitly (6.2, "Implicit").
+    challenge: Check the component's ports against the connection list and its stated duty.
+    risk: low
+
+  - id: SA-02-initial-inventory
+    title: A vessel described as initially charged starts at 80% of its stated maximum
+    applies_when: >
+      The evidence describes a vessel as initially charged, or nothing in the model feeds it,
+      AND the class declares a `<quantity>_start` with a matching stated bound, AND no document
+      anywhere states the starting quantity.
+    rule: >
+      Set the initial inventory to 80% of the stated bound. Never invent the bound itself --
+      if the maximum is not stated either, ask instead.
+    basis: >
+      An operating charge below the maximum level alarm is the normal filled condition; 80% is
+      a conventional working fill. The number is arbitrary within a defensible band, which is
+      why it is declared in one place rather than spread through the code.
+    challenge: >
+      One number, STARTING_FILL_FRACTION in ir/complete.py. Results scale with it directly;
+      batch timings are proportional, steady-state concentrations are not affected.
+    risk: medium
+
+  - id: SA-03-unbound-input-inert
+    title: An unconnected control input reads its inert value
+    applies_when: >
+      A bound component declares a signal input that no connection and no extracted signal
+      drives.
+    rule: >
+      Bind it to the value that makes it do nothing -- false for a Boolean command, 0.0 for a
+      real demand -- and mark it in the generated source.
+    basis: >
+      Fail-safe convention: an unwired command is de-energised. The alternative is a structurally
+      singular model that will not compile, which teaches the reviewer nothing.
+    challenge: 'Search the emitted .mo for "GAP: nothing drives".'
+    risk: low
+
+  - id: SA-04-si-units
+    title: An unlabelled number is in the SI unit for its quantity
+    applies_when: >
+      A value is extracted with no unit and the surrounding document declares no unit system.
+    rule: Interpret it in the SI base unit for the quantity implied by its parameter name.
+    basis: SI is the default for engineering documents that do not say otherwise.
+    challenge: >
+      Look for order-of-magnitude absurdity in the report's parameter table -- a 3000 m tank
+      is a mislabelled millimetre.
+    risk: medium
+
+  - id: SA-05-unreachable-guard-fallback
+    title: A sequence step whose guard is provably unreachable gets a declared fallback exit
+    applies_when: >
+      Static analysis proves a transition guard can never become true under the model's own
+      stated parameters -- i.e. the specification contradicts itself -- and the step has no
+      other outgoing transition, so the sequence would deadlock.
+    rule: >
+      Keep the specified guard exactly as written and add a SECOND, clearly marked fallback
+      transition out of the step. Flag the contradiction as a blocking gap and raise a question.
+      Never edit, relax or retune the customer's stated setpoint.
+    basis: >
+      The brief requires contradictions to be flagged rather than resolved arbitrarily (6.3).
+      Deleting or retuning the setpoint would be an arbitrary resolution and would hide the
+      defect. Adding a marked fallback leaves the customer's logic legible and intact while
+      letting the rest of the sequence be exercised and judged.
+    challenge: >
+      Search the emitted .mo for "FALLBACK". Each one names the guard it bypasses and the gap
+      id that explains why.
+    risk: high

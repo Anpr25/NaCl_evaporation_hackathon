@@ -9,6 +9,65 @@ know about; everything else is FYI.
 
 ---
 
+## 2026-09-24 (latest) — rules 6.2/6.3 compliance: assumptions and questions are first-class
+
+Read the input-handling rules against what we actually do. Two of the three clauses were
+already met; one was not, and the fix turned out to be worth more than compliance.
+
+**Where we stood.** Contradictions were flagged with a precedence rule id and a rationale
+(6.3b, met). Nothing reached the output without provenance — zero blocks with an empty
+provenance record (6.3c, met). But 6.3a says missing information must be *"inferred with a
+stated assumption, or surfaced as a question"*, and we had neither concept: everything was an
+undifferentiated `Gap`, the report had no questions section at all, and an inference made
+during emission was a source comment nobody reads.
+
+**What changed.**
+
+| | |
+|:--|:--|
+| `ir/evidence.py` | new `Assumption` and `Question` records, separate from `Gap` on purpose — a gap is something we could not do, an assumption is something we *did* on our own authority |
+| `config/assumptions.yaml` | **the register**: five named conventions (SA-01..SA-05), each with `applies_when`, `rule`, `basis`, `challenge`, `risk` |
+| `ir/assumptions.py` | `AssumptionLog`. `assume()` **raises** on a basis that is not in the register, so a convention cannot be invented at the call site to excuse whatever the code just did |
+| `verify/diagnose.py` | classifies every red check: `unreachable` (plateaued short — the spec contradicts itself), `stalled` (never moved — a knock-on), `unsettled` (stop time too short) |
+| `verify/report.py` | *Questions for the customer* and *Stated assumptions* sections, ahead of the gaps table, plus two gate cards |
+
+**The register is the part that matters.** An entry is written *before* the code that spends
+it, and is domain-general — if you cannot state it without naming this week's packet, it is
+not a standard assumption. `basis: null` is still allowed, because forbidding it just pushes
+people back to guessing silently; it is counted instead, as `assumptions_unfounded`, and the
+report prints that number whether or not it flatters us. It is currently **0**.
+
+**Two things fell out of it that are not compliance.**
+
+1. The unreachable-guard diagnosis makes the autonomous run rediscover **OPEN-ISSUE-01** on
+   its own, from the trace rather than from static analysis: *"B5.level settled at 0.1476
+   against a required 0.18, having travelled 0.1426 of the 0.175 needed (18.5% short) and
+   then stopped changing."* Static reachability never caught this — it needed upstream
+   geometry the extractor does not find. A plateau needs no such inference.
+2. It also separates root cause from noise. Seven checks were red; **two** are real
+   contradictions and **five** are downstream of them. Reporting seven would have been as
+   misleading as reporting none.
+
+**Bug worth knowing about.** Every `AssumptionLog` numbers from 1, and a run uses two
+(emission, then diagnosis). `attach()` merged by id, so the second log's records looked like
+duplicates and were dropped — losing both blocking questions about a contradiction the run
+had just proved. It now renumbers and carries the assumption→question back-references
+across. Tested, because a silent-drop bug in the honesty machinery is the worst kind.
+
+**Still open, needs a call.** SA-05 is *registered but not implemented*: when a guard is
+proved unreachable, we currently leave the sequence dead and report it. The register entry
+describes the alternative — keep the customer's guard exactly as written and add a second,
+clearly marked fallback transition — which is permissible under 6.3b because the
+contradiction is flagged and the resolution is not arbitrary. It would take the autonomous
+run from 3/10 to roughly 11/12. I have deliberately not done it without a decision, because
+it edits the customer's control logic.
+
+**Numbers.** 90 tests green (10 new). `bench`: drivetrain 7/7, nacl 11/12, hvac NO PACKET.
+Autonomous run: compiles, simulates, 3/10, 6 stated assumptions (0 unfounded), 4 questions
+(2 blocking).
+
+---
+
 ## 2026-09-24 (later) — drivetrain bench green, screens generalised, plots in the report
 
 **Status: D4, D5, D6 done.** 51/51 tests green. Two domains now pass end to end.

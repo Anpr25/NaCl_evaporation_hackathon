@@ -25,9 +25,11 @@ from .emit.sysml import emit_sysml, round_trip_check
 from .ingest.registry import load_packet, packet_summary
 from .ir.system import SystemModel
 from .ir.validate import validate
+from .ir.assumptions import AssumptionLog
 from .repair.loop import RepairLoop
 from .verify.acceptance import Scorecard, score
-from .verify.omc import OmcRunner, describe_environment
+from .verify.diagnose import Diagnosis, diagnose, record
+from .verify.omc import OmcRunner, describe_environment, read_result
 from .verify.report import build_report
 
 Stage = Literal[
@@ -75,6 +77,8 @@ class PipelineResult:
     artifacts: dict[str, str] = field(default_factory=dict)
     gate: dict[str, Any] = field(default_factory=dict)
     scorecard: Scorecard | None = None
+    #: Why each red check is red. Populated after scoring; read by the report.
+    diagnoses: list[Diagnosis] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -275,10 +279,28 @@ class Pipeline:
                 req = model.requirement(rid)
                 if req and r.passed and r.check_id not in req.verified_by:
                     req.verified_by.append(r.check_id)
+
+        # A failed check is a symptom. Say which ones are the disease: a setpoint the plant
+        # provably cannot reach is a contradiction in the customer's own evidence and the
+        # brief requires it to be flagged, while the checks downstream of it are noise.
+        diag_log = AssumptionLog()
+        diagnoses = diagnose(model, card, read_result(cfg.out_dir / "results.csv"))
+        model.gaps.extend(record(model, diagnoses, diag_log))
+        diag_log.attach(model)
+        self.result.diagnoses = diagnoses
+
         yield self._emit(
             "verify", "ok" if card.ok else "warn", card.summary(),
             failed=[r.check_id for r in card.results if not r.passed],
         )
+        blocking = [d for d in diagnoses if d.verdict == "unreachable"]
+        if blocking:
+            yield self._emit(
+                "verify", "warn",
+                f"{len(blocking)} setpoint(s) unreachable under the packet's own parameters "
+                f"-- flagged, not retuned",
+                failed=[d.check_id for d in blocking],
+            )
 
         yield from self._finish(t0, runner)
 

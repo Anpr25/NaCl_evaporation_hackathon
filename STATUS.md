@@ -166,6 +166,25 @@ All six planted traps identified and resolved, each with a `DecisionRecord` nami
 and the trap. Routing verified against the supplied trace by decoding valve commands per
 state. Two defects found in the organisers' own data (§5).
 
+### 2.6 Input-handling rules (6.2 / 6.3)
+
+The brief governs how we behave on incomplete, ambiguous, contradictory, implicit and custom
+input. Current standing, measured on the autonomous run (no `--reference-ir`):
+
+| Clause | Behaviour | Evidence |
+|:--|:--|:--|
+| Missing info **inferred with a stated assumption** | 6 assumptions, each citing a convention registered in `config/assumptions.yaml` *before* the run | report §*Stated assumptions*; `assumptions_unfounded` = **0** |
+| ...**or surfaced as a question** | 4 questions, 2 of them blocking, each with what we searched and what we did meanwhile | report §*Questions for the customer* |
+| **Never silently invented** | `assume()` raises on an unregistered basis; an unfounded inference is still recorded and counted, never hidden | `tests/test_assumptions_and_questions.py` |
+| **Contradictions flagged, not resolved arbitrarily** | 12 decision records naming a precedence rule; 2 setpoint contradictions proved from the trace and reported unresolved | report §*Conflict resolutions*, §*Declared gaps* |
+| **No fabricated components, ports or physics** | 0 blocks with empty provenance; ports are added only under SA-01, where a connection or requirement needs them | `coverage()` |
+
+The diagnosis pass is the part worth demonstrating: it rediscovers **OPEN-ISSUE-01**
+unaided, from the simulation rather than from static analysis — *"B5.level settled at 0.1476
+against a required 0.18 ... 18.5% short ... the specification asks for something its own
+numbers forbid"* — and separates the two real contradictions from the five checks that are
+merely downstream of them.
+
 ---
 
 ## 3. Decisions taken
@@ -205,6 +224,9 @@ reason, and update the row rather than arguing from memory.
 | D16 | **Event-level acceptance is primary**; signal RMSE only after the reference trace passes a conservation screen | the supplied trace creates NaCl during evaporation, so RMSE against it is meaningless | we do not get to quote a flattering error number |
 | D17 | Source classification uses the **title area only**, not the whole document | a register that *mentions* change records is not a change record | still imperfect; per-claim classification is the real fix (backlog A4) |
 | D18 | The unreachable guard gets a **declared fallback exit**, not a silent setpoint change | the sequence must not deadlock, and the customer must be told their setpoints conflict | one acceptance check legitimately fails |
+| D39 | **Assumptions and questions are separate records from gaps**, and both appear ahead of the gap table in the report | rule 6.3 makes them the two permitted responses to missing information; burying them among warnings makes an assumption indistinguishable from an invention | two more IR types and two more report sections |
+| D40 | An inference must cite a **pre-registered convention** in `config/assumptions.yaml`, or be counted as unfounded | a basis invented at the call site is a rationalisation, not a declared assumption; writing the convention first is what makes it checkable | the register has to be maintained, and `assume()` raises on an unregistered id |
+| D41 | A red check is **diagnosed, not just counted** — plateaued-short vs never-moved vs still-moving | seven reds from one root cause is as misleading as none; only the plateau is evidence of a contradiction | a fourth heuristic with thresholds we had to pick |
 
 ### Operations
 

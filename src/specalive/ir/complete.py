@@ -28,6 +28,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from .assumptions import AssumptionLog
 from .evidence import Gap
 from .system import SystemModel
 
@@ -145,13 +146,20 @@ def _is_initially_charged(block: Any) -> bool:
     return bool(re.search(r"initial(ly)?.{0,24}(charge|charged|fill|filled|stock)", text))
 
 
-def fill_missing_initial_inventory(model: SystemModel, index: Any | None) -> list[Gap]:
+def fill_missing_initial_inventory(
+    model: SystemModel, index: Any | None, log: AssumptionLog | None = None
+) -> list[Gap]:
     """Give supply vessels a stated starting inventory when the evidence omits one.
 
     A vessel qualifies when the evidence *describes* it as initially charged, or when nothing
     in the model feeds it at all. The description test is the one that matters: a charging
     tank on a recirculating plant has an inlet from the return line, so it is not a source in
     the graph, but it still has to start full or the first batch never happens.
+
+    When `log` is supplied, each fill is recorded twice over: as a declared assumption citing
+    SA-02, and as a question asking for the real number. The brief offers those as
+    alternatives; doing both costs nothing and leaves the customer holding the question that
+    makes our guess unnecessary.
     """
     if index is None:
         return []
@@ -202,6 +210,30 @@ def fill_missing_initial_inventory(model: SystemModel, index: Any | None) -> lis
             value = round(bound * STARTING_FILL_FRACTION, 6)
             block.modelica_modifiers[name] = repr(value)
             block.modelica_modifiers.setdefault("__assumed__", "")
+            if log is not None:
+                log.assume_and_ask(
+                    subject=f"{block.id}.{name}",
+                    statement=(
+                        f"{name} = {value} for {block.id}, taken as "
+                        f"{STARTING_FILL_FRACTION:.0%} of its stated {bound_name} = {bound:g}"
+                    ),
+                    basis="SA-02-initial-inventory",
+                    what_was_missing=(
+                        f"the starting {base} of {block.id}, which no source states"
+                    ),
+                    question=(
+                        f"What is the starting {base} of {block.id} ({block.name}) at the "
+                        f"beginning of a batch?"
+                    ),
+                    why_it_matters=(
+                        "Nothing in the packet gives this vessel a quantity, only its "
+                        "geometry and contents. With no starting inventory it can supply "
+                        "nothing and the sequence stalls at the first transfer, so a number "
+                        "had to be chosen for the model to run at all."
+                    ),
+                    value=value,
+                    searched=[s.filename for s in model.sources] or ["all supplied sources"],
+                )
             gaps.append(
                 Gap(
                     id=f"GAP-INIT-{len(gaps) + 1:02d}",
