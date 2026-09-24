@@ -27,7 +27,9 @@ from typing import Any
 from ..catalog.retrieve import PICK_PROMPT, PICK_SCHEMA, CatalogIndex
 from ..ir.assumptions import AssumptionLog
 from ..ir.complete import (
+    bind_sensors_to_resolved_setpoints,
     fill_missing_initial_inventory,
+    find_setpoint_for_input,
     match_parameter,
     recover_stated_initial_values,
 )
@@ -568,20 +570,30 @@ class ModelicaEmitter:
         return re.sub(r"\s+", " ", out).strip()
 
     # ------------------------------------------------------------------ plant
-    def _unbound_signal_inputs(self) -> list[tuple[str, str, str]]:
+    def _unbound_signal_inputs(self) -> list[tuple[str, str, str, Any]]:
         """Component signal inputs that nothing drives: (component, connector).
 
         A dangling `input` has no equation defining it, so omc reports the whole model as
         under-determined. We would rather emit a stated assumption than a model that cannot
-        be built, so these are bound to zero and declared.
+        be built, so these are bound to their inert value and declared.
+
+        Before assuming, though, we look for a number the evidence actually supplies. A
+        utility outside the plant boundary is never a *block* that feeds anything, but its
+        operating value is usually written down somewhere -- and binding the input to zero
+        throws that away. Here it cost us the condenser: `SP-K1-CW = 0.1 kg/s` was extracted
+        and then ignored, `K1.cw_flow` went to zero, nothing condensed, and two vessels never
+        received the hot charge they were supposed to cool.
         """
         if self._index is None:
             return []
         wired = {r for c in self.m.connections for r in (c.source, c.target)}
         # An actuator signal bound to `B5.heater` drives that connector by equation, not by
         # connect(). Binding it again to 0 produced `B5.heater = 0.0` on a Boolean input.
-        driven = {s.binding for s in self.m.signals if s.binding}
-        out: list[tuple[str, str]] = []
+        # Only actuators count. A *sensor* binding is a read: `FIS_801` reading `K1.cw_flow`
+        # does not define it, and treating it as a drive left the connector with no equation
+        # at all and the model under-determined.
+        driven = {s.binding for s in self.m.signals if s.binding and s.role == "actuator"}
+        out: list[tuple[str, str, str, Any]] = []
         for block in self.m.simulatable_blocks():
             entry = self._index.get(block.modelica_class or "")
             if entry is None:
@@ -594,7 +606,16 @@ class ModelicaEmitter:
                 ref = f"{block.id}.{cp.name}"
                 if cp.name in bound_here or ref in wired or ref in driven or ref in self._driven:
                     continue
-                out.append((block.id, cp.name, "false" if leaf.startswith("boolean") else "0.0"))
+                if leaf.startswith("boolean"):
+                    # A Boolean command has no numeric setpoint to find, and a stray match
+                    # against one would be a type error dressed up as evidence.
+                    out.append((block.id, cp.name, "false", None))
+                    continue
+                prm = find_setpoint_for_input(self.m, block.id, cp.name)
+                if prm is not None:
+                    out.append((block.id, cp.name, repr(float(prm.quantity.value)), prm))
+                else:
+                    out.append((block.id, cp.name, "0.0", None))
         return out
 
     def _emit_plant(self) -> None:
@@ -648,9 +669,16 @@ class ModelicaEmitter:
                     self._w(2, f"{ctrl}.{_mid(sig.name)} = 0.0;")
 
         # Component signal inputs nothing drives.
-        for comp, connector, zero in self._unbound_signal_inputs():
-            self._w(2, f"// {self._declare_inert(f'{comp}.{connector}', connector, zero)}")
-            self._w(2, f"{_mid(comp)}.{connector} = {zero};")
+        for comp, connector, value, prm in self._unbound_signal_inputs():
+            ref = f"{comp}.{connector}"
+            if prm is not None:
+                # Evidence-backed, so this is a recovered fact and not an assumption. Cite it.
+                unit = f" {prm.quantity.unit}" if prm.quantity.unit else ""
+                self._w(2, f"// {ref} driven from {prm.id} = {prm.quantity.value}{unit} "
+                           f"({prm.description or 'stated in the evidence'})")
+            else:
+                self._w(2, f"// {self._declare_inert(ref, connector, value)}")
+            self._w(2, f"{_mid(comp)}.{connector} = {value};")
         self._w(1, "end Plant;")
         self._w(0)
 
@@ -777,6 +805,9 @@ def emit_modelica(
     log = AssumptionLog()
     model.gaps.extend(recover_stated_initial_values(model, index))
     model.gaps.extend(fill_missing_initial_inventory(model, index, log))
+    # Resolve dangling instrument tags before emission, so a permissive that depends on one
+    # is written against the plant rather than against an assumed zero.
+    model.gaps.extend(bind_sensors_to_resolved_setpoints(model, index))
 
     # Reconcile the document's port vocabulary with the bound class's real connectors
     # BEFORE emitting. Skipping this writes `B1.bottom_port`, which no class declares.

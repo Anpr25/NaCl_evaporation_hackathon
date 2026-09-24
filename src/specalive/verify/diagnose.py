@@ -91,6 +91,30 @@ def _motion_window(times: list[float], series: list[float]) -> tuple[float, floa
     return first, max(first, last)
 
 
+def _approach(series: list[float], rising: bool) -> tuple[int, int]:
+    """The biggest run the signal made towards the target: (start index, extreme index).
+
+    Measuring from sample zero is only right when the signal never has to come back. A
+    vessel that fills to 0.167 m and then drains to 0.02 m has made a 0.147 m descent, but
+    against `series[0] = 0.005` its minimum looks identical to its start, and the check was
+    filed as "never moved" -- burying a real contradiction (the pump permissive stops at
+    0.02 m, the step wants below 0.01 m) among the knock-on noise. Maximum run-up for a
+    rising target, maximum drawdown for a falling one.
+    """
+    best = (0, 0)
+    best_gain = 0.0
+    anchor = 0
+    for i in range(1, len(series)):
+        better_anchor = series[i] < series[anchor] if rising else series[i] > series[anchor]
+        if better_anchor:
+            anchor = i
+            continue
+        gain = (series[i] - series[anchor]) if rising else (series[anchor] - series[i])
+        if gain > best_gain:
+            best_gain, best = gain, (anchor, i)
+    return best
+
+
 def _tail_is_flat(series: list[float], span: float) -> bool:
     """True when the last slice of the run barely moves relative to the whole excursion."""
     if len(series) < 8 or span <= 0:
@@ -117,8 +141,8 @@ def diagnose(model: SystemModel, card: Any, cols: dict[str, list[float]]) -> lis
         if not series:
             continue
 
-        start = series[0]
-        extreme = max(series) if sense == "rising" else min(series)
+        i0, i1 = _approach(series, rising=(sense == "rising"))
+        start, extreme = series[i0], series[i1]
         needed = abs(target - start)
         travelled = abs(extreme - start)
         remaining = abs(target - extreme)

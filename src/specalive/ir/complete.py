@@ -256,3 +256,128 @@ def fill_missing_initial_inventory(
                 )
             )
     return gaps
+
+
+#: Tokens that carry no discriminating meaning when matching a setpoint to a connector.
+_NOISE_WORDS = frozenset({"sp", "set", "setpoint", "point", "min", "max", "minimum", "maximum",
+                          "nominal", "target", "limit", "cmd", "value"})
+
+
+def _tag_words(text: str) -> set[str]:
+    return {w for w in _words(text) if w not in _NOISE_WORDS}
+
+
+def find_setpoint_for_input(model: SystemModel, block_id: str, connector: str) -> Any | None:
+    """The parameter the evidence supplies for an otherwise-undriven signal input.
+
+    A utility that sits outside the plant boundary still has a stated operating value
+    somewhere in the packet: the NaCl register gives `SP-K1-CW = 0.1 kg/s`, described as the
+    "minimum cooling-water flow ... applies to K1", while the cooling-water header itself is
+    only ever drawn as an external boundary. Binding `K1.cw_flow` to zero because no *block*
+    feeds it throws that number away, and with it every downstream effect -- here, the
+    condenser never condenses, so two vessels never receive a hot charge and never cool, and
+    three acceptance checks fail for a reason that has nothing to do with the plant.
+
+    This is fact recovery, not assumption: the value is in the evidence and we cite it. A
+    parameter qualifies only when it is scoped or described to this block *and* its name
+    overlaps the connector's, and only when exactly one candidate survives -- an ambiguous
+    match is left to the inert default and the declared assumption that goes with it.
+    """
+    want = _tag_words(connector)
+    if not want:
+        return None
+    tag = block_id.lower()
+    hits = []
+    for p in model.parameters:
+        if not isinstance(p.quantity.value, (int, float)):
+            continue
+        scoped = (p.scope or "").lower() == tag
+        named = tag in _tag_words(p.id) or tag in _tag_words(p.name)
+        described = re.search(rf"\b{re.escape(block_id)}\b", p.description or "") is not None
+        if not (scoped or named or described):
+            continue
+        source_words = _tag_words(p.id) | _tag_words(p.name) | _tag_words(p.description or "")
+        if want & source_words:
+            hits.append(p)
+    return hits[0] if len(hits) == 1 else None
+
+
+def bind_sensors_to_resolved_setpoints(model: SystemModel, index: Any | None) -> list[Gap]:
+    """Bind a dangling sensor to the plant quantity its own setpoint already named.
+
+    The chain the NaCl packet needs, and the reason the whole batch stood still:
+
+        SP-K1-CW = 0.1 kg/s   "minimum cooling-water flow ... applies to K1"
+        K1.cw_flow            the connector that setpoint was matched to
+        FIS-801 >= SP-K1-CW   the heater permissive, from the design review minutes
+
+    FIS-801 is never given a binding by any document -- instrument tags rarely are -- so it
+    was treated as an undriven input and assumed to read zero. A permissive comparing zero
+    against 0.1 is false forever, so the heater never fired, B5 never boiled, nothing
+    condensed, and B6 and B7 never received the charge they were supposed to cool. Five of
+    the ten acceptance checks failed on one unbound sensor.
+
+    The inference is evidence-backed rather than assumed: a sensor compared against a
+    setpoint we have *already* resolved to a plant quantity is measuring that quantity. If
+    the setpoint was never resolved, nothing happens here and the sensor keeps its declared
+    assumption.
+    """
+    if index is None:
+        return []
+
+    resolved: dict[str, str] = {}
+    for block in model.simulatable_blocks():
+        entry = index.get(block.modelica_class or "")
+        if entry is None:
+            continue
+        for cp in entry.ports:
+            if not cp.type.rsplit(".", 1)[-1].lower().endswith("input"):
+                continue
+            prm = find_setpoint_for_input(model, block.id, cp.name)
+            if prm is not None:
+                resolved.setdefault(prm.id, f"{block.id}.{cp.name}")
+    if not resolved:
+        return []
+
+    # Every place a comparison could name a sensor and a setpoint in the same breath.
+    conditions = [il.condition for il in model.interlocks]
+    conditions += [t.guard for sm in model.state_machines for t in sm.transitions]
+
+    notes: list[Gap] = []
+    for sig in model.signals:
+        if sig.role != "sensor" or sig.binding:
+            continue
+        for cond in conditions:
+            for m in re.finditer(
+                rf"\b{re.escape(sig.id)}\s*(?:>=|<=|>|<|==)\s*([A-Za-z_]\w*)", cond
+            ):
+                token = m.group(1)
+                target = next(
+                    (ref for pid, ref in resolved.items()
+                     if token in (pid, pid.replace("-", "_"))),
+                    None,
+                )
+                if target is None:
+                    continue
+                sig.binding = target
+                notes.append(
+                    Gap(
+                        id=f"GAP-BIND-{len(notes) + 1:02d}",
+                        kind="unextracted",
+                        subject=sig.id,
+                        detail=(
+                            f"No document states what {sig.id} measures -- instrument tags "
+                            f"rarely carry their own binding. It is compared against "
+                            f"{token} in '{cond.strip()}', and that setpoint was already "
+                            f"matched to {target}, so {sig.id} reads {target}. Without this "
+                            f"the sensor is an undriven input, reads zero, and the "
+                            f"comparison is false for the whole run."
+                        ),
+                        severity="info",
+                        workaround="Evidence-backed via the setpoint; no assumption involved.",
+                    )
+                )
+                break
+            if sig.binding:
+                break
+    return notes
