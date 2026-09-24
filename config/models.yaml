@@ -82,11 +82,14 @@ tiers:
 
   # ---------------------------------------------------------------- OpenRouter
   # A single-key gateway to many hosted models (text and vision), used when neither a local
-  # Ollama daemon nor Groq/Gemini keys are available. Confirm slugs against
-  # https://openrouter.ai/models before a live run -- the catalog changes over time.
+  # Ollama daemon nor Groq/Gemini keys are available. Pinned to OpenRouter's free (":free",
+  # zero prompt/completion pricing) models: fine for a hackathon budget, but "free" means no
+  # uptime/rate-limit guarantee -- re-check https://openrouter.ai/collections/free-models
+  # before a live run, since the free catalog rotates.
   t3_openrouter:
     kind: openrouter
-    model: openai/gpt-4o-mini
+    model: nvidia/nemotron-3-ultra-550b-a55b:free
+    fallback_models: [inclusionai/ling-3.0-flash-fin:free, nvidia/nemotron-3-super-120b-a12b:free]
     api_key_env: OPENROUTER_API_KEY
     structured_output: json_object
     max_tokens: 8192
@@ -95,7 +98,8 @@ tiers:
 
   t4_openrouter_vision:
     kind: openrouter
-    model: openai/gpt-4o-mini
+    model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+    fallback_models: [nex-agi/nex-n2.5-mini:free]
     api_key_env: OPENROUTER_API_KEY
     structured_output: json_object
     max_tokens: 8192
