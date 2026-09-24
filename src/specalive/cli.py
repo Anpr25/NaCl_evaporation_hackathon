@@ -163,6 +163,10 @@ def run(
     stop_time: Optional[float] = typer.Option(None, "--stop-time"),
     no_sim: bool = typer.Option(False, "--no-sim", help="Compile only; skip simulation"),
     repair: int = typer.Option(6, help="Maximum repair iterations"),
+    from_sysml: bool = typer.Option(
+        False, "--from-sysml",
+        help="C-08: build the Modelica by re-reading the emitted SysML, not from the IR",
+    ),
 ) -> None:
     """Run the whole pipeline: evidence in, SysML + Modelica + results + report out."""
     cfg = PipelineConfig(
@@ -175,6 +179,7 @@ def run(
         stop_time=stop_time,
         repair_iterations=repair,
         skip_simulation=no_sim,
+        from_sysml=from_sysml,
     )
     result = Pipeline(cfg, _router(provider)).run(on_event=_print)
 

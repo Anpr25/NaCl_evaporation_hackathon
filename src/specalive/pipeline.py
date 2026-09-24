@@ -66,6 +66,11 @@ class PipelineConfig:
     stop_time: float | None = None
     repair_iterations: int = 6
     skip_simulation: bool = False
+    #: C-08. Re-read the SysML we just emitted and build the Modelica from *that*, so the
+    #: derivation the briefing's top band asks for is the actual code path rather than an
+    #: argument about a shared source. Off by default until the bench is green on it:
+    #: standing rule 6, the gate is sacred.
+    from_sysml: bool = False
 
 
 @dataclass
@@ -200,8 +205,33 @@ class Pipeline:
                 index = CatalogIndex.from_file(cfg.catalog)
             except Exception as exc:
                 yield self._emit("modelica", "warn", f"catalog unavailable: {exc}")
+        source = model
+        if cfg.from_sysml:
+            # C-08: everything below this line comes from the emitted SysML text, not the IR.
+            # `SimulationProfile` carries the handful of fields SysML does not express --
+            # scan period, solver settings, and (D-2, a defect) the global setpoints that
+            # transition guards reference but nothing declares.
+            from .emit.sysml_read import SimulationProfile, read_sysml, to_system_model
+
+            parsed = read_sysml(sysml_path.read_text(encoding="utf-8"))
+            try:
+                source = to_system_model(
+                    parsed, SimulationProfile.from_ir(model), index=index, name=model.name
+                )
+                yield self._emit(
+                    "modelica", "ok",
+                    f"derived from SysML: {len(parsed.parts)} parts, "
+                    f"{len(parsed.interfaces)} interfaces, {len(parsed.transitions)} transitions",
+                    from_sysml=True,
+                )
+            except ValueError as exc:
+                # A construct the reader does not know would silently drop an element, so
+                # fall back to the IR rather than emit a quietly incomplete model.
+                source = model
+                yield self._emit("modelica", "warn", f"SysML path unusable, using IR: {exc}")
+
         mo_path, tiers = emit_modelica(
-            model, cfg.out_dir / f"{cfg.package_name}.mo",
+            source, cfg.out_dir / f"{cfg.package_name}.mo",
             index=index, router=self.router, package=cfg.package_name,
         )
         self.result.artifacts["Modelica"] = str(mo_path)

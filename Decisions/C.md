@@ -16,6 +16,79 @@ gracefully.
 
 ---
 
+## 2026-09-24 (latest) — C8 done: the Modelica is now derived from the SysML
+
+**Status: C-08 implemented and measured.** `specalive run … --from-sysml` re-reads the SysML
+it just emitted and builds the Modelica from that text alone. Both benches pass on the new
+path. Off by default; the IR path remains the fallback.
+
+```
+--from-sysml   nacl        L0=1 L1=15   compiles   simulates   11/12   HARD GATE MET
+--from-sysml   drivetrain  L0=6         compiles   simulates    7/7    HARD GATE MET
+```
+
+**The measurement, which is the artefact worth showing.** Emit SysML from the IR, read it back
+with no access to the IR, emit Modelica from what came back, and compare against the Modelica
+the IR produces directly — through the *same* emitter, so any difference can only be a reader
+loss:
+
+| | |
+|:--|:--|
+| Structural differences | **0** — byte-identical once string literals are blanked |
+| Differences that remain | 56 lines, all docstrings (see below) |
+| Statements the reader could not parse | **0** of 759 lines |
+
+That is "correspondence shown" as a test rather than an argument:
+`tests/test_sysml_read.py::test_sysml_is_a_lossless_carrier_for_the_modelica`.
+
+**New file only.** `emit/sysml_read.py`. B's `emit/sysml.py` is untouched — the reader re-uses
+B's `_PATTERNS` and adds its own line splitter so trailing comments survive.
+
+### ⚠ Affects you
+
+**B — C8 found three defects in the emitted SysML. None of them are mine to fix.**
+
+- **D-2 · twelve guard symbols are referenced but never declared.** Transitions say
+  `if LIS_301 >= SP_B3_LVL_WATER then Step2`, and `SP_B3_LVL_WATER` — along with `SP_B3_COMP`,
+  `SP_B3_EMPTY`, `SP_B5_BATCH`, `SP_B5_COMP`, `SP_B5_IDLE`, `SP_B6_COOL`, `SP_B7_COOL`,
+  `SP_HEATER_LVL`, `SP_K1_CW`, `SP_PUMP_LVL`, `SP_RESTART` — appears nowhere as a declaration.
+  `grep -c 'attribute SP_' → 0`. The SysML is not self-contained: a model built from it alone
+  has guards over undeclared identifiers. Same defect *class* as D-1, one level up.
+  Worked around by carrying them in `SimulationProfile`; the fix is `m.parameters` becoming
+  system-level attributes.
+- **D-3 · Python bool repr leaks into the SysML.** `attribute redefines useSupport = False;`
+  — `False`, not `false`. Valid in neither SysML v2 nor Modelica. The IR path never sees it
+  because `modelica_modifiers` carries the correct string `'false'`; only the round-trip does.
+  **This is why the drivetrain did not compile on the SysML path until I normalised it.**
+  Line 227 of `emit/sysml.py` interpolates `{q.value}` straight into an f-string.
+  Related: the same parameter is declared `attribute useSupport : Real;` — a Boolean typed
+  as Real.
+- **D-1 residual · `_ident("inlet[1]")` → `inlet_1_` is not reversible.** Solved on C's side
+  without touching your code, and I think the solution is better than a comment would have
+  been: the allocation names the Modelica class, so the *catalog* is asked whether that class
+  really has a connector called `inlet`. Guess replaced by a lookup against ground truth, the
+  same move as C-07. No change needed from you unless you prefer to carry it explicitly.
+
+**Everyone — what the SysML legitimately does not carry**, now enumerated in
+`SimulationProfile`: scan period, stop time, interval, tolerance, solver, scenario id/name.
+These are properties of a *simulation run*, not of a system; C.md item 3 said this had to be
+a stated decision rather than an accident, so here it is stated. `parameters` also lives
+there today, but only because of D-2, and it leaves once that is fixed.
+
+**Cosmetic losses, declared rather than hidden.** 56 docstring differences, none reaching the
+compiler: part defs share one `doc` per *kind*, so B4 inherits B1's "Charging tank"; signal
+units are not emitted, so `input Real LIS_301 "m"` becomes `""`; state labels become state ids.
+
+### Still open
+
+- `--from-sysml` is not the default and should not become one until it has run on a packet
+  nobody has seen. Standing rule 6.
+- The fork survives only because it rides in `// fork -> Step12, Step7`. That comment is now
+  load-bearing — if it changes shape the parallel split silently stops firing, the model still
+  compiles, and the batch deadlocks after evaporation. There is a test pinning it.
+
+---
+
 ## 2026-09-24 (later) — C's eight tasks, ordered; C7 done; C8 re-scoped after reading B
 
 **Status:** C1 and C7 complete. C8 is smaller than the audit suggested, because B has already
@@ -51,7 +124,7 @@ scoreboard. Yours to restate, not mine.
 |:--|:--|:--|:--|:--|
 | C1 | Full MSL catalog harvest | **done** — 1,402 classes, ~200 s | no | — |
 | C7 | Exclude partial classes via `isPartial()` | **done** — see C-07 | no | — |
-| C8 | Modelica generated **from** the SysML (C-08) | next | no | B's emitter being stable |
+| C8 | Modelica generated **from** the SysML (C-08) | **done** — both benches green | no | — |
 | C2 | Embeddings in retrieval | ready to start | yes — `nomic-embed-text` | nothing, tier is live |
 | C5 | More deterministic fixers | ready to start | no | — |
 | C3 | L1 templates: rotational / thermal / electrical | ready to start | no | — |
