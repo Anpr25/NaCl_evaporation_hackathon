@@ -20,6 +20,11 @@ from pathlib import Path
 from ..ir.evidence import Locator, Source
 from .base import Adapter, DocBlock, Document, render_table
 
+#: Above this many data rows a delimited file is a dataset, not a register, and is
+#: summarised rather than carried row by row. Kept in step with the same threshold in
+#: extract/claims.py, which decides whether to lift claims from a table at all.
+_REGISTER_MAX_ROWS = 200
+
 
 class TextAdapter(Adapter):
     name = "text"
@@ -33,7 +38,7 @@ class TextAdapter(Adapter):
         for i, line in enumerate(lines, 1):
             if line.startswith("#"):
                 if buf:
-                    doc.blocks.append(_para("\n".join(buf), start, i - 1))
+                    doc.blocks.extend(_markdown_blocks(buf, start))
                     buf = []
                 doc.blocks.append(
                     DocBlock("heading", line.lstrip("# ").strip(), Locator(line_start=i, line_end=i))
@@ -41,13 +46,13 @@ class TextAdapter(Adapter):
                 start = i + 1
             elif not line.strip():
                 if buf:
-                    doc.blocks.append(_para("\n".join(buf), start, i - 1))
+                    doc.blocks.extend(_markdown_blocks(buf, start))
                     buf = []
                 start = i + 1
             else:
                 buf.append(line)
         if buf:
-            doc.blocks.append(_para("\n".join(buf), start, len(lines)))
+            doc.blocks.extend(_markdown_blocks(buf, start))
         return doc
 
 
@@ -208,17 +213,23 @@ class CsvAdapter(Adapter):
         if not rows:
             return doc
         header, body = rows[0], rows[1:]
-        # A long CSV is time-series data, not prose. Summarise it: the model must never be
-        # shown 600 rows, and the verifier reads the file directly anyway.
+        # A long CSV is time-series data, not prose: summarise it, because the model must
+        # never be shown 600 rows and the verifier reads the file directly anyway. A short
+        # one is a register, and every row of it is a fact. The cap used to apply to both,
+        # so an eight-row equipment schedule silently arrived with three rows missing --
+        # invisible, because what is left still looks like a perfectly good table. The NaCl
+        # register is .xlsx, which is the only reason this went unnoticed.
+        timeseries = len(body) > _REGISTER_MAX_ROWS
+        kept = body[:5] if timeseries else body
         doc.blocks.append(
             DocBlock(
                 "table",
-                render_table([header, *body[:5]], max_rows=6)
-                + f"\n... {len(body)} data rows total",
+                render_table([header, *kept], max_rows=6 if timeseries else len(kept) + 1)
+                + (f"\n... {len(body)} data rows total" if timeseries else ""),
                 Locator(line_start=1, line_end=len(rows)),
-                rows=[header, *body[:5]],
+                rows=[header, *kept],
                 data={
-                    "role": "timeseries" if len(body) > 50 else "table",
+                    "role": "timeseries" if timeseries else "table",
                     "columns": header,
                     "n_rows": len(body),
                     "path": str(path),
@@ -383,6 +394,72 @@ class ImageAdapter(Adapter):
         if warn:
             doc.warnings.append(f"tiling skipped: {warn}")
         return doc
+
+
+#: A markdown separator row: `|---|:--:|---|`. Its presence directly under a row of cells is
+#: what makes those lines a table rather than prose that happens to contain pipes.
+_MD_RULE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$")
+
+
+def _md_cells(line: str) -> list[str]:
+    cells = [c.strip() for c in line.split("|")]
+    # A fully delimited row has empty cells either side of the outer pipes.
+    if cells and not cells[0]:
+        cells = cells[1:]
+    if cells and not cells[-1]:
+        cells = cells[:-1]
+    return cells
+
+
+def _markdown_blocks(buf: list[str], start: int) -> list[DocBlock]:
+    """Split a run of non-blank markdown lines into paragraphs and pipe tables.
+
+    A table written in markdown is a table. Handing it downstream as prose costs the whole
+    register: the first HVAC run extracted zero components, because every equipment schedule
+    in that packet is a pipe table inside a .md file and nothing downstream reads prose for
+    rows. Markdown is far too common an input format for that to stay true.
+    """
+    out: list[DocBlock] = []
+    prose: list[str] = []
+    prose_start = start
+    i = 0
+    while i < len(buf):
+        is_table = (
+            "|" in buf[i]
+            and i + 1 < len(buf)
+            and _MD_RULE.match(buf[i + 1]) is not None
+            and len(_md_cells(buf[i])) >= 2
+        )
+        if not is_table:
+            if not prose:
+                prose_start = start + i
+            prose.append(buf[i])
+            i += 1
+            continue
+
+        if prose:
+            out.append(_para("\n".join(prose), prose_start, start + i - 1))
+            prose = []
+        header = _md_cells(buf[i])
+        width = len(header)
+        rows = [header]
+        j = i + 2
+        while j < len(buf) and "|" in buf[j]:
+            # Pad or trim to the header width; a ragged row is still evidence.
+            rows.append((_md_cells(buf[j]) + [""] * width)[:width])
+            j += 1
+        out.append(
+            DocBlock(
+                "table",
+                render_table(rows),
+                Locator(line_start=start + i, line_end=start + j - 1),
+                rows=rows,
+            )
+        )
+        i = j
+    if prose:
+        out.append(_para("\n".join(prose), prose_start, start + len(buf) - 1))
+    return out
 
 
 def _para(text: str, start: int, end: int) -> DocBlock:

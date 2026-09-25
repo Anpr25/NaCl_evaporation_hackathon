@@ -1,0 +1,82 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"PHC\",\n      \"predicate\": \"demonstrates\",\n      \"value\": \"zone ZN-1 from overnight cold condition up into control deadband\",\n      \"quote\": \"Demonstrate that the PHC brings zone ZN-1 from the overnight cold condition up into the control deadband, and then holds it there on two-position control.\"\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"PHC\",\n      \"predicate\": \"holds\",\n      \"value\": \"zone ZN-1 in control deadband\",\n      \"quote\": \"Demonstrate that the PHC brings zone ZN-1 from the overnight cold condition up into the control deadband, and then holds it there on two-position control.\"\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"outdoor air temperature\",\n      \"predicate\": \"at or near winter design\",\n      \"value\": \"2 degC\",\n      \"quote\": \"outdoor air at or near winter design (2 degC)\"\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"zone temperature\",\n      \"predicate\": \"at start of test\",\n      \"value\": \"same as outdoor air\",\n      \"quote\": \"the zone has been off overnight and is at the same temperature as outdoor air at the start of the test.\"\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"LPHW flow and return temperatures\",\n      \"predicate\": \"within normal range\",\n      \"value\": \"so the coil can make its rated duty\",\n      \"quote\": \"LPHW flow and return temperatures within normal range so the coil can make its rated duty.\"\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"PHC\",\n      \"predicate\": \"demonstrates\",\n      \"value\": \"zone ZN-1 from overnight cold condition up into control deadband\",\n      \"quote\": \"Demonstrate that the PHC brings zone ZN-1 from the overnight cold condition up into the control deadband, and then holds it there on two-position control.\"\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"PHC\",\n      \"predicate\": \"holds\",\n      \"value\": \"zone ZN-1 in control deadband\",\n      \"quote\": \"Demonstrate that the PHC brings zone ZN-1 from the overnight cold condition up into the control deadband, and then holds it there on two-position control.\"\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"time constant\",\n      \"predicate\": \"for first-order warmup\",\n      \"value\": \"about ten minutes\",\n      \"quote\": \"first-order warmup of the zone mass against the envelope loss gives a time constant of about ten minutes.\"\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"deadband bottom\",\n      \"predicate\": \"expected at\",\n      \"value\": \"roughly 15 minutes\",\n      \"quote\": \"The bottom of the deadband is expected at roughly 15 minutes\"\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"deadband top\",\n      \"predicate\": \"expected at\",\n      \"value\": \"roughly 17 minutes\",\n      \"quote\": \"The top of the deadband is expected at roughly 17 minutes\"\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 754,
+  "completion_tokens": 732,
+  "latency_s": 34.067822217941284,
+  "data": {
+    "claims": [
+      {
+        "kind": "requirement",
+        "subject": "PHC",
+        "predicate": "demonstrates",
+        "value": "zone ZN-1 from overnight cold condition up into control deadband",
+        "quote": "Demonstrate that the PHC brings zone ZN-1 from the overnight cold condition up into the control deadband, and then holds it there on two-position control."
+      },
+      {
+        "kind": "requirement",
+        "subject": "PHC",
+        "predicate": "holds",
+        "value": "zone ZN-1 in control deadband",
+        "quote": "Demonstrate that the PHC brings zone ZN-1 from the overnight cold condition up into the control deadband, and then holds it there on two-position control."
+      },
+      {
+        "kind": "parameter",
+        "subject": "outdoor air temperature",
+        "predicate": "at or near winter design",
+        "value": "2 degC",
+        "quote": "outdoor air at or near winter design (2 degC)"
+      },
+      {
+        "kind": "parameter",
+        "subject": "zone temperature",
+        "predicate": "at start of test",
+        "value": "same as outdoor air",
+        "quote": "the zone has been off overnight and is at the same temperature as outdoor air at the start of the test."
+      },
+      {
+        "kind": "parameter",
+        "subject": "LPHW flow and return temperatures",
+        "predicate": "within normal range",
+        "value": "so the coil can make its rated duty",
+        "quote": "LPHW flow and return temperatures within normal range so the coil can make its rated duty."
+      },
+      {
+        "kind": "requirement",
+        "subject": "PHC",
+        "predicate": "demonstrates",
+        "value": "zone ZN-1 from overnight cold condition up into control deadband",
+        "quote": "Demonstrate that the PHC brings zone ZN-1 from the overnight cold condition up into the control deadband, and then holds it there on two-position control."
+      },
+      {
+        "kind": "requirement",
+        "subject": "PHC",
+        "predicate": "holds",
+        "value": "zone ZN-1 in control deadband",
+        "quote": "Demonstrate that the PHC brings zone ZN-1 from the overnight cold condition up into the control deadband, and then holds it there on two-position control."
+      },
+      {
+        "kind": "parameter",
+        "subject": "time constant",
+        "predicate": "for first-order warmup",
+        "value": "about ten minutes",
+        "quote": "first-order warmup of the zone mass against the envelope loss gives a time constant of about ten minutes."
+      },
+      {
+        "kind": "parameter",
+        "subject": "deadband bottom",
+        "predicate": "expected at",
+        "value": "roughly 15 minutes",
+        "quote": "The bottom of the deadband is expected at roughly 15 minutes"
+      },
+      {
+        "kind": "parameter",
+        "subject": "deadband top",
+        "predicate": "expected at",
+        "value": "roughly 17 minutes",
+        "quote": "The top of the deadband is expected at roughly 17 minutes"
+      }
+    ]
+  }
+}

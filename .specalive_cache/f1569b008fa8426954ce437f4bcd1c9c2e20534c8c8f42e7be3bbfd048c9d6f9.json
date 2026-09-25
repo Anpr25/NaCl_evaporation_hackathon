@@ -1,0 +1,14 @@
+{
+  "text": "{\n  \"choice\": \"\",\n  \"confidence\": 0.0,\n  \"reason\": \"The component description mentions a physical coil in an ahu-2 supply duct, but all candidate classes are complex math operations (Add3, Sum, Add, Cos, Sin, Tan, Acos, Asin, Atan, Cosh, Sinh, Tanh). None of these classes model a physical coil or HVAC component.\",\n  \"parameter_map\": {}\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 1098,
+  "completion_tokens": 96,
+  "latency_s": 15.896546840667725,
+  "data": {
+    "choice": "",
+    "confidence": 0.0,
+    "reason": "The component description mentions a physical coil in an ahu-2 supply duct, but all candidate classes are complex math operations (Add3, Sum, Add, Cos, Sin, Tan, Acos, Asin, Atan, Cosh, Sinh, Tanh). None of these classes model a physical coil or HVAC component.",
+    "parameter_map": {}
+  }
+}

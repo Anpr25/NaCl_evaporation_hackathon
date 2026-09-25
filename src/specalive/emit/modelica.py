@@ -38,6 +38,12 @@ from ..ir.system import Block, StateMachine, SystemModel
 
 IND = "  "
 
+#: How far a unit-signature hit must be clear of the next candidate to be trusted alone.
+_UNIT_MARGIN = 0.15
+#: ...and how well it must fit before it is allowed to beat a lexical hit rather than only
+#: rescue a block the words found nothing for.
+_UNIT_TRUST = 0.85
+
 
 # --------------------------------------------------------------------------------- binding
 
@@ -113,6 +119,18 @@ class BindingResult:
     synthesised: str | None = None
 
 
+def _merge_unit_hits(index: Any, units: set[str], block: Block, domains: list[Any]) -> list[Any]:
+    """Unit-signature hits across every domain the block belongs to, best score first."""
+    names = {p.name for p in block.parameters}
+    out: list[Any] = []
+    for d in domains:
+        for h in index.search_by_units(units, names=names, k=12, domain=d):
+            if all(h.entry.key != seen.entry.key for seen in out):
+                out.append(h)
+    out.sort(key=lambda h: h.score, reverse=True)
+    return out
+
+
 class Binder:
     """Decides, per block, the cheapest tier that can realise it."""
 
@@ -131,9 +149,46 @@ class Binder:
     def _try_l0(self, block: Block) -> BindingResult | None:
         if self.index is None:
             return None
-        domain = next((d for d in block.domains if d != "unknown"), None)
+        # Search every domain the block is in, not just the first one listed. A preheat coil
+        # infers fluid *and* thermal; taking the head of that list searched the fluid shelf
+        # for a heat source and found nothing, then fell through to an unbound block.
+        domains = [d for d in block.domains if d != "unknown"] or [None]
         query = f"{block.name} {block.kind} {block.description or ''}"
-        hits = self.index.search(query, k=12, domain=domain)
+        hits: list[Any] = []
+        for d in domains:
+            for h in self.index.search(query, k=12, domain=d):
+                if all(h.entry.key != seen.entry.key for seen in hits):
+                    hits.append(h)
+        hits.sort(key=lambda h: h.score, reverse=True)
+
+        # Words are the weakest signal a packet gives us, and the one most likely to be in a
+        # dialect the library has never heard. "Envelope fabric", "preheat coil" and "outdoor
+        # air" retrieve nothing at all from the MSL. What the block carries physically is not
+        # dialect: a W/K parameter is a thermal conductance in any vocabulary. Units are
+        # therefore tried alongside the words, and are decisive when the words find nothing.
+        units = {p.quantity.unit for p in block.parameters if p.quantity.unit}
+        by_unit = (
+            _merge_unit_hits(self.index, units, block, domains)
+            if units
+            else []
+        )
+        # Trust a unit signature when it is clear of its runner-up. Absolute score says little
+        # -- it depends on how many parameters the block happens to carry -- but separation
+        # says the shape fits one class and not the next one down.
+        decisive = by_unit and (
+            len(by_unit) == 1 or by_unit[0].score > by_unit[1].score + _UNIT_MARGIN
+        )
+        if decisive and (not hits or by_unit[0].score >= _UNIT_TRUST):
+            chosen = by_unit[0].entry
+            return BindingResult(
+                "L0",
+                chosen.key,
+                self._map_params(block, chosen),
+                f"unit signature {sorted(units)} matched {chosen.key.rsplit('.', 1)[-1]} "
+                f"and nothing else (score {by_unit[0].score})",
+            )
+        if not hits:
+            hits = by_unit
         if not hits:
             return None
 

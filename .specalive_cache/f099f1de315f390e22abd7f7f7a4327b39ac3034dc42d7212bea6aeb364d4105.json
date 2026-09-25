@@ -1,0 +1,17 @@
+{
+  "text": "{\n  \"connections\": [\n    {\n      \"from\": \"TC-2101\",\n      \"to\": \"TT-2101\",\n      \"quote\": \"The zone controller TC-2101 reads zone air temperature from TT-2101\"\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 735,
+  "completion_tokens": 64,
+  "latency_s": 6.734793186187744,
+  "data": {
+    "connections": [
+      {
+        "from": "TC-2101",
+        "to": "TT-2101",
+        "quote": "The zone controller TC-2101 reads zone air temperature from TT-2101"
+      }
+    ]
+  }
+}

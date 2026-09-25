@@ -1,0 +1,32 @@
+{
+  "text": "{\n  \"connections\": [\n    {\n      \"from\": \"OA\",\n      \"to\": \"ZN-1\",\n      \"quote\": \"heat \u2500\u2500\u2500\u2500 HC-1 (preheat coil)\"\n    },\n    {\n      \"from\": \"EF-1\",\n      \"to\": \"ZN-1\",\n      \"quote\": \"envelope EF-1\"\n    },\n    {\n      \"from\": \"EF-1\",\n      \"to\": \"OA\",\n      \"quote\": \"envelope EF-1\"\n    },\n    {\n      \"from\": \"ZN-1\",\n      \"to\": \"HC-1\",\n      \"quote\": \"heat \u2500\u2500\u2500\u2500 HC-1 (preheat coil)\"\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 893,
+  "completion_tokens": 152,
+  "latency_s": 19.781658411026,
+  "data": {
+    "connections": [
+      {
+        "from": "OA",
+        "to": "ZN-1",
+        "quote": "heat \u2500\u2500\u2500\u2500 HC-1 (preheat coil)"
+      },
+      {
+        "from": "EF-1",
+        "to": "ZN-1",
+        "quote": "envelope EF-1"
+      },
+      {
+        "from": "EF-1",
+        "to": "OA",
+        "quote": "envelope EF-1"
+      },
+      {
+        "from": "ZN-1",
+        "to": "HC-1",
+        "quote": "heat \u2500\u2500\u2500\u2500 HC-1 (preheat coil)"
+      }
+    ]
+  }
+}

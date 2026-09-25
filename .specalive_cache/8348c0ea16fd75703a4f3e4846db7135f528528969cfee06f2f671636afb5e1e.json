@@ -1,0 +1,17 @@
+{
+  "text": "{\n  \"connections\": [\n    {\n      \"from\": \"AHU-2\",\n      \"to\": \"ZN-1\",\n      \"quote\": \"PHC brings zone ZN-1 from the overnight cold condition up into the control deadband\"\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 700,
+  "completion_tokens": 58,
+  "latency_s": 6.23430609703064,
+  "data": {
+    "connections": [
+      {
+        "from": "AHU-2",
+        "to": "ZN-1",
+        "quote": "PHC brings zone ZN-1 from the overnight cold condition up into the control deadband"
+      }
+    ]
+  }
+}

@@ -59,13 +59,16 @@ from .entities import (
     find_tags,
     ident,
     infer_domains,
+    looks_like_mark,
     looks_like_tag,
+    names_an_instrument,
     measurement_var,
     norm,
     predicate_key,
     singular,
     to_si,
 )
+from .verification import bind_instruments, checks_from_criteria
 from .precedence import PrecedenceEngine, build_supersession_map, resolve_source_supersession
 from .topology import GROUP_REF, Path as Route, TopologyBuilder, collect_edges, connects_to_claims, is_signal_medium
 
@@ -148,6 +151,31 @@ def build_model(
 # ------------------------------------------------------------------------------- assembly
 
 
+#: Predicates that mean a subject has a structural role of its own, so a stray number on it
+#: is an attribute of that role -- an instrument's range, a hop's port -- and not a parameter.
+_NOT_A_PARAMETER = frozenset({"location", "measurement", "from", "to", "next", "requirement",
+                              "guard", "action"})
+
+
+def _numeric_fact(e: Any) -> Any | None:
+    """The one number an entity asserts, whichever shape the register used.
+
+    A wide register names the quantity in the header and calls the column "Value"; a long one
+    names it in a cell, so the predicate *is* the quantity ("c", "g", "t"). Two or more
+    numbers mean this is not a bare parameter row and something else should classify it.
+    """
+    direct = e.get("value")
+    if direct is not None and isinstance(direct.value, (int, float)) and not isinstance(direct.value, bool):
+        return direct
+    if set(e.facts) & _NOT_A_PARAMETER:
+        return None
+    numeric = [
+        c for c in e.facts.values()
+        if isinstance(c.value, (int, float)) and not isinstance(c.value, bool)
+    ]
+    return numeric[0] if len(numeric) == 1 else None
+
+
 class Assembler:
     """Turns resolved entities into IR elements. One method per backlog item B1..B5."""
 
@@ -175,6 +203,10 @@ class Assembler:
         self.build_signals()         # B3
         self.build_behaviour()       # B4
         self.build_scenario()        # B5
+        # Prose-stated criteria and the instrument bindings they need. Both no-op on a packet
+        # that states its instruments and its acceptance structurally, as NaCl does.
+        self.gaps += bind_instruments(self.m, self.entities)
+        self.gaps += checks_from_criteria(self.m, self.claims)
         self.link_requirements()
         self.m.domains = sorted({d for b in self.m.blocks for d in b.domains if d != "unknown"}
                                 | ({"control"} if self.m.state_machines else set())) or ["unknown"]  # type: ignore[assignment]
@@ -185,14 +217,37 @@ class Assembler:
     def classify(self) -> None:
         ents = self.entities.values()
         self.requirement_keys = {e.key for e in ents if e.has("requirement")}
-        self.parameter_keys = {e.key for e in ents if e.get("value") is not None
-                               and isinstance(e.get("value").value, (int, float))}
+
+        # A row that describes a physical thing is a component even when it also carries a
+        # number. Long-format schedules put the equipment mark and one of its parameters on
+        # the same row -- "ZN-1 | Zone thermal mass | C | 300 | kJ/K" -- so classifying on
+        # "has a numeric value" alone swept every piece of plant into the parameter table and
+        # left the model with nothing in it. What separates them is the description: a zone
+        # thermal mass is thermal, a deadband upper limit is not anything.
+        physical_keys = {
+            e.key for e in ents
+            if looks_like_mark(e.subject)
+            and infer_domains(self._kind_text(e), e.text("name"), e.text("kind")) != ["unknown"]
+        }
         self.edge_keys = {e.key for e in ents if e.has("from") and e.has("to")}
         self.step_keys = {e.key for e in ents if e.has("next")}
+        # An instrument is identified by having somewhere to be and something to measure, and
+        # that is decided *before* anything counts numbers. Deciding parameters first and
+        # subtracting them worked only while a parameter had to carry a predicate literally
+        # called "value"; once a lone number anywhere could make one, every transmitter with
+        # a range became a parameter and the plant lost all of its sensors.
         self.instrument_keys = {
             e.key for e in ents
             if e.has("location") and (e.has("measurement") or e.has("unit"))
-            and e.key not in self.parameter_keys and looks_like_tag(e.subject)
+            and looks_like_tag(e.subject)
+        }
+        structural = (
+            self.requirement_keys | self.edge_keys | self.step_keys
+            | self.instrument_keys | physical_keys
+        )
+        self.parameter_keys = {
+            e.key for e in ents
+            if e.key not in structural and _numeric_fact(e) is not None
         }
         taken = self.requirement_keys | self.parameter_keys | self.edge_keys | self.step_keys | self.instrument_keys
 
@@ -209,11 +264,34 @@ class Assembler:
         }
         self.part_keys: list[str] = []
         for e in sorted(ents, key=lambda e: e.order()):
-            if e.key in taken or not looks_like_tag(e.subject):
+            if e.key in taken or not looks_like_mark(e.subject):
                 continue
             has_kind = e.has("type", "kind", "ownership")
-            physical = infer_domains(self._kind_text(e), e.text("name"), e.text("kind")) != ["unknown"]
-            if has_kind and (physical or e.key in referenced):
+            domains = infer_domains(self._kind_text(e), e.text("name"), e.text("kind"))
+            physical = domains != ["unknown"]
+
+            # An instrument becomes a signal, never a block, however it was reached. Being
+            # *referenced* is the loosest route in, and a model asked for topology will
+            # happily draw a controller wired to its own transmitter: true as a signal path,
+            # and a pair of phantom components if taken as plant. Declaring one as both also
+            # puts the same name in a scope twice, which does not compile.
+            if names_an_instrument(e.text("name"), e.text("description"),
+                                   e.text("kind"), e.text("type")) and not has_kind:
+                continue
+
+            # Plenty of real schedules have no Type column: the service description is the
+            # kind. "ZN-1 | Zone thermal mass" says what it is as clearly as a classification
+            # column would, and demanding the column found nothing in an ordinary HVAC
+            # schedule. Two guards keep it honest -- the description must imply physics
+            # beyond a bare signal, and a register must actually have listed the row, so a
+            # section heading a model read out of prose cannot become a component.
+            describes_plant = (
+                physical
+                and e.registered
+                and e.has("name", "description")
+                and set(domains) - {"signal", "unknown"} != set()
+            )
+            if (has_kind or describes_plant) and (physical or e.key in referenced):
                 self.part_keys.append(e.key)
             elif e.key in referenced:
                 self.part_keys.append(e.key)
@@ -231,7 +309,13 @@ class Assembler:
             return explicit
         owner = e.text("ownership").lower()
         cls = "manual" if any(w in owner for w in MANUAL_WORDS) else ("automated" if owner else "")
-        noun = singular(e.sheet or "element").lower()
+        # With no Type column, the service description is the best statement of what the thing
+        # is, and it is what catalog retrieval has to search on. Falling straight through to
+        # the sheet noun handed the binder the word "element" for every row, which matched
+        # nothing in the standard library and sent an HVAC zone to a fluid junction template
+        # out of our own NaCl-era shelf.
+        described = e.text("name") or e.text("description")
+        noun = (described or singular(e.sheet or "element")).lower()
         return f"{cls} {noun}".strip()
 
     def build_blocks(self) -> None:
@@ -780,7 +864,20 @@ def _build_parameters(
 
     out: list[Parameter] = []
     for subject, facts in sorted(by_subject.items()):
+        # Wide registers name the quantity in the header and call the column "Value"; long
+        # ones name it in a cell, so the predicate is the quantity itself ("t", "c", "g").
+        # Accept either, or the second shape produces no parameters at all.
         value_claim = facts.get("value")
+        if value_claim is None and not (facts.keys() & _NOT_A_PARAMETER):
+            # Only when nothing marks this subject as something else. An instrument carries a
+            # range and a location, and reading its lone number as a parameter declared
+            # LIS_101 twice in the controller -- once as a parameter and once as the input it
+            # really is -- which does not compile.
+            numeric = [
+                c for p, c in sorted(facts.items())
+                if isinstance(c.value, (int, float)) and not isinstance(c.value, bool)
+            ]
+            value_claim = numeric[0] if len(numeric) == 1 else None
         if value_claim is None or not isinstance(value_claim.value, (int, float)) or isinstance(value_claim.value, bool):
             continue
         unit = value_claim.unit or (str(facts["unit"].value) if "unit" in facts else None)

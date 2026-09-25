@@ -1,0 +1,84 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"SOO-1\",\n      \"predicate\": \"description\",\n      \"value\": \"Occupied heating\",\n      \"quote\": \"SOO-1  Occupied heating\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"SOO-1\",\n      \"predicate\": \"applies_to\",\n      \"value\": \"zone ZN-1 heating only\",\n      \"quote\": \"Applies to zone ZN-1 heating only.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"SOO-1\",\n      \"predicate\": \"description\",\n      \"value\": \"The zone controller TC-2101 reads zone air temperature from TT-2101 and enables the preheat coil on a simple two-position sequence with deadband. There is no optimum start, no night setback and no morning boost in this revision.\",\n      \"quote\": \"The zone controller TC-2101 reads zone air temperature from TT-2101 and enables the preheat coil on a simple two-position sequence with deadband. There is no optimum start, no night setback and no morning boost in this revision.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"SOO-1\",\n      \"predicate\": \"step_1\",\n      \"value\": \"From system start the coil is enabled. The coil remains enabled while the zone is below the upper deadband limit.\",\n      \"quote\": \"**Step 1 \u2014 Warmup.** From system start the coil is enabled. The coil remains enabled while the zone is below the upper deadband limit.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"SOO-1\",\n      \"predicate\": \"step_2\",\n      \"value\": \"When TT-2101 reaches 21.5 degC the coil is disabled. The coil is re-enabled when TT-2101 falls to 20.5 degC. The zone then cycles between these two limits.\",\n      \"quote\": \"**Step 2 \u2014 Hold.** When TT-2101 reaches 21.5 degC the coil is disabled. The coil is re-enabled when TT-2101 falls to 20.5 degC. The zone then cycles between these two limits.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"SOO-1\",\n      \"predicate\": \"deadband\",\n      \"value\": \"The deadband limits above are the commissioned values.\",\n      \"quote\": \"The deadband limits above are the commissioned values.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"SOO-1\",\n      \"predicate\": \"heating_setpoint\",\n      \"value\": \"21 degC\",\n      \"quote\": \"The heating setpoint quoted in the design basis (21 degC) is the midpoint of the deadband and is not itself a switching point.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"SOO-2\",\n      \"predicate\": \"description\",\n      \"value\": \"The preheat coil shall not be enabled unless the zone temperature transmitter is reading a plausible value. TT-2101 is regarded as plausible above -40 degC.\",\n      \"quote\": \"SOO-2  Interlocks\\nThe preheat coil shall not be enabled unless the zone temperature transmitter is reading a plausible value. TT-2101 is regarded as plausible above -40 degC.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"SOO-3\",\n      \"predicate\": \"description\",\n      \"value\": \"Different disciplines refer to the coil differently. For the avoidance of doubt: All three refer to the same physical coil in the AHU-2 supply duct.\",\n      \"quote\": \"SOO-3  Tag cross-reference\\nDifferent disciplines refer to the coil differently. For the avoidance of doubt:\\nAll three refer to the same physical coil in the AHU-2 supply duct.\",\n      \"confidence\": 0.95\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 832,
+  "completion_tokens": 970,
+  "latency_s": 40.453285455703735,
+  "data": {
+    "claims": [
+      {
+        "kind": "requirement",
+        "subject": "SOO-1",
+        "predicate": "description",
+        "value": "Occupied heating",
+        "quote": "SOO-1  Occupied heating",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "SOO-1",
+        "predicate": "applies_to",
+        "value": "zone ZN-1 heating only",
+        "quote": "Applies to zone ZN-1 heating only.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "SOO-1",
+        "predicate": "description",
+        "value": "The zone controller TC-2101 reads zone air temperature from TT-2101 and enables the preheat coil on a simple two-position sequence with deadband. There is no optimum start, no night setback and no morning boost in this revision.",
+        "quote": "The zone controller TC-2101 reads zone air temperature from TT-2101 and enables the preheat coil on a simple two-position sequence with deadband. There is no optimum start, no night setback and no morning boost in this revision.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "SOO-1",
+        "predicate": "step_1",
+        "value": "From system start the coil is enabled. The coil remains enabled while the zone is below the upper deadband limit.",
+        "quote": "**Step 1 \u2014 Warmup.** From system start the coil is enabled. The coil remains enabled while the zone is below the upper deadband limit.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "SOO-1",
+        "predicate": "step_2",
+        "value": "When TT-2101 reaches 21.5 degC the coil is disabled. The coil is re-enabled when TT-2101 falls to 20.5 degC. The zone then cycles between these two limits.",
+        "quote": "**Step 2 \u2014 Hold.** When TT-2101 reaches 21.5 degC the coil is disabled. The coil is re-enabled when TT-2101 falls to 20.5 degC. The zone then cycles between these two limits.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "SOO-1",
+        "predicate": "deadband",
+        "value": "The deadband limits above are the commissioned values.",
+        "quote": "The deadband limits above are the commissioned values.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "SOO-1",
+        "predicate": "heating_setpoint",
+        "value": "21 degC",
+        "quote": "The heating setpoint quoted in the design basis (21 degC) is the midpoint of the deadband and is not itself a switching point.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "SOO-2",
+        "predicate": "description",
+        "value": "The preheat coil shall not be enabled unless the zone temperature transmitter is reading a plausible value. TT-2101 is regarded as plausible above -40 degC.",
+        "quote": "SOO-2  Interlocks\nThe preheat coil shall not be enabled unless the zone temperature transmitter is reading a plausible value. TT-2101 is regarded as plausible above -40 degC.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "SOO-3",
+        "predicate": "description",
+        "value": "Different disciplines refer to the coil differently. For the avoidance of doubt: All three refer to the same physical coil in the AHU-2 supply duct.",
+        "quote": "SOO-3  Tag cross-reference\nDifferent disciplines refer to the coil differently. For the avoidance of doubt:\nAll three refer to the same physical coil in the AHU-2 supply duct.",
+        "confidence": 0.95
+      }
+    ]
+  }
+}

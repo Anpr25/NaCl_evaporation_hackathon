@@ -1,0 +1,9 @@
+Mark,Description,Parameter,Value,Unit,Scope,Comments
+ZN-1,Zone thermal mass,C,300,kJ/K,ZN-1,North Wing open plan; includes furniture and slab soffit
+EF-1,Envelope fabric,G,450,W/K,EF-1,Lumped zone-to-outdoor conductance at design condition
+OA,Outdoor air,T,2,degC,OA,Winter design dry bulb
+HC-1,Preheat coil LPHW,Q,12,kW,HC-1,Full rated duty; coil is on/off, no modulation
+SP-ZN1-HI,Deadband upper limit,T,21.5,degC,TC-2101,Coil disabled at or above this value
+SP-ZN1-LO,Deadband lower limit,T,20.5,degC,TC-2101,Coil re-enabled at or below this value
+SP-ZN1-SET,Zone heating setpoint,T,21,degC,TC-2101,Deadband midpoint; not a switching point
+SP-TT2101-MIN,Transmitter plausibility limit,T,-40,degC,TC-2101,Below this the reading is rejected

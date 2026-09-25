@@ -1,0 +1,14 @@
+{
+  "text": "{\n  \"choice\": \"\",\n  \"confidence\": 0.0,\n  \"reason\": \"The component is a 'zone air temperature transmitter' with a wall-mounted 1.5m AFL (above floor level) and a thermal port. None of the listed Modelica classes match this description exactly. The closest candidates are temperature sensors (e.g., Modelica.Thermal.HeatTransfer.Sensors.TemperatureSensor), but they are for absolute temperature measurement in Kelvin, not a transmitter that outputs a temperature signal for zone air. The component has a single thermal port, but the sensors listed are for specific domains (thermal/fluid) and do not match the 'transmitter' function.\",\n  \"parameter_map\": {}\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 2442,
+  "completion_tokens": 148,
+  "latency_s": 27.44647455215454,
+  "data": {
+    "choice": "",
+    "confidence": 0.0,
+    "reason": "The component is a 'zone air temperature transmitter' with a wall-mounted 1.5m AFL (above floor level) and a thermal port. None of the listed Modelica classes match this description exactly. The closest candidates are temperature sensors (e.g., Modelica.Thermal.HeatTransfer.Sensors.TemperatureSensor), but they are for absolute temperature measurement in Kelvin, not a transmitter that outputs a temperature signal for zone air. The component has a single thermal port, but the sensors listed are for specific domains (thermal/fluid) and do not match the 'transmitter' function.",
+    "parameter_map": {}
+  }
+}

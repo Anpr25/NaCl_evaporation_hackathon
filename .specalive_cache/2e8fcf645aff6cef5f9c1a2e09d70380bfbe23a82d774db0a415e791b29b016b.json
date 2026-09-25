@@ -1,0 +1,17 @@
+{
+  "text": "{\n  \"connections\": [\n    {\n      \"from\": \"ZN-1\",\n      \"to\": \"TC-2101\",\n      \"quote\": \"Measured lumped conductance for zone ZN-1 is 5:00 W/K\"\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 645,
+  "completion_tokens": 60,
+  "latency_s": 5.94397234916687,
+  "data": {
+    "connections": [
+      {
+        "from": "ZN-1",
+        "to": "TC-2101",
+        "quote": "Measured lumped conductance for zone ZN-1 is 5:00 W/K"
+      }
+    ]
+  }
+}

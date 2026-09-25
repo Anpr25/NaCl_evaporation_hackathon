@@ -194,7 +194,15 @@ def run(
                 con.print(f"  [red]FAIL[/] {r.check_id}: {r.detail}")
 
     if not result.ok:
-        con.print("\n[red]HARD GATE NOT MET[/] - the Modelica does not compile and run.")
+        if result.gate.get("compiled") and result.gate.get("simulated"):
+            # Distinguish the two ways to fail, because they need opposite responses: a
+            # build error is a modelling problem, an empty model is an extraction problem.
+            con.print(
+                "\n[red]HARD GATE NOT MET[/] - the generated model has no components. "
+                "It compiled because there was nothing in it to fail."
+            )
+        else:
+            con.print("\n[red]HARD GATE NOT MET[/] - the Modelica does not compile and run.")
         raise typer.Exit(1)
     con.print("\n[green]HARD GATE MET[/] - the model compiles and simulates.")
 

@@ -63,6 +63,35 @@ def looks_like_tag(s: str) -> bool:
     return bool(TAG_RE.fullmatch(str(s).strip()))
 
 
+#: A short all-caps mark with no number: OA, SA, RA, EA, CHW, LPHW. Building services uses
+#: these constantly for air and water streams, and process plant uses them for headers.
+_BARE_MARK = re.compile(r"[A-Z]{2,5}")
+
+
+def looks_like_mark(s: str) -> bool:
+    """Tag-shaped, or a short all-caps mark that a register used as a row identifier.
+
+    Deliberately separate from `looks_like_tag`, which also scans free text: loosening that
+    would make every capitalised abbreviation in a paragraph into a component. This is only
+    consulted where the subject already *is* a register row's identifier, so the looser shape
+    costs nothing and recovers boundary streams like outdoor air -- without which a thermal
+    model has no sink and does not close.
+    """
+    t = str(s).strip()
+    return looks_like_tag(t) or bool(_BARE_MARK.fullmatch(t))
+
+
+#: Words that mean the row describes an instrument rather than plant. An instrument becomes a
+#: signal, never a block: declaring it as both puts the same name in one scope twice.
+INSTRUMENT_WORDS = ("transmitter", "sensor", "indicator", "gauge", "thermostat", "probe",
+                    "detector", "analyser", "analyzer", "controller", "transducer")
+
+
+def names_an_instrument(*texts: str | None) -> bool:
+    blob = " ".join(t.lower() for t in texts if t)
+    return any(w in blob for w in INSTRUMENT_WORDS)
+
+
 def find_tags(text: str, known: dict[str, str]) -> list[str]:
     """Known ids mentioned in `text`, in order of first appearance. `known` maps norm -> id."""
     out: list[str] = []
@@ -118,8 +147,23 @@ def to_si(value: Any, unit: str | None, *, temperature: bool = False) -> tuple[A
     u = clean_unit(unit)
     if u == "C" and temperature:
         u = "degC"
-    if not isinstance(value, (int, float)) or isinstance(value, bool) or u not in _TO_SI:
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or u is None:
         return value, u, None
+    if u not in _TO_SI:
+        # A compound unit is rarely listed whole, but its numerator usually is: kJ/K, kW/K,
+        # kJ/kg, mm/s. Scale the numerator and keep the rest. Only a pure scaling can survive
+        # a ratio -- degC/s would need the offset applied before the division, which is not
+        # what the number means -- so offsets are excluded.
+        head, sep, tail = u.partition("/")
+        conv = _TO_SI.get(head)
+        if not (sep and conv and conv[2] == 0.0):
+            return value, u, None
+        si_head, scale, _ = conv
+        out = round(value * scale, 10)
+        if isinstance(out, float) and out.is_integer() and scale >= 1:
+            out = int(out)
+        si = f"{si_head}{sep}{tail}"
+        return out, si, f"{value} {unit} -> {out} {si}"
     si, scale, offset = _TO_SI[u]
     out = round(value * scale + offset, 10)
     if isinstance(out, float) and out.is_integer() and scale >= 1 and offset == 0:
@@ -136,11 +180,18 @@ def is_temperature_unit(unit: str | None) -> bool:
 #: Words that put a part in a physical domain. Deliberately short and unambiguous; a miss
 #: leaves the domain 'unknown' (and the validator says so), a wrong hit would mislead binding.
 DOMAIN_WORDS: dict[str, tuple[str, ...]] = {
+    # The HVAC words are not decoration. Building services names the same physics completely
+    # differently from process plant -- a zone, an envelope, a coil, outdoor air -- and with
+    # only process vocabulary here an ordinary air-handling schedule infers "unknown" for
+    # every row and produces a model with no components in it.
     "fluid": ("tank", "vessel", "reservoir", "pump", "valve", "pipe", "condenser", "evaporator",
               "liquid", "water", "brine", "condensate", "vapor", "vapour", "steam", "fluid",
-              "concentrate", "gas", "oil", "coolant", "duct", "compressor", "batch", "drum"),
+              "concentrate", "gas", "oil", "coolant", "duct", "compressor", "batch", "drum",
+              "air", "fan", "damper", "coil", "plenum", "ahu", "air handling"),
     "thermal": ("heater", "heating", "cooler", "cooling", "condenser", "evaporator", "heat",
-                "thermal", "boiler", "chiller", "furnace"),
+                "thermal", "boiler", "chiller", "furnace", "preheat", "reheat", "coil",
+                "envelope", "fabric", "insulation", "conductance", "radiator", "calorifier",
+                "zone", "ambient", "outdoor", "thermal mass"),
     "electrical": ("resistor", "capacitor", "inductor", "battery", "voltage", "current", "motor",
                    "generator", "transformer", "breaker", "cable", "electrical"),
     "magnetic": ("magnetic", "flux", "reluctance", "magnet", "yoke"),

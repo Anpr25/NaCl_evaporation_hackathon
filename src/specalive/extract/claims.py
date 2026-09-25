@@ -36,10 +36,18 @@ _PROSE_KINDS: tuple[str, ...] = ("heading", "paragraph", "list")
 #: are the words engineering registers use regardless of whether the plant is chemical,
 #: electrical or mechanical. Extend freely; a miss costs a claim, never a wrong claim.
 HEADER_SYNONYMS: dict[str, tuple[str, ...]] = {
-    "id": ("id", "tag", "item", "ref", "reference", "req id", "parameter id", "no", "number"),
-    "name": ("name", "title", "description", "designation", "service"),
-    "kind": ("type", "kind", "class", "category", "model class", "role", "equipment type"),
-    "value": ("value", "setpoint", "setting", "nominal", "rating", "quantity", "target"),
+    # "mark" and "asset" are what building services and facilities call a tag; "equipment"
+    # and "component" are what mechanical schedules call one. A vocabulary that only knows
+    # process-plant words will read a perfectly ordinary HVAC schedule and find no equipment
+    # in it at all, which is exactly what happened on the first run of that packet.
+    "id": ("id", "tag", "item", "ref", "reference", "req id", "parameter id", "no", "number",
+           "mark", "asset", "asset id", "equipment", "equipment id", "component", "device",
+           "plant item", "loop", "point"),
+    "name": ("name", "title", "description", "designation", "service", "function"),
+    "kind": ("type", "kind", "class", "category", "model class", "role", "equipment type",
+             "discipline"),
+    "value": ("value", "setpoint", "setting", "nominal", "rating", "quantity", "target",
+              "duty", "capacity", "magnitude"),
     "unit": ("unit", "units", "uom", "dimension"),
     "status": ("status", "state", "validity", "revision status"),
     "superseded_by": ("superseded by", "replaced by", "supersedes", "overrides"),
@@ -56,6 +64,11 @@ HEADER_SYNONYMS: dict[str, tuple[str, ...]] = {
     "region": ("region", "branch", "thread", "parallel"),
     "next": ("next", "next state", "successor", "goto"),
     "ownership": ("ownership", "control source", "controlled by", "actuation type"),
+    # A column that names the attribute each row is about. Its presence means the table is
+    # long-format -- one row per (item, attribute, value) -- instead of one column per
+    # attribute. Engineering schedules use both shapes freely.
+    "attribute": ("parameter", "attribute", "property", "variable", "characteristic",
+                  "parameter name", "field", "measure"),
 }
 
 _NUM = re.compile(r"^\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*([A-Za-z%/°.^0-9()·]*)\s*$")
@@ -182,13 +195,58 @@ def claims_from_table(doc: Document, block: DocBlock, seq: Iterable[int]) -> lis
     out: list[EvidenceClaim] = []
     sheet = (block.data or {}).get("sheet") or block.locator.sheet
 
+    # Long-format: the attribute each row is about is named in a *cell*, not in the header.
+    #
+    #   Mark   | Parameter | Value | Unit          ZN-1 . C = 300 kJ/K
+    #   ZN-1   | C         | 300   | kJ/K    -->   EF-1 . G = 450 W/K
+    #   EF-1   | G         | 450   | W/K
+    #
+    # Read column-wise instead and every one of these rows says the same thing -- "value" --
+    # about a different subject, and the attribute name is thrown away. Worse, the equipment
+    # mark then looks like a parameter id, so the plant's components disappear into the
+    # parameter table and the model comes out empty.
+    attr_col = next((j for j, p in best_map.items() if p == "attribute"), None)
+    value_col = next((j for j, p in best_map.items() if p == "value"), None)
+    unit_col = next((j for j, p in best_map.items() if p == "unit"), None)
+    long_format = attr_col is not None and value_col is not None
+
     for r, row in enumerate(rows[best_idx + 1 :], start=best_idx + 2):
         subject = (row[id_col].strip() if id_col < len(row) else "")
         if not subject:
             continue
+
+        if long_format:
+            attr = (row[attr_col] or "").strip() if attr_col < len(row) else ""
+            raw = (row[value_col] or "").strip() if value_col < len(row) else ""
+            if attr and raw:
+                value, unit = parse_value(raw)
+                if unit is None and unit_col is not None and unit_col < len(row):
+                    unit = (row[unit_col] or "").strip() or None
+                predicate = _slug(attr)
+                out.append(
+                    EvidenceClaim(
+                        id=f"CLM-{next(iter(seq)):05d}",
+                        source_id=doc.source.id,
+                        locator=Locator(
+                            sheet=sheet, cell=f"{_col_letter(value_col)}{r}",
+                            page=block.locator.page, section=block.locator.section,
+                        ),
+                        kind="parameter",
+                        subject=subject,
+                        predicate=predicate,
+                        value=value,
+                        unit=unit,
+                        quote=" | ".join(c for c in row if c)[:300],
+                        confidence=0.95,
+                        extracted_by="t0_deterministic",
+                    )
+                )
+
         for j, predicate in best_map.items():
             if j == id_col or j >= len(row):
                 continue
+            if long_format and j in (attr_col, value_col, unit_col):
+                continue  # already emitted, under the attribute's own name
             cell = (row[j] or "").strip()
             if not cell:
                 continue
@@ -473,6 +531,18 @@ def extract_claims(docs: list[Document], router: Any | None = None) -> list[Evid
     if router is None:
         return out
 
+    # Tags the deterministic pass established. Topology extraction is grounded on exactly
+    # this set, so a model can relate things the evidence named and nothing else.
+    known: dict[str, str] = {}
+    for c in out:
+        if c.extracted_by == "t0_deterministic" and _looks_like_mark(c.subject):
+            known.setdefault(_norm_tag(c.subject), c.subject.strip())
+    if known and not any(c.kind == "connection" for c in out):
+        # Only when nothing deterministic produced a graph. A packet that ships a PlantUML
+        # or a connection register has already said how it is wired, exactly, for free.
+        for doc in docs:
+            out.extend(claims_from_topology(doc, router, known, counter))
+
     for doc in docs:
         for chunk, locator in doc.chunks(kinds=_PROSE_KINDS):
             try:
@@ -552,3 +622,138 @@ def _col_letter(idx: int) -> str:
         idx, rem = divmod(idx - 1, 26)
         out = chr(65 + rem) + out
     return out
+
+
+# ----------------------------------------------------------------------------- topology
+
+TOPOLOGY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["connections"],
+    "properties": {
+        "connections": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["from", "to", "quote"],
+                "properties": {
+                    "from": {"type": "string"},
+                    "to": {"type": "string"},
+                    "medium": {"type": "string"},
+                    "quote": {"type": "string"},
+                },
+            },
+        }
+    },
+}
+
+TOPOLOGY_PROMPT = """\
+List how these components are connected, using ONLY the tags given.
+
+TAGS
+{tags}
+
+Rules:
+- `from` and `to` must each be one of the TAGS above, copied exactly. Never invent a tag, and
+  never use a name that is not in the list.
+- One entry per connection. Direction matters: `from` is upstream, source, or the side that
+  supplies; `to` is downstream, sink, or the side that receives.
+- `quote` must be copied verbatim from the text and must be the words that state or draw this
+  connection. If you cannot quote it, do not claim it.
+- Include connections drawn in diagrams as well as ones written in sentences.
+- A component described as a boundary or supply still connects to whatever it feeds.
+- If something sits BETWEEN two others -- in a sketch, or in a phrase like "A loses heat
+  through B to C" -- then it connects to each of them separately: A-B and B-C. Do NOT also
+  connect A straight to C. The thing in the middle is there precisely because the two ends
+  do not touch.
+- Give each connection once. A and B joined is one entry, not two in opposite directions.
+- If the text states no connections at all, return an empty list.
+
+TEXT
+{chunk}
+"""
+
+
+def claims_from_topology(
+    doc: Document, router: Any, tags: dict[str, str], seq: Iterable[int]
+) -> list[EvidenceClaim]:
+    """Ask a model how the known components are wired, and accept nothing it invents.
+
+    The NaCl packet ships a PlantUML graph, so the connection graph arrived for free from a
+    deterministic reader and this path was never needed. Most packets are not so kind: an
+    HVAC design basis draws its arrangement in an ASCII sketch and describes it in a
+    sentence, and with no reader for either, every component came out correctly bound and
+    completely unconnected -- a model with four parts and no equations, which will not even
+    build.
+
+    Two things keep this from becoming a fabrication engine. The tag list is supplied and
+    both endpoints must come from it, so the model can only relate things the evidence
+    already established; and the quote must be verbatim, so a connection nobody wrote down
+    cannot survive. Anything else it returns is dropped and counted.
+    """
+    if router is None or not tags:
+        return []
+    out: list[EvidenceClaim] = []
+    dropped = 0
+    #: Pairs already claimed, in either order. An acausal connection has no direction, so
+    #: A->B and B->A are one wire; emitting both declares the same junction twice.
+    joined: set[frozenset[str]] = set()
+    listing = "\n".join(f"- {t}" for t in sorted(tags.values()))
+
+    for chunk, locator in doc.chunks(kinds=_PROSE_KINDS):
+        try:
+            resp = router.run(
+                "extract_claim",
+                TOPOLOGY_PROMPT.format(tags=listing, chunk=chunk),
+                schema=TOPOLOGY_SCHEMA,
+            )
+        except LLMError as exc:
+            doc.warnings.append(f"topology extraction failed for a chunk: {exc}")
+            continue
+
+        for item in (resp.data or {}).get("connections", []) or []:
+            src = tags.get(_norm_tag(str(item.get("from", ""))))
+            dst = tags.get(_norm_tag(str(item.get("to", ""))))
+            quote = str(item.get("quote", ""))
+            if not src or not dst or src == dst or not _quote_ok(quote, chunk):
+                dropped += 1
+                continue
+            if frozenset((src, dst)) in joined:
+                continue
+            joined.add(frozenset((src, dst)))
+            subject = f"LNK-{src}-{dst}"
+            for predicate, value in (("from", src), ("to", dst),
+                                     ("medium", str(item.get("medium", "") or "") or None)):
+                if value is None:
+                    continue
+                out.append(
+                    EvidenceClaim(
+                        id=f"CLM-{next(iter(seq)):05d}",
+                        source_id=doc.source.id,
+                        locator=locator,
+                        kind="connection",
+                        subject=subject,
+                        predicate=predicate,
+                        value=value,
+                        quote=quote[:300],
+                        confidence=_TEXT_CONFIDENCE,
+                        extracted_by=resp.tier,
+                    )
+                )
+    if dropped:
+        doc.warnings.append(
+            f"dropped {dropped} connection(s) that used an unknown tag or an unquotable claim"
+        )
+    return out
+
+
+def _norm_tag(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+#: Tag-shaped, or a short all-caps mark. Mirrors reconcile.entities.looks_like_mark; kept
+#: local so the extractor does not import the reconciler.
+_MARK_RE = re.compile(r"(?:[A-Z]{1,4}[-_]?\d{1,4}[A-Z]?|[A-Z]{2,5})")
+
+
+def _looks_like_mark(s: str) -> bool:
+    return bool(_MARK_RE.fullmatch(str(s).strip()))

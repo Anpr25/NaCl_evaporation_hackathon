@@ -1,10 +1,88 @@
-# TODO(D): drop the organisers' HVAC / heat-exchanger packet into sources/ and fill this in.
-# Closest neighbour to the NaCl case: exercises the same fluid + thermal path, so it mostly
-# tests that nothing was hard-coded to NaCl vocabulary.
+# The second generality proof, and the harder one.
+#
+# The drivetrain packet shares no physics with NaCl, which makes it a clean test of the
+# binding path but a soft test of everything else: no controller, no sequence, no interlock,
+# no unit conversion. This packet shares the *physics family* with NaCl -- thermal -- and
+# almost nothing else. It is deliberately the case where a NaCl-shaped extractor would look
+# like it was working right up until the numbers came out wrong.
+#
+# What is different on purpose:
+#   - HVAC vocabulary throughout: zone, envelope, preheat coil, deadband, transmitter. No
+#     vessel, no level, no batch, no valve group, no series path.
+#   - Tag conventions from building services, not process: ZN-1, EF-1, HC-1, TT-2101,
+#     TC-2101. Instrument tags carry no binding, as usual.
+#   - Temperatures in degC everywhere, capacity in kJ/K, duty in kW. Nothing is in SI as
+#     written; every number needs converting.
+#   - Two-position control with a deadband, not a step sequence. The controller has two
+#     states and re-enters one of them, so the FSM lowering has to handle a cycle rather
+#     than a line.
+#   - An on/off command driving a *Real* heat-flow input. In the NaCl packet the equivalent
+#     command drove a Boolean input on one of our own templates; here it has to drive an
+#     MSL class that wants watts.
+#
+# Traps, one of each class the brief names (6.2):
+#   - contradictory: envelope conductance is 450 W/K in two documents and 500 W/K in an
+#     approved field change notice that says it governs
+#   - ambiguous: the same coil is "preheat coil", "HC-1" and "PHC" in three documents
+#   - incomplete: the zone's initial temperature is never given a number anywhere
+#   - implicit: nothing enumerates the envelope's two ports; it is only ever described as
+#     connecting the zone to outdoor air
+#   - custom: a commissioning sheet that states criteria in prose against instrument tags
+
 name: hvac_heat_exchanger
 domain: thermal + fluid
 packet: sources
+
 package: GeneratedPlant
+stop_time: 3600
+
 expect:
   compiles: true
   simulates: true
+  acceptance_min: 7
+  acceptance_total: 7
+  known_failures: []
+  # Everything here exists in the Modelica Standard Library. Any L1 or L2 binding means we
+  # failed to find something we should have found, not that the packet was exotic.
+  binding_tiers: {L0: 4, L1: 0, L2: 0, unbound: 0}
+
+traps:
+  - id: H1
+    fact: >
+      EF-1 conductance is 500 W/K per approved FCN-31, not the 450 W/K carried in the Rev A
+      design basis and the equipment schedule. Two documents against one; the one wins,
+      because it is a change record that states it governs. Same shape as the NaCl CR-017
+      trap and the drivetrain CR-114 trap, third vocabulary.
+  - id: H2
+    fact: >
+      "preheat coil", "HC-1" and "PHC" are one coil. The controls narrative says so
+      explicitly in a cross-reference table; an extractor that keys on the mark alone will
+      make three components or lose the acceptance criteria that use the third name.
+  - id: H3
+    fact: >
+      The zone's starting temperature is never stated. The commissioning sheet says the zone
+      "is at the same temperature as outdoor air at the start of the test" and then admits
+      the value is not logged. That is a stated relationship without a number: the honest
+      reading is to take it from the outdoor air boundary and declare it, not to accept a
+      library default silently.
+
+physics:
+  note: >
+    First-order, so every acceptance time is analytic rather than fitted. With the governing
+    values -- C = 300 kJ/K, G = 500 W/K (FCN-31), Q = 12 kW, outdoor 2 degC:
+
+      time constant      tau   = C / G       = 300000 / 500      = 600 s
+      heating asymptote  Tinf  = Toa + Q/G   = 275.15 + 24       = 299.15 K  (26.0 degC)
+      from a 2 degC start, T(t) = Tinf - 24 * exp(-t / 600)
+
+      reaches 20.5 degC (293.65 K) at 600 * ln(24 / 5.5)  =  884 s
+      reaches 21.5 degC (294.65 K) at 600 * ln(24 / 4.5)  = 1004 s
+
+    After cut-out the zone cools toward 2 degC with the same time constant and re-enables
+    31.6 s later, so it cycles on roughly a 150 s period for the rest of the hour and every
+    end-of-test criterion is satisfied inside the deadband.
+
+    If the 450 W/K value wins instead of 500, tau becomes 667 s and the asymptote 28.7 degC:
+    the zone still passes every criterion but reaches the deadband ~90 s earlier. The trap
+    therefore does not change pass/fail, only timing -- deliberately, so that H1 is caught
+    by the traceability record rather than by a lucky red check.

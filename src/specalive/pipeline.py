@@ -91,7 +91,23 @@ class PipelineResult:
 
     @property
     def ok(self) -> bool:
-        return bool(self.gate.get("compiled")) and bool(self.gate.get("simulated"))
+        """The hard gate: a model that compiles AND runs AND is actually a model.
+
+        The emptiness test is not pedantry. On the first HVAC run extraction found no
+        components at all, the emitter wrote a package containing nothing, omc compiled and
+        simulated it without complaint, and the pipeline printed HARD GATE MET. An empty
+        model always passes; treating that as success is the most flattering lie this tool
+        could tell, and it would have told it on an unseen packet in front of judges.
+        """
+        return (
+            bool(self.gate.get("compiled"))
+            and bool(self.gate.get("simulated"))
+            and self.simulatable_count > 0
+        )
+
+    @property
+    def simulatable_count(self) -> int:
+        return len(self.model.simulatable_blocks()) if self.model else 0
 
 
 class Pipeline:
@@ -304,6 +320,7 @@ class Pipeline:
             prefix=cfg.package_name.lower(),
         )
         self.result.gate["simulated"] = sim.ok
+        self.result.gate["blocks"] = self.result.simulatable_count
         if sim.result_file:
             dest = cfg.out_dir / "results.csv"
             shutil.copyfile(sim.result_file, dest)

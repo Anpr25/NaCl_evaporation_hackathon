@@ -135,6 +135,60 @@ class CatalogIndex:
             if scores[i] > 0
         ]
 
+    def search_by_units(
+        self,
+        units: set[str],
+        *,
+        names: set[str] | None = None,
+        k: int = 12,
+        domain: str | None = None,
+        restriction: tuple[str, ...] | str | None = ("model", "block"),
+    ) -> list[Hit]:
+        """Rank classes by the units of the parameters they declare, ignoring words entirely.
+
+        Lexical search assumes the packet and the library share vocabulary. Often they do
+        not: "envelope fabric", "preheat coil" and "outdoor air" return literally nothing
+        from the Modelica Standard Library, because no MSL class is named in the language of
+        building services. Their *units* are unambiguous in any language -- W/K is a thermal
+        conductance whether it is called an envelope, a wall or a lagging allowance -- so a
+        class declaring a W/K parameter is the right shape for a block that has one.
+
+        Scored as the fraction of the block's units the class accounts for, with a penalty
+        for parameters the class declares and the block cannot fill, so a three-parameter
+        class does not win on one coincidental match. `names` adds the block's own parameter
+        names as a tie-break: a bare `K` matches both FixedTemperature's `T` and
+        PrescribedHeatFlow's `T_ref`, and only the name says which one the block meant.
+        """
+        wanted = {u for u in units if u}
+        if not wanted:
+            return []
+        want_names = {n.lower() for n in (names or set()) if n}
+        allowed = (restriction,) if isinstance(restriction, str) else restriction
+        out: list[Hit] = []
+        for e in self.entries:
+            if allowed is not None and e.restriction not in allowed:
+                continue
+            if domain is not None and e.domain != domain and e.domain != "unknown":
+                continue
+            have = {p.unit for p in e.params if p.unit}
+            hit = wanted & have
+            if not hit:
+                continue
+            spare = len(have - wanted)
+            score = len(hit) / len(wanted) - 0.15 * spare
+            if want_names:
+                have_names = {p.name.lower() for p in e.params}
+                exact = want_names & have_names
+                partial = {
+                    n for n in want_names
+                    if n not in exact and any(h.split("_")[0] == n for h in have_names)
+                }
+                score += 0.30 * len(exact) / len(want_names)
+                score += 0.10 * len(partial) / len(want_names)
+            if score > 0:
+                out.append(Hit(entry=e, score=round(score, 4), why="units"))
+        return sorted(out, key=lambda h: h.score, reverse=True)[:k]
+
     def get(self, key: str) -> CatalogEntry | None:
         return next((e for e in self.entries if e.key == key), None)
 

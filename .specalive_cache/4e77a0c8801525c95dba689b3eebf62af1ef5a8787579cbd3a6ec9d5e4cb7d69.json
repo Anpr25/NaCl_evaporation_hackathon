@@ -1,0 +1,14 @@
+{
+  "text": "{\n  \"choice\": \"\",\n  \"confidence\": 0.0,\n  \"reason\": \"The component is a 'zone temperature controller' that enables HC-1, but none of the listed Modelica classes are controllers. All listed classes are sensors or boundary conditions, not controllers.\",\n  \"parameter_map\": {}\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 1002,
+  "completion_tokens": 66,
+  "latency_s": 10.66999626159668,
+  "data": {
+    "choice": "",
+    "confidence": 0.0,
+    "reason": "The component is a 'zone temperature controller' that enables HC-1, but none of the listed Modelica classes are controllers. All listed classes are sensors or boundary conditions, not controllers.",
+    "parameter_map": {}
+  }
+}

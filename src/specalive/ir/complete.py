@@ -64,7 +64,15 @@ def match_parameter(wanted: str, available: set[str]) -> str | None:
     for candidate in available:
         if _words(candidate) == target:
             return candidate
-    return None
+
+    # A schedule names the quantity; the class qualifies it. "Q" is the heat duty and
+    # `Q_flow` is what Modelica calls it, "T" is a temperature and `T_ref` is a specific one.
+    # Match on the leading stem, but only when exactly one candidate has it -- an ambiguous
+    # stem is worse than no match, because the value would land on the wrong parameter and
+    # the model would still build.
+    stem = "".join(target)
+    hits = [c for c in available if _words(c)[:1] and c.split("_")[0].lower() == stem]
+    return hits[0] if len(hits) == 1 else None
 
 
 

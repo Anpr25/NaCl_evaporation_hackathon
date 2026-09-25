@@ -1,0 +1,188 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"AHU-2\",\n      \"predicate\": \"serves\",\n      \"value\": \"ZN-1\",\n      \"quote\": \"This document covers the heating side of air handling unit AHU-2 serving zone ZN-1 only.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"AHU-2\",\n      \"predicate\": \"does not cover\",\n      \"value\": \"cooling\",\n      \"quote\": \"Cooling, humidification and the supply fan are outside this scope and are covered by document 4471-M-12 (not issued).\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"AHU-2\",\n      \"predicate\": \"does not cover\",\n      \"value\": \"humidification\",\n      \"quote\": \"Cooling, humidification and the supply fan are outside this scope and are covered by document 4471-M-12 (not issued).\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"AHU-2\",\n      \"predicate\": \"does not cover\",\n      \"value\": \"supply fan\",\n      \"quote\": \"Cooling, humidification and the supply fan are outside this scope and are covered by document 4471-M-12 (not issued).\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"document 4471-M-12\",\n      \"predicate\": \"is covered by\",\n      \"value\": \"this document\",\n      \"quote\": \"Cooling, humidification and the supply fan are outside this scope and are covered by document 4471-M-12 (not issued).\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"zone ZN-1\",\n      \"predicate\": \"is treated as\",\n      \"value\": \"a single well-mixed thermal mass\",\n      \"quote\": \"The zone is treated as a single well-mixed thermal mass.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"zone ZN-1\",\n      \"predicate\": \"loses heat through\",\n      \"value\": \"building envelope\",\n      \"quote\": \"Heat is lost through the building envelope to outdoor air.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"zone ZN-1\",\n      \"predicate\": \"receives heat from\",\n      \"value\": \"hot-water preheat coil\",\n      \"quote\": \"A hot-water preheat coil in the AHU-2 supply duct injects heat into the zone under thermostat control.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"AHU-2\",\n      \"predicate\": \"has\",\n      \"value\": \"preheat coil\",\n      \"quote\": \"A hot-water preheat coil in the AHU-2 supply duct injects heat into the zone under thermostat control.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"preheat coil\",\n      \"predicate\": \"is\",\n      \"value\": \"on/off\",\n      \"quote\": \"The preheat coil is sized at 12 kW. It is an on/off coil: when the controller enables it the coil delivers its full rated duty, and when it is disabled it delivers nothing.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"preheat coil\",\n      \"predicate\": \"has rated duty\",\n      \"value\": \"full\",\n      \"quote\": \"The preheat coil is sized at 12 kW. It is an on/off coil: when the controller enables it the coil delivers its full rated duty, and when it is disabled it delivers nothing.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"preheat coil\",\n      \"predicate\": \"delivers nothing\",\n      \"value\": \"when disabled\",\n      \"quote\": \"The preheat coil is sized at 12 kW. It is an on/off coil: when the controller enables it the coil delivers its full rated duty, and when it is disabled it delivers nothing.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"preheat coil\",\n      \"predicate\": \"is sized at\",\n      \"value\": \"12 kW\",\n      \"quote\": \"The preheat coil is sized at 12 kW.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"preheat coil\",\n      \"predicate\": \"has no face-and-bypass damper\",\n      \"value\": \"in Rev A\",\n      \"quote\": \"There is no face-and-bypass damper and no valve modulation in Rev A.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"preheat coil\",\n      \"predicate\": \"has no valve modulation\",\n      \"value\": \"in Rev A\",\n      \"quote\": \"There is no face-and-bypass damper and no valve modulation in Rev A.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"zone thermal mass\",\n      \"predicate\": \"includes\",\n      \"value\": \"furniture\",\n      \"quote\": \"The zone thermal mass includes furniture and the exposed slab soffit and is taken as 300 kJ/K.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"zone thermal mass\",\n      \"predicate\": \"includes\",\n      \"value\": \"exposed slab soffit\",\n      \"quote\": \"The zone thermal mass includes furniture and the exposed slab soffit and is taken as 300 kJ/K.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"zone thermal mass\",\n      \"predicate\": \"is taken as\",\n      \"value\": \"300 kJ/K\",\n      \"quote\": \"The zone thermal mass includes furniture and the exposed slab soffit and is taken as 300 kJ/K.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"outdoor design temperature\",\n      \"predicate\": \"is\",\n      \"value\": \"2 degC\",\n      \"quote\": \"Outdoor design temperature is 2 degC.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"zone design temperature\",\n      \"predicate\": \"is\",\n      \"value\": \"21 degC\",\n      \"quote\": \"Zone design temperature is 21 degC.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"envelope conductance\",\n      \"predicate\": \"is\",\n      \"value\": \"450 W/K\",\n      \"quote\": \"The envelope conductance is 450 W/K at design condition.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"supersession\",\n      \"subject\": \"this document\",\n      \"predicate\": \"supersedes\",\n      \"value\": \"superseded values\",\n      \"quote\": \"Superseded values may appear in later approved field change notices.\",\n      \"confidence\": 1.0\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 897,
+  "completion_tokens": 1708,
+  "latency_s": 66.28140234947205,
+  "data": {
+    "claims": [
+      {
+        "kind": "requirement",
+        "subject": "AHU-2",
+        "predicate": "serves",
+        "value": "ZN-1",
+        "quote": "This document covers the heating side of air handling unit AHU-2 serving zone ZN-1 only.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "AHU-2",
+        "predicate": "does not cover",
+        "value": "cooling",
+        "quote": "Cooling, humidification and the supply fan are outside this scope and are covered by document 4471-M-12 (not issued).",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "AHU-2",
+        "predicate": "does not cover",
+        "value": "humidification",
+        "quote": "Cooling, humidification and the supply fan are outside this scope and are covered by document 4471-M-12 (not issued).",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "AHU-2",
+        "predicate": "does not cover",
+        "value": "supply fan",
+        "quote": "Cooling, humidification and the supply fan are outside this scope and are covered by document 4471-M-12 (not issued).",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "document 4471-M-12",
+        "predicate": "is covered by",
+        "value": "this document",
+        "quote": "Cooling, humidification and the supply fan are outside this scope and are covered by document 4471-M-12 (not issued).",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "zone ZN-1",
+        "predicate": "is treated as",
+        "value": "a single well-mixed thermal mass",
+        "quote": "The zone is treated as a single well-mixed thermal mass.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "zone ZN-1",
+        "predicate": "loses heat through",
+        "value": "building envelope",
+        "quote": "Heat is lost through the building envelope to outdoor air.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "zone ZN-1",
+        "predicate": "receives heat from",
+        "value": "hot-water preheat coil",
+        "quote": "A hot-water preheat coil in the AHU-2 supply duct injects heat into the zone under thermostat control.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "AHU-2",
+        "predicate": "has",
+        "value": "preheat coil",
+        "quote": "A hot-water preheat coil in the AHU-2 supply duct injects heat into the zone under thermostat control.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "preheat coil",
+        "predicate": "is",
+        "value": "on/off",
+        "quote": "The preheat coil is sized at 12 kW. It is an on/off coil: when the controller enables it the coil delivers its full rated duty, and when it is disabled it delivers nothing.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "preheat coil",
+        "predicate": "has rated duty",
+        "value": "full",
+        "quote": "The preheat coil is sized at 12 kW. It is an on/off coil: when the controller enables it the coil delivers its full rated duty, and when it is disabled it delivers nothing.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "preheat coil",
+        "predicate": "delivers nothing",
+        "value": "when disabled",
+        "quote": "The preheat coil is sized at 12 kW. It is an on/off coil: when the controller enables it the coil delivers its full rated duty, and when it is disabled it delivers nothing.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "preheat coil",
+        "predicate": "is sized at",
+        "value": "12 kW",
+        "quote": "The preheat coil is sized at 12 kW.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "preheat coil",
+        "predicate": "has no face-and-bypass damper",
+        "value": "in Rev A",
+        "quote": "There is no face-and-bypass damper and no valve modulation in Rev A.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "preheat coil",
+        "predicate": "has no valve modulation",
+        "value": "in Rev A",
+        "quote": "There is no face-and-bypass damper and no valve modulation in Rev A.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "zone thermal mass",
+        "predicate": "includes",
+        "value": "furniture",
+        "quote": "The zone thermal mass includes furniture and the exposed slab soffit and is taken as 300 kJ/K.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "zone thermal mass",
+        "predicate": "includes",
+        "value": "exposed slab soffit",
+        "quote": "The zone thermal mass includes furniture and the exposed slab soffit and is taken as 300 kJ/K.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "zone thermal mass",
+        "predicate": "is taken as",
+        "value": "300 kJ/K",
+        "quote": "The zone thermal mass includes furniture and the exposed slab soffit and is taken as 300 kJ/K.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "outdoor design temperature",
+        "predicate": "is",
+        "value": "2 degC",
+        "quote": "Outdoor design temperature is 2 degC.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "zone design temperature",
+        "predicate": "is",
+        "value": "21 degC",
+        "quote": "Zone design temperature is 21 degC.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "requirement",
+        "subject": "envelope conductance",
+        "predicate": "is",
+        "value": "450 W/K",
+        "quote": "The envelope conductance is 450 W/K at design condition.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "supersession",
+        "subject": "this document",
+        "predicate": "supersedes",
+        "value": "superseded values",
+        "quote": "Superseded values may appear in later approved field change notices.",
+        "confidence": 1.0
+      }
+    ]
+  }
+}

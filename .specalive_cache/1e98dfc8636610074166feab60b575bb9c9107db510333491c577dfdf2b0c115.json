@@ -1,0 +1,52 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"supersession\",\n      \"subject\": \"4471-M-01 Rev A (design basis)\",\n      \"predicate\": \"superseded_by\",\n      \"value\": \"FCN-31\",\n      \"quote\": \"Supersedes: the envelope conductance stated in 4471-M- 01 Rev A (design basis) and in the equipment schedule.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"supersession\",\n      \"subject\": \"equipment schedule\",\n      \"predicate\": \"superseded_by\",\n      \"value\": \"FCN-31\",\n      \"quote\": \"Supersedes: the envelope conductance stated in 4471-M- 01 Rev A (design basis) and in the equipment schedule.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"envelope conductance\",\n      \"predicate\": \"value\",\n      \"value\": \"500 W/K\",\n      \"quote\": \"Measured lumped conductance for zone ZN-1 is 500 W/K\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"envelope conductance\",\n      \"predicate\": \"previous_value\",\n      \"value\": \"450 W/K\",\n      \"quote\": \"not the 450 W/K carried in Rev A and in the equipment schedule\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"heat loss calculations\",\n      \"predicate\": \"value\",\n      \"value\": \"500 W/K\",\n      \"quote\": \"All heat loss calculations and any dynamic models of ZN-1 shall use 500 W/K\",\n      \"confidence\": 0.95\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 699,
+  "completion_tokens": 423,
+  "latency_s": 20.989713191986084,
+  "data": {
+    "claims": [
+      {
+        "kind": "supersession",
+        "subject": "4471-M-01 Rev A (design basis)",
+        "predicate": "superseded_by",
+        "value": "FCN-31",
+        "quote": "Supersedes: the envelope conductance stated in 4471-M- 01 Rev A (design basis) and in the equipment schedule.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "supersession",
+        "subject": "equipment schedule",
+        "predicate": "superseded_by",
+        "value": "FCN-31",
+        "quote": "Supersedes: the envelope conductance stated in 4471-M- 01 Rev A (design basis) and in the equipment schedule.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "envelope conductance",
+        "predicate": "value",
+        "value": "500 W/K",
+        "quote": "Measured lumped conductance for zone ZN-1 is 500 W/K",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "envelope conductance",
+        "predicate": "previous_value",
+        "value": "450 W/K",
+        "quote": "not the 450 W/K carried in Rev A and in the equipment schedule",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "heat loss calculations",
+        "predicate": "value",
+        "value": "500 W/K",
+        "quote": "All heat loss calculations and any dynamic models of ZN-1 shall use 500 W/K",
+        "confidence": 0.95
+      }
+    ]
+  }
+}

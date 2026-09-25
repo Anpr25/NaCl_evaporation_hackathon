@@ -1,0 +1,132 @@
+{
+  "text": "{\"claims\":[{\"kind\":\"note\",\"subject\":\"AHU-2 / ZN-1 \u2014 Zone Heating Design Basis\",\"predicate\":\"issue\",\"value\":\"Rev A\",\"unit\":null,\"quote\":\"Issue: Rev A, released.\"},{\"kind\":\"note\",\"subject\":\"AHU-2 / ZN-1 \u2014 Zone Heating Design Basis\",\"predicate\":\"discipline\",\"value\":\"Mechanical (HVAC)\",\"unit\":null,\"quote\":\"Discipline: Mechanical (HVAC).\"},{\"kind\":\"note\",\"subject\":\"AHU-2 / ZN-1 \u2014 Zone Heating Design Basis\",\"predicate\":\"project\",\"value\":\"4471 \\\"North Wing\\\"\",\"unit\":null,\"quote\":\"Project 4471 \\\"North Wing\\\".\"},{\"kind\":\"note\",\"subject\":\"AHU-2\",\"predicate\":\"scope\",\"value\":\"heating side serving zone ZN-1 only\",\"unit\":null,\"quote\":\"This document covers the heating side of air handling unit AHU-2 serving zone ZN-1 only.\"},{\"kind\":\"note\",\"subject\":\"Cooling, humidification and supply fan\",\"predicate\":\"outside scope\",\"value\":\"document 4471-M-12 (not issued)\",\"unit\":null,\"quote\":\"Cooling, humidification and the supply fan are outside this scope and are covered by document 4471-M-12 (not issued).\"},{\"kind\":\"note\",\"subject\":\"ZN-1\",\"predicate\":\"thermal model\",\"value\":\"single well-mixed thermal mass\",\"unit\":null,\"quote\":\"The zone is treated as a single well-mixed thermal mass.\"},{\"kind\":\"note\",\"subject\":\"building envelope\",\"predicate\":\"heat loss direction\",\"value\":\"outdoor air\",\"unit\":null,\"quote\":\"Heat is lost through the building envelope to outdoor air.\"},{\"kind\":\"component\",\"subject\":\"HC-1 (preheat coil)\",\"predicate\":\"function\",\"value\":\"injects heat into zone under thermostat control\",\"unit\":null,\"quote\":\"A hot-water preheat coil in the AHU-2 supply duct injects heat into the zone under thermostat control.\"},{\"kind\":\"parameter\",\"subject\":\"outdoor design temperature\",\"predicate\":\"value\",\"value\":2,\"unit\":\"degC\",\"quote\":\"Outdoor design temperature is 2 degC.\"},{\"kind\":\"parameter\",\"subject\":\"zone design temperature\",\"predicate\":\"value\",\"value\":21,\"unit\":\"degC\",\"quote\":\"Zone design temperature is 21 degC.\"},{\"kind\":\"parameter\",\"subject\":\"envelope conductance\",\"predicate\":\"value\",\"value\":450,\"unit\":\"W/K\",\"quote\":\"The envelope conductance is 450 W/K at design condition.\"},{\"kind\":\"parameter\",\"subject\":\"preheat coil\",\"predicate\":\"rated power\",\"value\":12,\"unit\":\"kW\",\"quote\":\"The preheat coil is sized at 12 kW.\"},{\"kind\":\"note\",\"subject\":\"preheat coil\",\"predicate\":\"operation mode\",\"value\":\"on/off\",\"unit\":null,\"quote\":\"It is an on/off coil: when the controller enables it the coil delivers its full rated duty, and when it is disabled it delivers nothing.\"},{\"kind\":\"note\",\"subject\":\"AHU-2\",\"predicate\":\"damper\",\"value\":\"none\",\"unit\":null,\"quote\":\"There is no face-and-bypass damper and no valve modulation in Rev A.\"},{\"kind\":\"parameter\",\"subject\":\"zone thermal mass\",\"predicate\":\"value\",\"value\":300,\"unit\":\"kJ/K\",\"quote\":\"The zone thermal mass includes furniture and the exposed slab soffit and is taken as 300 kJ/K.\"}]}",
+  "tier": "t3_cloud_reasoning",
+  "model": "openai/gpt-oss-120b",
+  "prompt_tokens": 924,
+  "completion_tokens": 1748,
+  "latency_s": 4.565008640289307,
+  "data": {
+    "claims": [
+      {
+        "kind": "note",
+        "subject": "AHU-2 / ZN-1 \u2014 Zone Heating Design Basis",
+        "predicate": "issue",
+        "value": "Rev A",
+        "unit": null,
+        "quote": "Issue: Rev A, released."
+      },
+      {
+        "kind": "note",
+        "subject": "AHU-2 / ZN-1 \u2014 Zone Heating Design Basis",
+        "predicate": "discipline",
+        "value": "Mechanical (HVAC)",
+        "unit": null,
+        "quote": "Discipline: Mechanical (HVAC)."
+      },
+      {
+        "kind": "note",
+        "subject": "AHU-2 / ZN-1 \u2014 Zone Heating Design Basis",
+        "predicate": "project",
+        "value": "4471 \"North Wing\"",
+        "unit": null,
+        "quote": "Project 4471 \"North Wing\"."
+      },
+      {
+        "kind": "note",
+        "subject": "AHU-2",
+        "predicate": "scope",
+        "value": "heating side serving zone ZN-1 only",
+        "unit": null,
+        "quote": "This document covers the heating side of air handling unit AHU-2 serving zone ZN-1 only."
+      },
+      {
+        "kind": "note",
+        "subject": "Cooling, humidification and supply fan",
+        "predicate": "outside scope",
+        "value": "document 4471-M-12 (not issued)",
+        "unit": null,
+        "quote": "Cooling, humidification and the supply fan are outside this scope and are covered by document 4471-M-12 (not issued)."
+      },
+      {
+        "kind": "note",
+        "subject": "ZN-1",
+        "predicate": "thermal model",
+        "value": "single well-mixed thermal mass",
+        "unit": null,
+        "quote": "The zone is treated as a single well-mixed thermal mass."
+      },
+      {
+        "kind": "note",
+        "subject": "building envelope",
+        "predicate": "heat loss direction",
+        "value": "outdoor air",
+        "unit": null,
+        "quote": "Heat is lost through the building envelope to outdoor air."
+      },
+      {
+        "kind": "component",
+        "subject": "HC-1 (preheat coil)",
+        "predicate": "function",
+        "value": "injects heat into zone under thermostat control",
+        "unit": null,
+        "quote": "A hot-water preheat coil in the AHU-2 supply duct injects heat into the zone under thermostat control."
+      },
+      {
+        "kind": "parameter",
+        "subject": "outdoor design temperature",
+        "predicate": "value",
+        "value": 2,
+        "unit": "degC",
+        "quote": "Outdoor design temperature is 2 degC."
+      },
+      {
+        "kind": "parameter",
+        "subject": "zone design temperature",
+        "predicate": "value",
+        "value": 21,
+        "unit": "degC",
+        "quote": "Zone design temperature is 21 degC."
+      },
+      {
+        "kind": "parameter",
+        "subject": "envelope conductance",
+        "predicate": "value",
+        "value": 450,
+        "unit": "W/K",
+        "quote": "The envelope conductance is 450 W/K at design condition."
+      },
+      {
+        "kind": "parameter",
+        "subject": "preheat coil",
+        "predicate": "rated power",
+        "value": 12,
+        "unit": "kW",
+        "quote": "The preheat coil is sized at 12 kW."
+      },
+      {
+        "kind": "note",
+        "subject": "preheat coil",
+        "predicate": "operation mode",
+        "value": "on/off",
+        "unit": null,
+        "quote": "It is an on/off coil: when the controller enables it the coil delivers its full rated duty, and when it is disabled it delivers nothing."
+      },
+      {
+        "kind": "note",
+        "subject": "AHU-2",
+        "predicate": "damper",
+        "value": "none",
+        "unit": null,
+        "quote": "There is no face-and-bypass damper and no valve modulation in Rev A."
+      },
+      {
+        "kind": "parameter",
+        "subject": "zone thermal mass",
+        "predicate": "value",
+        "value": 300,
+        "unit": "kJ/K",
+        "quote": "The zone thermal mass includes furniture and the exposed slab soffit and is taken as 300 kJ/K."
+      }
+    ]
+  }
+}
