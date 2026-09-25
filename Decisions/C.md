@@ -16,7 +16,111 @@ gracefully.
 
 ---
 
-## 2026-09-25 (latest) — C6 done: OPEN-ISSUE-04 closed with numbers. C's list is finished.
+## 2026-09-25 (latest) — a latent emitter bug that only fires on packets we had not run
+
+**Status: fixed and committed (`eeb38aa`).** Found on the TwoTankController packet, not on
+anything in `benchmarks/`. NaCl unchanged: 8/10, gate met. 140 fast tests, 9 slow.
+
+### The bug, and why it had been invisible
+
+`out/runs/0227b67712b0` failed to compile on exactly one error:
+
+```
+GeneratedPlant.mo:14  Error: Variable SRC_101.port_out not found in scope Plant
+```
+
+Three lines above, the emitter had written `// GAP: block 'SRC_101' has no binding` and
+skipped it — then connected it anyway.
+
+`_emit_plant` decided membership **twice, with two different predicates**:
+
+```python
+declarations   b.binding_tier == "unbound" or not b.modelica_class      -> skip
+connections    simulatable_blocks() = not physical_only
+                                      and abstracted_into is None       <- binding never consulted
+```
+
+`SRC_101` is `physical_only=False` and `unbound`, so it is out of the first set and in the
+second. Declaration skipped, connection emitted, dangling reference.
+
+**This was never NaCl-specific and it was never new.** Any block that fails to bind and is not
+marked `physical_only` produces a dangling `connect`. Both benches hid it because everything
+binds in them — which is the uncomfortable part: **the one condition that triggers it is
+imperfect binding, and imperfect binding is exactly what a judge's unseen packet gives us.**
+Our whole generality story rests on degrading gracefully when a component does not bind, and
+in that case we were emitting a model that could not compile.
+
+Fixed by giving the connection loop the set of blocks that actually got declared. A dropped
+connection now names *which* endpoint is missing and whether it is unbound or architecture-only
+— different facts, and a reviewer needs to tell them apart.
+
+### The second fix: stop the repair loop guessing at something no edit can fix
+
+With the emitter corrected the error becomes honest:
+
+```
+Too few equations, under-determined system. 15 equation(s) and 27 variable(s).
+```
+
+That is *true*: four components were never extracted, so the equations they would contribute
+do not exist. **No minimal diff conjures a missing boundary source.** A model asked to try will
+either fail or invent one — and the invented version compiles, which is strictly worse than
+failing.
+
+`_unrepairable_reason()` now checks before spending the call, and produces:
+
+```
+not repairable by editing: under-determined by 12 equation(s) because 4 block(s) never
+bound to a component: LT_101, LT_102, SRC_101, DRN_101. No edit to this file can supply
+them -- the gap is in extraction, not in the Modelica.
+```
+
+Deliberately narrow: only *under*-determined, and only when the file carries `// GAP: block`
+notes to point at. Over-determined is often a real over-specification `fix_unbalanced_system`
+can relax, and under-determined with no gaps is a genuine modelling bug worth an attempt.
+
+Note what this means for the quota: **this failure now needs zero model calls**, so the Groq
+budget is off its critical path entirely.
+
+### The third: "out of quota" was being reported as "unfixable"
+
+The failing run said `unrepaired after 1 iteration(s)` — which reads as a modelling failure.
+The real reason, `quota exhausted`, was buried in a step description nobody surfaces.
+`RepairOutcome.summary()` now separates three different facts: *not repairable by editing*,
+*repair unavailable*, and *unrepaired*.
+
+### ⚠ Affects you
+
+**D — I changed a number in `config/models.yaml`, sorry, it was wrong.** `t3_cloud_reasoning`
+had `tpm: 12000`; Groq's own `x-ratelimit-limit-tokens` header says **8000**, and it is
+per-account, so switching model buys nothing. We were admitting 50% more than the account
+allows and then discovering the ceiling by hitting it. Also measured: `rpd` is 1000 and the
+window is rolling over ~60 s, not daily.
+
+Worth knowing separately: **repair runs last, so it is the stage guaranteed to arrive broke.**
+Extraction and adjudication spend the minute's 8000 tokens first. A local tier would fix this
+properly; until then the deterministic and catalog fixers are what actually carry repair.
+
+**A and B — this packet is the case that matters, and it is yours.** `TK_101` and `TK_102`
+come out as `physical_only: True, kind: "external boundary"`, so **the two-tank benchmark has
+no tanks**: the generated plant is three valves connected to nothing, and their connections
+become `// not connected ... is architecture only`. Nothing in the emitter or the repair loop
+can fix that. The new message names the four unbound blocks, and `main=N/N` from C10 will show
+it as inert even once it compiles.
+
+**Everyone — `packet.json` on this run has `filename: None` for all 12 sources.** The report
+cannot attribute anything to a source file, so traceability is silently empty on non-NaCl
+packets. I have not touched it; flagging because it undermines a scored criterion.
+
+### What I would take from this
+
+Both benches passing told us nothing about this failure, because both bind cleanly. A bench
+packet where binding is *deliberately* incomplete would have caught it months earlier than a
+manual run did. Worth one, if anyone has the time.
+
+---
+
+## 2026-09-25 — C6 done: OPEN-ISSUE-04 closed with numbers. C's list is finished.
 
 **Status: implemented.** 105 fast tests, **9 slow** (gate + 7 new Tier-2 evidence tests), both
 benches green. `modelica/SpecAliveFluid.mo` is a new file; nothing existing changed.
