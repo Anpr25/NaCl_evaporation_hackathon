@@ -928,10 +928,16 @@ class ModelicaEmitter:
     def _emit_plant(self) -> None:
         self._w(1, f"model Plant \"{self.m.description or self.m.name}\"")
         placement = self._layout()
+        # Record what actually gets an instance. The connection loop below MUST use this set
+        # and not `simulatable_blocks()`: the two answer different questions, and treating
+        # them as interchangeable is what produced `connect(SRC_101.port_out, ...)` against a
+        # component the emitter had already skipped, and a model that could not compile.
+        declared: set[str] = set()
         for b in self.m.simulatable_blocks():
             if b.binding_tier == "unbound" or not b.modelica_class:
                 self._w(2, f"// GAP: block '{b.id}' ({b.kind}) has no binding; see report.")
                 continue
+            declared.add(b.id)
             assumed = b.modelica_modifiers.pop("__assumed__", None)
             mods = ", ".join(f"{k} = {v}" for k, v in sorted(b.modelica_modifiers.items()))
             if assumed is not None:
@@ -948,12 +954,19 @@ class ModelicaEmitter:
             self._w(2, f"{_mid(sm.name)} {_mid(sm.id)}{anno};")
         self._w(0)
         self._w(1, "equation")
-        simulated = {b.id for b in self.m.simulatable_blocks()}
         for c in self.m.connections:
             ends = {c.source.split(".")[0], c.target.split(".")[0]}
-            if not ends <= simulated:
-                # An architecture-only part (a boundary, a manual valve) has no instance here.
-                self._w(2, f"// architecture only: {c.id} ({c.source} -> {c.target}) is not simulated")
+            if not ends <= declared:
+                # Either endpoint may be missing for two quite different reasons, and the
+                # reader deserves to know which: an architecture-only part never had an
+                # instance, whereas an unbound one should have had and did not.
+                missing = sorted(ends - declared)
+                why = ", ".join(
+                    f"{m} is unbound" if self.m.block(m) and not self.m.block(m).physical_only
+                    else f"{m} is architecture only"
+                    for m in missing
+                )
+                self._w(2, f"// not connected: {c.id} ({c.source} -> {c.target}) -- {why}")
                 continue
             note = f"  // @series {', '.join(c.series_elements)}" if c.series_elements else ""
             line = self._line(c.source.split(".")[0], c.target.split(".")[0], placement)

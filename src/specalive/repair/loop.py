@@ -397,6 +397,46 @@ CATALOG_FIXERS: tuple[CatalogFixer, ...] = (
 )
 
 
+_GAP_BLOCK = re.compile(r"^\s*// GAP: block '([^']+)'", re.M)
+
+
+def _unrepairable_reason(src: str, diag: Diagnostic) -> str | None:
+    """Is this failure beyond any local edit? Return why, or None to carry on repairing.
+
+    One case so far, and it is the common one on a packet where extraction is incomplete:
+    an **under-determined** system whose missing equations are missing because components
+    were never bound. The emitter already says so, in as many words:
+
+        // GAP: block 'SRC_101' (Boundary source) has no binding; see report.
+
+    A repair loop cannot conjure the boundary source that would supply those equations, and a
+    model asked to try will either fail or invent a component -- the second being worse, since
+    it compiles. Naming the unbound blocks is the useful answer and costs nothing.
+
+    Deliberately narrow: only under-determined (too few equations), and only when there are
+    gaps to point at. An over-determined system is often a real over-specification that
+    `fix_unbalanced_system` can relax, and an under-determined one with no gaps is a genuine
+    modelling bug worth a repair attempt.
+    """
+    if diag.kind != "unbalanced_system":
+        return None
+    m = re.search(r"has (\d+) equation\(s\) and (\d+) variable\(s\)", diag.message + diag.raw)
+    if not m:
+        return None
+    eqs, vars_ = int(m.group(1)), int(m.group(2))
+    if eqs >= vars_:
+        return None
+    gaps = _GAP_BLOCK.findall(src)
+    if not gaps:
+        return None
+    shown = ", ".join(gaps[:6]) + (f" and {len(gaps) - 6} more" if len(gaps) > 6 else "")
+    return (
+        f"under-determined by {vars_ - eqs} equation(s) because {len(gaps)} block(s) "
+        f"never bound to a component: {shown}. No edit to this file can supply them -- "
+        f"the gap is in extraction, not in the Modelica."
+    )
+
+
 # ----------------------------------------------------------------------------- model repair
 
 REPAIR_SCHEMA: dict[str, Any] = {
@@ -489,12 +529,22 @@ class RepairOutcome:
     final: OmcResult | None = None
 
     def summary(self) -> str:
-        det = sum(1 for s in self.steps if s.method == "deterministic" and s.accepted)
+        det = sum(1 for s in self.steps if s.method in ("deterministic", "catalog") and s.accepted)
         llm = sum(1 for s in self.steps if s.method == "model" and s.accepted)
-        return (
-            f"{'repaired' if self.ok else 'unrepaired'} after {self.iterations} iteration(s): "
-            f"{det} deterministic fix(es), {llm} model-authored fix(es)"
-        )
+        if self.ok:
+            return (f"repaired after {self.iterations} iteration(s): "
+                    f"{det} deterministic fix(es), {llm} model-authored fix(es)")
+        # Three ways to not succeed, and they mean completely different things to whoever
+        # reads the report. Saying "unrepaired" for all of them hid a quota outage behind
+        # language that sounds like a modelling failure.
+        last = self.steps[-1] if self.steps else None
+        if last and last.method == "declared":
+            return f"not repairable by editing: {last.description}"
+        if last and "router failed" in (last.description or ""):
+            return (f"repair unavailable ({last.description.split(':', 1)[-1].strip()[:80]}); "
+                    f"{det} deterministic fix(es) applied first")
+        return (f"unrepaired after {self.iterations} iteration(s): "
+                f"{det} deterministic fix(es), {llm} model-authored fix(es)")
 
 
 class RepairLoop:
@@ -639,6 +689,15 @@ class RepairLoop:
                 continue
             if result is not None:
                 return result[0], "catalog", result[1]
+
+        # Before spending a model call, ask whether ANY local edit could fix this. Some
+        # failures are structural -- the model is under-determined because components were
+        # never extracted -- and no minimal diff brings a missing tank into existence. Calling
+        # a model there burns the minute's token budget to be told nothing, and the honest
+        # output is a declared gap naming what is absent.
+        reason = _unrepairable_reason(source, diag)
+        if reason:
+            return None, "declared", reason
 
         if self.router is None:
             return None, "deterministic", "no deterministic fixer matched and no router configured"

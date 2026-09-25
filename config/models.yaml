@@ -72,7 +72,7 @@ tiers:
     max_tokens: 8192
     timeout_s: 120
     good_at: [conflict_adjudication, equation_synthesis, repair_diff, topology_inference]
-    quota: {rpm: 30, tpm: 12000, rpd: 1000}
+    quota: {rpm: 30, tpm: 8000, rpd: 1000}   # measured from Groq x-ratelimit headers, not guessed
 
   # ---------------------------------------------------------------- T4
   t4_cloud_vision:
