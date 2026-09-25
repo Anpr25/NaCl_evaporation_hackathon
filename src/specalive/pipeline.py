@@ -270,8 +270,15 @@ class Pipeline:
             # transition guards reference but nothing declares.
             from .emit.sysml_read import SimulationProfile, read_sysml, to_system_model
 
-            parsed = read_sysml(sysml_path.read_text(encoding="utf-8"))
+            # Read the path from the artifact record, not from a local. The multi-pass build
+            # re-emits the SysML between passes, so the right file is whichever was written
+            # most recently -- and once the build loop moved into its own method, the local
+            # that used to hold it stopped being in scope here at all.
+            emitted = self.result.artifacts.get("SysML v2")
             try:
+                if not emitted:
+                    raise ValueError("no SysML has been emitted yet")
+                parsed = read_sysml(Path(emitted).read_text(encoding="utf-8"))
                 source = to_system_model(
                     parsed, SimulationProfile.from_ir(model), index=index, name=model.name
                 )
@@ -281,7 +288,7 @@ class Pipeline:
                     f"{len(parsed.interfaces)} interfaces, {len(parsed.transitions)} transitions",
                     from_sysml=True,
                 )
-            except ValueError as exc:
+            except (ValueError, OSError) as exc:
                 # A construct the reader does not know would silently drop an element, so
                 # fall back to the IR rather than emit a quietly incomplete model.
                 source = model
