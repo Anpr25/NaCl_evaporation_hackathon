@@ -38,6 +38,17 @@ from ..ir.system import Block, StateMachine, SystemModel
 
 IND = "  "
 
+#: The input members each SpecAlive causal connector expects an upstream part to supply, and
+#: the idealized value used when the part that should supply them is `physical_only` -- the
+#: same defaults `SpecAlive.Sources.FixedSupply`/`Drain` use, folded in-line at the connector
+#: instead of a separate instance. SpecAlive's connector vocabulary is closed and small (four
+#: classes, all declared in modelica/SpecAlive.mo), so naming them here is exhaustive, not a
+#: per-packet special case.
+_BOUNDARY_DEFAULTS: dict[str, dict[str, str]] = {
+    "SpecAlive.Interfaces.Suction": {"w": "0.0", "T": "293.15", "avail": "1.0"},
+    "SpecAlive.Interfaces.Inlet": {"m_flow": "0.0", "w": "0.0", "T": "293.15"},
+}
+
 
 # --------------------------------------------------------------------------------- binding
 
@@ -78,6 +89,16 @@ L1_TEMPLATES: dict[str, dict[str, Any]] = {
         "class": "SpecAlive.Transport.Junction",
         "keywords": ["junction", "manifold", "tee", "header", "node"],
         "params": ["nIn", "V"],
+    },
+    "fluid.source": {
+        "class": "SpecAlive.Sources.FixedSupply",
+        "keywords": ["boundary source", "ideal source", "fixed supply", "feed source", "makeup"],
+        "params": ["w", "T"],
+    },
+    "fluid.sink": {
+        "class": "SpecAlive.Sources.Drain",
+        "keywords": ["boundary sink", "ideal sink", "drain", "vent", "overflow"],
+        "params": ["nIn"],
     },
 }
 
@@ -178,15 +199,65 @@ L2_CRITIQUE_SCHEMA: dict[str, Any] = {
 }
 
 
+def _default_connector(p: Any) -> str:
+    """Fallback connector for an L2 port whose IR never named a real one.
+
+    Only sound for a scalar causal signal: `direction` picks which end of
+    `Modelica.Blocks.Interfaces` it is. A physical domain (fluid, thermal, ...) needs its own
+    two-way connector, which L2 cannot invent safely -- that case is expected to have been
+    caught earlier, by an L1 template (`fluid.source`/`fluid.sink`, etc.).
+    """
+    return "Modelica.Blocks.Interfaces.RealOutput" if p.direction == "out" else "Modelica.Blocks.Interfaces.RealInput"
+
+
 def _l2_variable(v: dict[str, Any]) -> str:
     start = f"(start = {v['start']})" if v.get("start") is not None else ""
     desc = str(v.get("description", ""))[:60].replace('"', "'")
     return f'  Real {v["name"]}{start} "{desc}";'
 
 
-def _render_l2_body(draft: dict[str, Any]) -> str:
+_L2_IDENT = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*")
+#: Modelica operators/functions an equation may call without declaring them as variables.
+_L2_BUILTINS = {
+    "der", "abs", "sqrt", "exp", "log", "log10", "sin", "cos", "tan", "asin", "acos", "atan",
+    "atan2", "sinh", "cosh", "tanh", "min", "max", "sign", "mod", "rem", "div", "floor", "ceil",
+    "noEvent", "smooth", "pre", "edge", "change", "reinit", "time", "if", "then", "else",
+    "elseif", "and", "or", "not", "true", "false", "sum", "product", "size", "ones", "zeros",
+}
+
+
+def _undeclared_l2_names(equations: list[str], declared: set[str]) -> list[str]:
+    """Names an equation uses that are neither a declared variable/port/parameter nor a builtin.
+
+    Catches the failure mode a schema check cannot: the draft is syntactically fine JSON, each
+    entry has an `=`, but one side names a variable the draft itself never declared -- `omc`
+    would reject it as an undeclared identifier, and that costs a full compile-repair cycle to
+    rediscover. Only the root before a `.` is checked, so `port_in.m_flow` is judged on
+    `port_in`, never on the connector's own member names.
+    """
+    used: set[str] = set()
+    for eq in equations:
+        for m in _L2_IDENT.finditer(eq):
+            used.add(m.group(0).split(".", 1)[0])
+    return sorted(n for n in used if n not in declared and n not in _L2_BUILTINS and not n[0].isdigit())
+
+
+def _usable_l2_variables(draft: dict[str, Any], port_names: set[str]) -> list[dict[str, Any]]:
+    """Drop anything the model redeclared under a name the skeleton already owns.
+
+    The prompt tells it not to redeclare a port or parameter, but a draft that does it anyway
+    would otherwise produce two declarations of the same identifier -- a compile error the
+    repair loop then has to spend an iteration rediscovering.
+    """
+    return [
+        v for v in (draft.get("variables") or [])
+        if isinstance(v, dict) and v.get("name") and v["name"] not in port_names
+    ]
+
+
+def _render_l2_body(draft: dict[str, Any], port_names: set[str] = frozenset()) -> str:
     """The draft as the critic sees it: variables and equations, nothing else."""
-    lines = [_l2_variable(v) for v in (draft.get("variables") or []) if isinstance(v, dict) and v.get("name")]
+    lines = [_l2_variable(v) for v in _usable_l2_variables(draft, port_names)]
     lines.append("equation")
     lines += [f"  {e.rstrip(';')};" for e in (draft.get("equations") or [])]
     return "\n".join(lines)
@@ -345,8 +416,10 @@ class Binder:
             return None
 
         name = f"Synth_{_mid(block.id)}"
+        port_names = {_port_name(p.name) for p in block.ports}
+        known_names = port_names | {_mid(p.name) for p in block.parameters}
         ports = "\n".join(
-            f"  {p.connector_type or 'Modelica.Blocks.Interfaces.RealInput'} {_port_name(p.name)}"
+            f"  {p.connector_type or _default_connector(p)} {_port_name(p.name)}"
             f' "{p.direction} {p.domain}";'
             for p in block.ports
         )
@@ -364,20 +437,21 @@ class Binder:
             f"parameters: {', '.join(_mid(p.name) for p in block.parameters) or '(none)'}"
         )
 
-        draft = self._l2_call(L2_PROMPT.format(spec=spec, ports=ports, params=params))
+        draft = self._l2_call(L2_PROMPT.format(spec=spec, ports=ports, params=params), known_names)
         if draft is None:
             return None
 
-        critique = self._l2_critique(spec, draft)
+        critique = self._l2_critique(spec, draft, port_names)
         if critique and critique.get("must_fix"):
             revised = self._l2_call(
                 L2_REVISE_PROMPT.format(
                     spec=spec,
                     ports=ports,
                     params=params,
-                    draft=_render_l2_body(draft),
+                    draft=_render_l2_body(draft, port_names),
                     faults="\n".join(f"  - {f}" for f in critique["must_fix"][:6]),
-                )
+                ),
+                known_names,
             )
             draft = revised or draft
 
@@ -386,8 +460,7 @@ class Binder:
             comment=(block.description or block.name).replace('"', "'")[:90],
             ports=ports,
             params=params,
-            variables="\n".join(_l2_variable(v) for v in (draft.get("variables") or [])
-                                if isinstance(v, dict) and v.get("name")),
+            variables="\n".join(_l2_variable(v) for v in _usable_l2_variables(draft, port_names)),
             equations="\n".join(f"  {e.rstrip(';')};" for e in (draft.get("equations") or [])),
         )
         why = (draft.get("explanation") or "")[:200]
@@ -395,7 +468,7 @@ class Binder:
             why = f"{why} [self-critique raised {len(critique['must_fix'])}, revised]"
         return BindingResult("L2", name, {}, why or "L2 synthesis", synthesised=body)
 
-    def _l2_call(self, prompt: str) -> dict[str, Any] | None:
+    def _l2_call(self, prompt: str, known_names: set[str] = frozenset()) -> dict[str, Any] | None:
         def validate(data: Any) -> tuple[bool, str]:
             eqs = (data or {}).get("equations") or []
             if not eqs:
@@ -403,6 +476,12 @@ class Binder:
             for e in eqs:
                 if not isinstance(e, str) or "=" not in e:
                     return False, f"not an equation: {str(e)[:60]!r}"
+            declared = known_names | {
+                v["name"] for v in (data.get("variables") or []) if isinstance(v, dict) and v.get("name")
+            }
+            missing = _undeclared_l2_names(eqs, declared)
+            if missing:
+                return False, f"used but never declared: {', '.join(missing[:6])}"
             return True, ""
 
         try:
@@ -411,12 +490,14 @@ class Binder:
             return None
         return resp.data or None
 
-    def _l2_critique(self, spec: str, draft: dict[str, Any]) -> dict[str, Any] | None:
+    def _l2_critique(
+        self, spec: str, draft: dict[str, Any], port_names: set[str] = frozenset()
+    ) -> dict[str, Any] | None:
         """Ask for the fault in the draft, against a fixed checklist. Never asks 'is this ok?'."""
         try:
             resp = self.router.run(
                 "equation_synthesis",
-                L2_CRITIQUE_PROMPT.format(spec=spec, draft=_render_l2_body(draft)),
+                L2_CRITIQUE_PROMPT.format(spec=spec, draft=_render_l2_body(draft, port_names)),
                 schema=L2_CRITIQUE_SCHEMA,
             )
         except Exception:
@@ -521,8 +602,21 @@ def resolve_ports(model: SystemModel, index: CatalogIndex | None) -> list[str]:
         dangling = [p for p in block.ports if p not in connected]
         for port in dangling:
             # Keep it in the IR (SysML should still show the port the register described)
-            # but give it no Modelica name, so nothing tries to emit a connection to it.
-            port.connector_type = None
+            # but give it no Modelica *name*, so nothing tries to emit a connection to it.
+            # Its connector class is still worth recording: when the neighbour that should
+            # have wired it turns out to be architecture-only, the emitter idealizes this
+            # dangling end as a boundary, and needs the real type to know which members to
+            # set. Approximated by the first connector on the matching side -- SpecAlive's
+            # own components never carry more than one per side, so there is no ambiguity
+            # in practice.
+            side = "signal" if port.domain in ("signal", "control") else (
+                "in" if port.direction == "in" else "out" if port.direction == "out" else "other"
+            )
+            pool = available.get(side) or available.get("other") or []
+            if not pool and side != "signal":
+                pool = available["in"] + available["out"] + available["other"]
+            connector = pool[0] if pool else None
+            port.connector_type = next((cp.type for cp in entry.ports if cp.name == connector), None)
         # Resolution must be idempotent. A hand-built or previously-resolved IR already
         # names real connectors, and re-deriving them by direction gets it wrong: an
         # evaporator has two out-side connectors and the first out-port was reassigned from
@@ -967,6 +1061,20 @@ class ModelicaEmitter:
                     for m in missing
                 )
                 self._w(2, f"// not connected: {c.id} ({c.source} -> {c.target}) -- {why}")
+                # A part the evidence never described as equipment is, by the extractor's own
+                # classification, "a supply/sink at the system boundary" -- so the surviving
+                # neighbour's dangling connector is idealized the same way an explicit
+                # FixedSupply/Drain would be, instead of being left short of an equation.
+                if len(missing) == 1 and self.m.block(missing[0]).physical_only:
+                    survivor = c.target if missing[0] == c.source.split(".")[0] else c.source
+                    port = self.m.port(survivor)
+                    defaults = _BOUNDARY_DEFAULTS.get(port.connector_type if port else None)
+                    if defaults:
+                        ref = self._ref(survivor)
+                        self._w(2, f"// GAP: {missing[0]} is architecture only; idealizing "
+                                   f"{ref} as a boundary (see the declared gaps in the report)")
+                        for member, value in defaults.items():
+                            self._w(2, f"{ref}.{member} = {value};")
                 continue
             note = f"  // @series {', '.join(c.series_elements)}" if c.series_elements else ""
             line = self._line(c.source.split(".")[0], c.target.split(".")[0], placement)

@@ -130,7 +130,7 @@ routes:
   catalog_retrieve:      [t0_deterministic, t1_local_embed]
   catalog_pick:          [t1_local_small, t3_cloud_reasoning]
   adjudicate_conflict:   [t3_cloud_reasoning, t2_local_mid]
-  synthesise_equations:  [t3_cloud_reasoning, t4_cloud_vision]
+  equation_synthesis:    [t3_cloud_reasoning, t4_cloud_vision]
   repair_modelica:       [t0_deterministic, t3_cloud_reasoning, t4_cloud_vision]
   write_prose:           [t1_local_small, t0_deterministic]
 

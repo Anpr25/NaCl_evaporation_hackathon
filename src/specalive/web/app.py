@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import traceback
 import uuid
 from pathlib import Path
 from typing import Any, Iterator
@@ -159,6 +160,7 @@ def stream_events(run_id: str) -> StreamingResponse:
                     default=str,
                 ) + "\n\n"
         except Exception as exc:  # a crash must reach the browser, not vanish into the log
+            traceback.print_exc()
             yield "data: " + json.dumps(
                 {"stage": "report", "status": "fail", "message": f"pipeline crashed: {exc!r}"}
             ) + "\n\n"
