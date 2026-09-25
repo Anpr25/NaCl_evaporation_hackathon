@@ -1,0 +1,152 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"domain_hint\",\n      \"subject\": \"P&ID\",\n      \"predicate\": \"domain\",\n      \"value\": \"process\",\n      \"quote\": \"B1\"\n    },\n    {\n      \"kind\": \"component\",\n      \"subject\": \"B1\",\n      \"predicate\": \"is_a\",\n      \"value\": \"vessel\",\n      \"quote\": \"B1\"\n    },\n    {\n      \"kind\": \"component\",\n      \"subject\": \"B2\",\n      \"predicate\": \"is_a\",\n      \"value\": \"vessel\",\n      \"quote\": \"B2\"\n    },\n    {\n      \"kind\": \"component\",\n      \"subject\": \"B3\",\n      \"predicate\": \"is_a\",\n      \"value\": \"vessel\",\n      \"quote\": \"B3\"\n    },\n    {\n      \"kind\": \"component\",\n      \"subject\": \"B4\",\n      \"predicate\": \"is_a\",\n      \"value\": \"vessel\",\n      \"quote\": \"B4\"\n    },\n    {\n      \"kind\": \"component\",\n      \"subject\": \"B5\",\n      \"predicate\": \"is_a\",\n      \"value\": \"vessel\",\n      \"quote\": \"B5\"\n    },\n    {\n      \"kind\": \"component\",\n      \"subject\": \"B6\",\n      \"predicate\": \"is_a\",\n      \"value\": \"vessel\",\n      \"quote\": \"B6\"\n    },\n    {\n      \"kind\": \"component\",\n      \"subject\": \"B7\",\n      \"predicate\": \"is_a\",\n      \"value\": \"vessel\",\n      \"quote\": \"B7\"\n    },\n    {\n      \"kind\": \"component\",\n      \"subject\": \"K1\",\n      \"predicate\": \"is_a\",\n      \"value\": \"heat_exchanger\",\n      \"quote\": \"K1\"\n    },\n    {\n      \"kind\": \"component\",\n      \"subject\": \"P1\",\n      \"predicate\": \"is_a\",\n      \"value\": \"pump\",\n      \"quote\": \"P1\"\n    },\n    {\n      \"kind\": \"component\",\n      \"subject\": \"P2\",\n      \"predicate\": \"is_a\",\n      \"value\": \"pump\",\n      \"quote\": \"P2\"\n    },\n    {\n      \"kind\": \"connection\",\n      \"subject\": \"B1\",\n      \"predicate\": \"connects_to\",\n      \"value\": \"V8\",\n      \"quote\": \"B1\"\n    },\n    {\n      \"kind\": \"connection\",\n      \"subject\": \"V8\",\n      \"predicate\": \"connects_to\",\n      \"value\": \"B3\",\n      \"quote\": \"V8\"\n    },\n    {\n      \"kind\": \"connection\",\n      \"subject\": \"B2\",\n      \"predicate\": \"connects_to\",\n      \"value\": \"V9\",\n      \"quote\": \"B2\"\n    },\n    {\n      \"kind\": \"connection\",\n      \"subject\": \"V9\",\n      \"predicate\": \"connects_to\",\n      \"value\": \"B3\",\n      \"quote\": \"V9\"\n    },\n    {\n      \"kind\": \"connection\",\n      \"subject\": \"B4\",\n      \"predicate\": \"connects_to\",\n      \"value\": \"V12\",\n      \"quote\": \"B4\"\n    },\n    {\n      \"kind\": \"connection\",\n      \"subject\": \"V12\",\n      \"predicate\": \"connects_to\",\n      \"value\": \"B5\",\n      \"quote\": \"V12\"\n    },\n    {\n      \"kind\": \"connection\",\n      \"subject\": \"B5\",\n      \"predicate\": \"connects_to\",\n      \"value\": \"K1\",\n      \"quote\": \"B5\"\n    },\n    {\n      \"kind\": \"connection\",\n      \"subject\": \"K1\",\n      \"predicate\": \"connects_to\",\n      \"value\": \"B6\",\n      \"quote\": \"K1\"\n    },\n    {\n      \"kind\": \"connection\",\n      \"subject\": \"V15\",\n      \"predicate\": \"connects_to\",\n      \"value\": \"B7\",\n      \"quote\": \"V15\"\n    }\n  ]\n}",
+  "tier": "t4_cloud_vision",
+  "model": "gemini-3.5-flash",
+  "prompt_tokens": 1255,
+  "completion_tokens": 1046,
+  "latency_s": 34.09540557861328,
+  "data": {
+    "claims": [
+      {
+        "kind": "domain_hint",
+        "subject": "P&ID",
+        "predicate": "domain",
+        "value": "process",
+        "quote": "B1"
+      },
+      {
+        "kind": "component",
+        "subject": "B1",
+        "predicate": "is_a",
+        "value": "vessel",
+        "quote": "B1"
+      },
+      {
+        "kind": "component",
+        "subject": "B2",
+        "predicate": "is_a",
+        "value": "vessel",
+        "quote": "B2"
+      },
+      {
+        "kind": "component",
+        "subject": "B3",
+        "predicate": "is_a",
+        "value": "vessel",
+        "quote": "B3"
+      },
+      {
+        "kind": "component",
+        "subject": "B4",
+        "predicate": "is_a",
+        "value": "vessel",
+        "quote": "B4"
+      },
+      {
+        "kind": "component",
+        "subject": "B5",
+        "predicate": "is_a",
+        "value": "vessel",
+        "quote": "B5"
+      },
+      {
+        "kind": "component",
+        "subject": "B6",
+        "predicate": "is_a",
+        "value": "vessel",
+        "quote": "B6"
+      },
+      {
+        "kind": "component",
+        "subject": "B7",
+        "predicate": "is_a",
+        "value": "vessel",
+        "quote": "B7"
+      },
+      {
+        "kind": "component",
+        "subject": "K1",
+        "predicate": "is_a",
+        "value": "heat_exchanger",
+        "quote": "K1"
+      },
+      {
+        "kind": "component",
+        "subject": "P1",
+        "predicate": "is_a",
+        "value": "pump",
+        "quote": "P1"
+      },
+      {
+        "kind": "component",
+        "subject": "P2",
+        "predicate": "is_a",
+        "value": "pump",
+        "quote": "P2"
+      },
+      {
+        "kind": "connection",
+        "subject": "B1",
+        "predicate": "connects_to",
+        "value": "V8",
+        "quote": "B1"
+      },
+      {
+        "kind": "connection",
+        "subject": "V8",
+        "predicate": "connects_to",
+        "value": "B3",
+        "quote": "V8"
+      },
+      {
+        "kind": "connection",
+        "subject": "B2",
+        "predicate": "connects_to",
+        "value": "V9",
+        "quote": "B2"
+      },
+      {
+        "kind": "connection",
+        "subject": "V9",
+        "predicate": "connects_to",
+        "value": "B3",
+        "quote": "V9"
+      },
+      {
+        "kind": "connection",
+        "subject": "B4",
+        "predicate": "connects_to",
+        "value": "V12",
+        "quote": "B4"
+      },
+      {
+        "kind": "connection",
+        "subject": "V12",
+        "predicate": "connects_to",
+        "value": "B5",
+        "quote": "V12"
+      },
+      {
+        "kind": "connection",
+        "subject": "B5",
+        "predicate": "connects_to",
+        "value": "K1",
+        "quote": "B5"
+      },
+      {
+        "kind": "connection",
+        "subject": "K1",
+        "predicate": "connects_to",
+        "value": "B6",
+        "quote": "K1"
+      },
+      {
+        "kind": "connection",
+        "subject": "V15",
+        "predicate": "connects_to",
+        "value": "B7",
+        "quote": "V15"
+      }
+    ]
+  }
+}

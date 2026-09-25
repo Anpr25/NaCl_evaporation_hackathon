@@ -25,9 +25,14 @@ from .emit.sysml import emit_sysml, round_trip_check
 from .ingest.registry import load_packet, packet_summary
 from .ir.system import SystemModel
 from .ir.validate import validate
+from .ir.assumptions import AssumptionLog
+from .ir.fallback import apply_declared_fallbacks
 from .repair.loop import RepairLoop
+from .repair.structural import plan_structural_repair
+from .repair.writeback import apply_ir_edits
 from .verify.acceptance import Scorecard, score
-from .verify.omc import OmcRunner, describe_environment
+from .verify.diagnose import Diagnosis, diagnose, record
+from .verify.omc import OmcRunner, describe_environment, liveness, read_result
 from .verify.report import build_report
 
 Stage = Literal[
@@ -66,6 +71,19 @@ class PipelineConfig:
     stop_time: float | None = None
     repair_iterations: int = 6
     skip_simulation: bool = False
+    #: C-08. Re-read the SysML we just emitted and build the Modelica from *that*, so the
+    #: derivation the briefing's top band asks for is the actual code path rather than an
+    #: argument about a shared source. Off by default until the bench is green on it:
+    #: standing rule 6, the gate is sacred.
+    from_sysml: bool = False
+
+
+#: A pass is only repeated when it added a declared fallback, and each blocked transition is
+#: backed up at most once, so this terminates on its own. It needs room to run because
+#: fallbacks are applied one step per region per pass -- fixing a cascade in one go measures
+#: downstream steps against a trace where their predecessor was still deadlocked. The cap is
+#: here so a bug cannot turn that into an unbounded loop of omc invocations.
+MAX_BUILD_PASSES = 6
 
 
 @dataclass
@@ -75,6 +93,8 @@ class PipelineResult:
     artifacts: dict[str, str] = field(default_factory=dict)
     gate: dict[str, Any] = field(default_factory=dict)
     scorecard: Scorecard | None = None
+    #: Why each red check is red. Populated after scoring; read by the report.
+    diagnoses: list[Diagnosis] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -84,13 +104,23 @@ class PipelineResult:
 class Pipeline:
     def __init__(self, cfg: PipelineConfig, router: Any | None = None) -> None:
         self.cfg = cfg
+        #: Check ids whose contradiction an earlier pass already proved, so a later pass does
+        #: not re-diagnose them from a trace that no longer shows it.
+        self._contradicted: set[str] = set()
+        #: Catalog fixes already folded into the IR, so a pass cannot re-apply one and
+        #: retry forever on a correction that has already landed.
+        self._written_back: set[str] = set()
+        self._pass = 1
         self.router = router
         self.result = PipelineResult()
         cfg.out_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ event plumbing
     def _emit(self, stage: Stage, status: str, message: str = "", **data: Any) -> PipelineEvent:
+        # Stamp wall-clock elapsed on every event. The UI needs it to show a stage actually
+        # taking time rather than a list that redraws instantly and looks fake.
         ev = PipelineEvent(stage, status, message, data)  # type: ignore[arg-type]
+        ev.elapsed_s = round(time.time() - getattr(self, "_t0", time.time()), 2)
         self.result.events.append(ev)
         return ev
 
@@ -103,7 +133,7 @@ class Pipeline:
     # ------------------------------------------------------------------ the pipeline
     def stream(self) -> Iterator[PipelineEvent]:
         cfg = self.cfg
-        t0 = time.time()
+        t0 = self._t0 = time.time()
 
         # ---------------------------------------------------------- 1. ingest
         yield self._emit("ingest", "start", f"reading {cfg.packet}")
@@ -176,17 +206,76 @@ class Pipeline:
             yield self._emit("sysml", "skip", "blocked by validation errors")
             return
 
-        # ---------------------------------------------------------- 5. SysML
-        yield self._emit("sysml", "start", "emitting SysML v2")
-        sysml_path = emit_sysml(model, cfg.out_dir / f"{model.name}.sysml")
-        losses = round_trip_check(model, sysml_path.read_text(encoding="utf-8"))
-        self.result.artifacts["SysML v2"] = str(sysml_path)
+        # ---------------------------------------------------------- 5-9. build and verify
+        # SysML is emitted inside the pass, not here: see `_emit_sysml`.
+        #
+        # A pass repeats only when it learned something the IR did not already know: a guard
+        # proved unreachable (a declared fallback is added, SA-05) or a catalog-tier repair
+        # corrected a binding. Both are recorded so they cannot be re-derived, so this
+        # terminates on its own; MAX_BUILD_PASSES is there in case a bug says otherwise.
+        runner = OmcRunner(workdir=str(cfg.out_dir / "work"))
+        for attempt in range(1, MAX_BUILD_PASSES + 1):
+            self._pass = attempt
+            verdict = yield from self._build_and_verify(model, runner, t0)
+            if verdict != "retry":
+                break
+
+        yield from self._finish(t0, runner)
+
+    # ------------------------------------------------------------------ SysML
+    def _emit_sysml(self, model: SystemModel, note: str) -> Iterator[PipelineEvent]:
+        """Write the architecture artefact from the current IR.
+
+        Called at the top of every build pass rather than once per run, because the IR is no
+        longer fixed after validation: a declared fallback (SA-05) adds a transition, and a
+        catalog-tier repair corrects a binding. Both change what the plant *is*, so both have
+        to reach the SysML before the Modelica is derived from it -- otherwise the two
+        deliverables describe different plants and, under --from-sysml, the correction never
+        reaches the code at all.
+        """
+        yield self._emit("sysml", "start", note)
+        path = emit_sysml(model, self.cfg.out_dir / f"{model.name}.sysml")
+        losses = round_trip_check(model, path.read_text(encoding="utf-8"))
+        self.result.artifacts["SysML v2"] = str(path)
         yield self._emit(
-            "sysml",
-            "warn" if losses else "ok",
-            f"{sysml_path.name}" + (f", {len(losses)} element(s) lost in round-trip" if losses else
-                                    ", round-trip clean"),
+            "sysml", "warn" if losses else "ok",
+            f"{path.name}" + (f", {len(losses)} element(s) lost in round-trip" if losses
+                              else ", round-trip clean"),
             losses=losses,
+        )
+
+    @staticmethod
+    def _structural_diagnostic(outcome: Any) -> str:
+        """What to tell structural repair the compiler said.
+
+        Prefer the loop's own refusal, because it is the more informative sentence: it already
+        names the unbound blocks and the equation deficit. Fall back to the raw diagnostics
+        when the run failed some other way, so this stage still gets the real error rather
+        than a summary of why there isn't one.
+        """
+        last = outcome.steps[-1] if outcome.steps else None
+        if last is not None and last.method == "declared":
+            return last.description
+        if outcome.final is not None and outcome.final.diagnostics:
+            return "\n".join(d.raw for d in outcome.final.diagnostics[:3])
+        return "the model did not compile"
+
+    def _build_and_verify(
+        self, model: SystemModel, runner: OmcRunner, t0: float
+    ) -> Iterator[PipelineEvent]:
+        """Emit, compile, simulate, score -- the part of the run that can be worth repeating.
+
+        Returns "done", "halt" (nothing more can be learned this run) or "retry" (a declared
+        fallback was added and the model should be built again). The caller reports either
+        way: a run that halts still owes the reader a report saying why.
+        """
+        cfg = self.cfg
+
+        # ---------------------------------------------------------- 5. SysML
+        yield from self._emit_sysml(
+            model,
+            "emitting SysML v2" if self._pass == 1 else
+            f"pass {self._pass}: re-emitting SysML from the corrected IR",
         )
 
         # ---------------------------------------------------------- 6. Modelica
@@ -197,8 +286,40 @@ class Pipeline:
                 index = CatalogIndex.from_file(cfg.catalog)
             except Exception as exc:
                 yield self._emit("modelica", "warn", f"catalog unavailable: {exc}")
+        source = model
+        if cfg.from_sysml:
+            # C-08: everything below this line comes from the emitted SysML text, not the IR.
+            # `SimulationProfile` carries the handful of fields SysML does not express --
+            # scan period, solver settings, and (D-2, a defect) the global setpoints that
+            # transition guards reference but nothing declares.
+            from .emit.sysml_read import SimulationProfile, read_sysml, to_system_model
+
+            # Read the path from the artifact record, not from a local. The multi-pass build
+            # re-emits the SysML between passes, so the right file is whichever was written
+            # most recently -- and once the build loop moved into its own method, the local
+            # that used to hold it stopped being in scope here at all.
+            emitted = self.result.artifacts.get("SysML v2")
+            try:
+                if not emitted:
+                    raise ValueError("no SysML has been emitted yet")
+                parsed = read_sysml(Path(emitted).read_text(encoding="utf-8"))
+                source = to_system_model(
+                    parsed, SimulationProfile.from_ir(model), index=index, name=model.name
+                )
+                yield self._emit(
+                    "modelica", "ok",
+                    f"derived from SysML: {len(parsed.parts)} parts, "
+                    f"{len(parsed.interfaces)} interfaces, {len(parsed.transitions)} transitions",
+                    from_sysml=True,
+                )
+            except (ValueError, OSError) as exc:
+                # A construct the reader does not know would silently drop an element, so
+                # fall back to the IR rather than emit a quietly incomplete model.
+                source = model
+                yield self._emit("modelica", "warn", f"SysML path unusable, using IR: {exc}")
+
         mo_path, tiers = emit_modelica(
-            model, cfg.out_dir / f"{cfg.package_name}.mo",
+            source, cfg.out_dir / f"{cfg.package_name}.mo",
             index=index, router=self.router, package=cfg.package_name,
         )
         self.result.artifacts["Modelica"] = str(mo_path)
@@ -215,27 +336,106 @@ class Pipeline:
         )
         stop_time = cfg.stop_time or (scenario.stop_time if scenario else 1.0)
 
-        runner = OmcRunner(workdir=str(cfg.out_dir / "work"))
-        loop = RepairLoop(runner, self.router, max_iterations=cfg.repair_iterations)
+        # `index` is C-AI-2 / C5: without it the agent cannot ask the catalog for a verified
+        # class signature and the catalog-grounded fixers all no-op, silently.
+        loop = RepairLoop(runner, self.router, max_iterations=cfg.repair_iterations, index=index)
 
         yield self._emit("compile", "start", f"omc checkModel({model_name})")
-        outcome = loop.run(model_name, mo_path, list(cfg.library_files))
-        self._repair_steps = outcome.steps
+        # C-AI-1: the repair gate now includes build+simulate, not just checkModel. Without
+        # the stop time the loop exits the moment `check` is clean and a model that cannot
+        # actually run reaches the user unrepaired.
+        outcome = loop.run(
+            model_name, mo_path, list(cfg.library_files),
+            stop_time=None if cfg.skip_simulation else stop_time,
+        )
+        # Accumulate across passes. A successful write-back means the NEXT pass needs no
+        # repair at all, so keeping only the last pass's steps would report "0 fixes" for a
+        # run whose model only compiles because of them.
+        self._repair_steps = getattr(self, "_repair_steps", []) + outcome.steps
         self.result.gate["compiled"] = outcome.ok
         self.result.gate["repair"] = outcome.summary()
         yield self._emit(
             "compile", "ok" if outcome.ok else "fail", outcome.summary(),
             steps=[s.__dict__ for s in outcome.steps],
         )
+
+        # A catalog-tier fix corrected a binding decision, and binding decisions belong to
+        # the IR. Patching only the .mo made the repair last exactly until the next emission
+        # and left the SysML describing the uncorrected plant. Fold it upstream, then rebuild
+        # from there -- which is also the only way the fix reaches the code under
+        # --from-sysml, since that path reads the SysML and never sees our .mo edits.
+        fresh = [e for e in outcome.ir_edits if str(e) not in self._written_back]
+        if fresh:
+            landed = apply_ir_edits(model, fresh)
+            self._written_back.update(str(e) for e in fresh)
+            if landed:
+                yield self._emit(
+                    "compile", "warn",
+                    f"{len(landed)} catalog fix(es) written back to the IR "
+                    f"({'; '.join(landed)}); re-deriving SysML and Modelica from the "
+                    f"corrected model",
+                    writeback=landed,
+                )
+                return "retry"
+            # Nothing matched an IR element -- the .mo is still fixed, so this is a
+            # traceability gap, not a failure. Say so rather than retrying for no reason.
+            yield self._emit(
+                "compile", "warn",
+                f"{len(fresh)} catalog fix(es) could not be traced back to an IR element; "
+                f"the Modelica is repaired but the SysML will not show the correction",
+            )
+
+        # The repair loop can only edit the file the compiler pointed at. When it reports that
+        # no edit could have worked -- a block never bound, so the equations it owes simply do
+        # not exist -- the defect is in the IR, and refusing to act on it would leave the .mo,
+        # the SysML and the IR all describing a plant that cannot run. Correct the IR instead
+        # and rebuild from it; under --from-sysml that is the only path by which the fix
+        # reaches the code at all.
         if not outcome.ok:
+            plan = plan_structural_repair(
+                model,
+                self._structural_diagnostic(outcome),
+                index=index,
+                router=self.router,
+            )
+            # A gap declared on an earlier pass goes stale the moment that block binds, and a
+            # stale blocking gap in the report is worse than none: it describes a defect the
+            # run went on to fix. Re-derive them rather than accumulate.
+            bound_now = {b.id for b in model.blocks if b.modelica_class}
+            model.gaps = [
+                g for g in model.gaps
+                if not (g.id.startswith("GAP-STRUCT-") and g.subject in bound_now)
+            ]
+            for gap in plan.gaps:
+                if not any(g.id == gap.id for g in model.gaps):
+                    model.gaps.append(gap)
+            fresh_s = [e for e in plan.edits if str(e) not in self._written_back]
+            if fresh_s:
+                landed_s = apply_ir_edits(model, fresh_s)
+                self._written_back.update(str(e) for e in fresh_s)
+                if landed_s:
+                    yield self._emit(
+                        "compile", "warn",
+                        f"structural repair ({plan.method}) corrected the IR: "
+                        f"{'; '.join(landed_s)}; re-deriving SysML and Modelica from the "
+                        f"corrected model",
+                        writeback=landed_s,
+                        structural=plan.notes,
+                    )
+                    return "retry"
+            if plan.notes:
+                yield self._emit(
+                    "compile", "warn",
+                    "structural repair found nothing it could correct: " + "; ".join(plan.notes[:3]),
+                    structural=plan.notes,
+                )
+
             yield self._emit("simulate", "skip", "model does not compile")
-            yield from self._finish(t0, runner)
-            return
+            return "halt"
 
         if cfg.skip_simulation:
             yield self._emit("simulate", "skip", "--no-sim requested")
-            yield from self._finish(t0, runner)
-            return
+            return "halt"
 
         yield self._emit("simulate", "start", f"stopTime={stop_time}")
         sim = runner.simulate(
@@ -256,8 +456,17 @@ class Pipeline:
             sim.summary() + (f" -> {sim.result_file.name}" if sim.result_file else ""),
         )
         if not sim.ok:
-            yield from self._finish(t0, runner)
-            return
+            return "halt"
+
+        # C10. "It simulated" is not "it worked". A model whose states never move, or whose
+        # sequential controller never leaves Initial, has integrated a system in which
+        # nothing happens -- and it would otherwise print HARD GATE MET above 0/10.
+        live = liveness(cfg.out_dir / "results.csv", model)
+        self.result.gate["live"] = live.ok
+        self.result.gate["liveness"] = live.summary()
+        yield self._emit(
+            "simulate", "ok" if live.ok else "warn", live.summary(), live=live.ok,
+        )
 
         # ---------------------------------------------------------- 9. verify
         yield self._emit("verify", "start", "scoring acceptance criteria")
@@ -272,12 +481,62 @@ class Pipeline:
                 req = model.requirement(rid)
                 if req and r.passed and r.check_id not in req.verified_by:
                     req.verified_by.append(r.check_id)
+
+        # A failed check is a symptom. Say which ones are the disease: a setpoint the plant
+        # provably cannot reach is a contradiction in the customer's own evidence and the
+        # brief requires it to be flagged, while the checks downstream of it are noise.
+        diag_log = AssumptionLog()
+        diagnoses = diagnose(model, card, read_result(cfg.out_dir / "results.csv"))
+        # Drop the previous pass's knock-on notes -- they describe a model we no longer ship
+        # -- but keep every proved contradiction, which is the finding and is not re-derivable
+        # from the final trace once a fallback lets the step exit early.
+        model.gaps = [
+            g for g in model.gaps
+            if not (g.id.startswith("GAP-GUARD-") and g.severity != "blocking")
+        ]
+        # Plan the fallbacks before recording anything: a verdict on a step downstream of a
+        # deadlock we are about to remove is not evidence, and recording it would lock in a
+        # contradiction that the next pass disproves.
+        plan = apply_declared_fallbacks(model, diagnoses, diag_log)
+        model.gaps.extend(
+            record(model, diagnoses, diag_log,
+                   already_known=self._contradicted | plan.deferred, pass_no=self._pass)
+        )
+        self._contradicted.update(
+            d.check_id for d in diagnoses
+            if d.verdict == "unreachable" and d.check_id not in plan.deferred
+        )
+        self.result.diagnoses = diagnoses
+
         yield self._emit(
             "verify", "ok" if card.ok else "warn", card.summary(),
             failed=[r.check_id for r in card.results if not r.passed],
         )
+        blocking = [d for d in diagnoses if d.verdict == "unreachable"]
+        if blocking:
+            yield self._emit(
+                "verify", "warn",
+                f"{len(blocking)} setpoint(s) unreachable under the packet's own parameters "
+                f"-- flagged, not retuned",
+                failed=[d.check_id for d in blocking],
+            )
 
-        yield from self._finish(t0, runner)
+        # A step whose guard is provably unreachable deadlocks the sequence, so one defect in
+        # the customer's specification costs us every step after it. SA-05 keeps their guard
+        # exactly as written and adds a marked fallback beside it. The contradiction stays
+        # flagged and the setpoint stays untouched; what changes is how much of the sequence
+        # we can actually exercise and show. See ir/fallback.py.
+        fallbacks = plan.added
+        diag_log.attach(model)
+        if fallbacks:
+            yield self._emit(
+                "verify", "warn",
+                f"{len(fallbacks)} step(s) cannot exit under the packet's own numbers; "
+                f"adding a declared fallback (SA-05) and re-running the model",
+                failed=[f.fallback_for or f.id for f in fallbacks],
+            )
+            return "retry"
+        return "done"
 
     # ------------------------------------------------------------------ report
     def _finish(self, t0: float, runner: OmcRunner) -> Iterator[PipelineEvent]:
@@ -291,6 +550,7 @@ class Pipeline:
             out_dir=cfg.out_dir,
             gate=self.result.gate,
             scorecard=self.result.scorecard,
+            results_csv=(cfg.out_dir / "results.csv"),
             router_stats=self.router.stats() if self.router else None,
             repair_steps=getattr(self, "_repair_steps", None),
             validation=getattr(self, "_validation", None),

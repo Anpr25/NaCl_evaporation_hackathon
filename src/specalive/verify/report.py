@@ -21,6 +21,7 @@ from typing import Any
 
 from ..ir.system import SystemModel
 from .acceptance import Scorecard
+from .plots import PLOT_CSS, render_plots
 
 CSS = """
 :root{--bg:#fff;--fg:#14161a;--mut:#5b6472;--line:#e3e6ea;--ok:#10725a;--okbg:#e8f5f1;
@@ -57,6 +58,8 @@ border-radius:0 8px 8px 0;margin:.8em 0}
 border:1px solid var(--line);color:var(--mut)}
 .bar{height:8px;border-radius:99px;background:var(--line);overflow:hidden;margin-top:6px}
 .bar>i{display:block;height:100%;background:var(--acc)}
+"""
+CSS += PLOT_CSS + """
 @media(max-width:640px){.wrap{padding:20px 16px 60px}.card{flex:1 1 100%}}
 """
 
@@ -80,6 +83,7 @@ def build_report(
     out_dir: str | Path = "out",
     gate: dict[str, Any] | None = None,
     scorecard: Scorecard | None = None,
+    results_csv: str | Path | None = None,
     router_stats: dict[str, Any] | None = None,
     repair_steps: list[Any] | None = None,
     validation: Any | None = None,
@@ -97,7 +101,7 @@ def build_report(
 
     p.append(f"<h1>{_e(model.name)}</h1>")
     p.append(
-        f'<p class="sub">SpecAlive run &middot; {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} '
+        f'<p class="sub">ModelAlchemist run &middot; {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} '
         f"&middot; {len(model.sources)} evidence sources &middot; "
         f"domains: {_e(', '.join(model.domains))}</p>"
     )
@@ -124,12 +128,99 @@ def build_report(
         )
     )
     cards.append(("Declared gaps", str(cov["gaps"]), "warn" if cov["gaps"] else "pass"))
+    # The brief requires missing information to be inferred with a stated assumption OR
+    # surfaced as a question. Both counts belong on the front page, not buried: an
+    # assumption nobody can find is indistinguishable from an invention.
+    cards.append(
+        (
+            "Stated assumptions",
+            f"{cov['assumptions']}"
+            + (f" ({cov['assumptions_unfounded']} unfounded)" if cov["assumptions_unfounded"] else ""),
+            "fail" if cov["assumptions_unfounded"] else ("warn" if cov["assumptions"] else "pass"),
+        )
+    )
+    cards.append(
+        (
+            "Questions raised",
+            str(cov["questions"]),
+            "warn" if cov["questions_blocking"] else "pass",
+        )
+    )
     p.append('<div class="gate">')
     for k, v, cls in cards:
         p.append(f'<div class="card"><div class="k">{_e(k)}</div><div class="v {cls}">{_e(v)}</div></div>')
     p.append("</div>")
 
     # ---------------------------------------------------------------- honesty first
+    #
+    # Questions come before assumptions, and assumptions before gaps, because that is the
+    # descending order of what a reviewer can act on. A question is work they can do in a
+    # minute; an assumption is a number they can overturn; a gap is something neither of us
+    # can fix today.
+    p.append("<h2>Questions for the customer</h2>")
+    if model.questions:
+        p.append(
+            '<p class="sub">The evidence did not settle these. Where a run still needed a '
+            'number, the interim value is named here and declared below &mdash; nothing was '
+            'filled in silently.</p>'
+        )
+        p.append(
+            _rows(
+                ["Id", "Subject", "Question", "Why it matters", "Searched", "Interim"],
+                [
+                    [_e(q.id), _e(q.subject),
+                     f"<strong>{_e(q.question)}</strong>", _e(q.why_it_matters),
+                     _e(", ".join(q.searched) if q.searched else "-"),
+                     _e(q.interim or "nothing assumed")]
+                    for q in model.questions
+                ],
+                ["no" if q.blocking else "" for q in model.questions],
+            )
+        )
+    else:
+        p.append(
+            '<div class="good">No open questions. Every value in the model came from the '
+            'evidence or from a declared standard assumption.</div>'
+        )
+
+    p.append("<h2>Stated assumptions</h2>")
+    if model.assumptions:
+        unfounded = [a for a in model.assumptions if not a.basis]
+        if unfounded:
+            p.append(
+                f'<div class="no">{len(unfounded)} of these cite no registered convention. '
+                "An assumption with no basis is a guess with a label on it. It is shown here "
+                "rather than hidden, but it should become a register entry or a question."
+                "</div>"
+            )
+        p.append(
+            '<p class="sub">Each row is something the evidence never stated. '
+            '<em>Basis</em> cites a convention declared in '
+            '<code>config/assumptions.yaml</code> <em>before</em> this run, so the reasoning '
+            'cannot have been invented to fit the result. <em>To disagree</em> is where to '
+            'look to overturn it.</p>'
+        )
+        p.append(
+            _rows(
+                ["Id", "Subject", "What was missing", "Assumed", "Basis", "To disagree", "Asked"],
+                [
+                    [_e(a.id), _e(a.subject), _e(a.what_was_missing),
+                     f"<strong>{_e(a.statement)}</strong>",
+                     (f'<span class="pill">{_e(a.basis)}</span> {_e(a.basis_text or "")}'
+                      if a.basis else '<span class="pill">UNFOUNDED</span>'),
+                     _e(a.impact_if_wrong or "-"),
+                     _e(a.question_id or "-")]
+                    for a in model.assumptions
+                ],
+                ["" if a.basis else "no" for a in model.assumptions],
+            )
+        )
+    else:
+        p.append(
+            '<div class="good">Nothing was assumed. Every value in the model is traceable to '
+            'a source.</div>'
+        )
+
     p.append("<h2>Declared gaps and deviations</h2>")
     if model.gaps:
         p.append(
@@ -181,6 +272,23 @@ def build_report(
                 ["ok" if r.passed else "no" for r in scorecard.results],
             )
         )
+        if results_csv and Path(results_csv).exists():
+            try:
+                from .omc import read_result
+
+                checks = [c for sc in model.scenarios for c in sc.checks]
+                fragment = render_plots(read_result(results_csv), checks)
+            except Exception as exc:  # a plotting failure must never lose the report
+                fragment = f'<p class="sub">plots unavailable: {_e(exc)}</p>'
+            if fragment:
+                p.append("<h3>Simulation</h3>")
+                p.append(
+                    '<p class="sub">Dashed lines are the acceptance thresholds, drawn on the '
+                    "same axes as the signal so the criterion can be seen being met rather "
+                    "than taken on trust.</p>"
+                )
+                p.append(fragment)
+
         if scorecard.signal_errors:
             p.append("<h3>Signal agreement (secondary)</h3>")
             p.append(
@@ -336,7 +444,7 @@ def build_report(
     doc = (
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        f"<title>{_e(model.name)} &mdash; SpecAlive</title><style>{CSS}</style></head>"
+        f"<title>{_e(model.name)} &mdash; ModelAlchemist</title><style>{CSS}</style></head>"
         f"<body><div class='wrap'>{''.join(p)}</div></body></html>"
     )
     path = out_dir / "report.html"

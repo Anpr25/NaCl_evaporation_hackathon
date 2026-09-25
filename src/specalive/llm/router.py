@@ -55,8 +55,15 @@ class DiskCache:
             self.misses += 1
             return None
         self.hits += 1
+        t0 = time.time()
         blob = json.loads(path.read_text(encoding="utf-8"))
-        return LLMResponse(**{**blob, "cached": True})
+        # Report what the cache hit actually cost, not what the original call cost. Replaying
+        # the old figure inflates every "time spent on model calls" number in the report, and
+        # that number is evidence we quote.
+        original = blob.pop("latency_s", 0.0)
+        resp = LLMResponse(**blob, cached=True, latency_s=round(time.time() - t0, 4))
+        resp.original_latency_s = original
+        return resp
 
     def put(self, key: str, resp: LLMResponse) -> None:
         if not self.enabled:
@@ -187,8 +194,13 @@ class Router:
         retries = int(self.limits.get("max_retries_same_tier", 1))
         errors: list[str] = []
         previous_tier: str | None = None
+        #: Tiers a provider was actually called for. Skips (cache miss aside, replay-only,
+        #: unavailable, quota-exhausted) don't count -- the escalation cap limits how many real
+        #: model calls a task can make, not how far down a long chain of dead tiers we may walk
+        #: to find one that's actually up.
+        attempted = 0
 
-        for depth, tier in enumerate(chain[: max_esc + 1]):
+        for depth, tier in enumerate(chain):
             req = LLMRequest(
                 task=task,
                 prompt=prompt,
@@ -216,6 +228,11 @@ class Router:
                 errors.append(f"{tier}: quota exhausted")
                 previous_tier = tier
                 continue
+
+            if attempted >= max_esc + 1:
+                errors.append(f"{tier}: escalation cap reached ({max_esc + 1} tiers already tried)")
+                break
+            attempted += 1
 
             provider = self.provider(tier)
             assert provider is not None

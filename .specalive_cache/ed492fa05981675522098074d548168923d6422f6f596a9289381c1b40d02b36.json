@@ -1,0 +1,92 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"StandardWater topology\",\n      \"predicate\": \"runs all the way past\",\n      \"value\": \"2500 s\",\n      \"quote\": \"- StandardWater topology runs all the way past 2500 s.\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"WaterNaCl\",\n      \"predicate\": \"gets ugly\",\n      \"value\": \"when a pump transition becomes active\",\n      \"quote\": \"- WaterNaCl still gets ugly when a pump transition becomes active. Do NOT delete pump states.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"Tiny solver\",\n      \"predicate\": \"steps around\",\n      \"value\": \"port-level crossing disappeared with hysteresis\",\n      \"quote\": \"- Tiny solver steps around port-level crossing disappeared with hysteresis.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"Q_up fix\",\n      \"predicate\": \"stopped\",\n      \"value\": \"B5 boil/no-boil switching\",\n      \"quote\": \"- Q_up fix stopped B5 boil/no-boil switching.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"Old notebook\",\n      \"predicate\": \"says\",\n      \"value\": \"B7 20 C\",\n      \"quote\": \"- Old notebook says B7 20 C; CR-017 says 25 C.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"CR-017\",\n      \"predicate\": \"says\",\n      \"value\": \"25 C\",\n      \"quote\": \"- Old notebook says B7 20 C; CR-017 says 25 C.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"Physical K1\",\n      \"predicate\": \"exists\",\n      \"value\": \"\",\n      \"quote\": \"- Physical K1 exists; combined B5/K1 is only a simulation abstraction.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"combined B5/K1\",\n      \"predicate\": \"is\",\n      \"value\": \"only a simulation abstraction\",\n      \"quote\": \"- Physical K1 exists; combined B5/K1 is only a simulation abstraction.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"P&ID\",\n      \"predicate\": \"shows more valves\",\n      \"value\": \"\",\n      \"quote\": \"- P&ID shows more valves than the StateGraph. Determine ownership before generating controller ports.\",\n      \"confidence\": 1.0\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"StateGraph\",\n      \"predicate\": \"has fewer valves\",\n      \"value\": \"\",\n      \"quote\": \"- P&ID shows more valves than the StateGraph. Determine ownership before generating controller ports.\",\n      \"confidence\": 1.0\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 612,
+  "completion_tokens": 700,
+  "latency_s": 28.46674680709839,
+  "data": {
+    "claims": [
+      {
+        "kind": "requirement",
+        "subject": "StandardWater topology",
+        "predicate": "runs all the way past",
+        "value": "2500 s",
+        "quote": "- StandardWater topology runs all the way past 2500 s.",
+        "confidence": 0.95
+      },
+      {
+        "kind": "note",
+        "subject": "WaterNaCl",
+        "predicate": "gets ugly",
+        "value": "when a pump transition becomes active",
+        "quote": "- WaterNaCl still gets ugly when a pump transition becomes active. Do NOT delete pump states.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "note",
+        "subject": "Tiny solver",
+        "predicate": "steps around",
+        "value": "port-level crossing disappeared with hysteresis",
+        "quote": "- Tiny solver steps around port-level crossing disappeared with hysteresis.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "note",
+        "subject": "Q_up fix",
+        "predicate": "stopped",
+        "value": "B5 boil/no-boil switching",
+        "quote": "- Q_up fix stopped B5 boil/no-boil switching.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "note",
+        "subject": "Old notebook",
+        "predicate": "says",
+        "value": "B7 20 C",
+        "quote": "- Old notebook says B7 20 C; CR-017 says 25 C.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "note",
+        "subject": "CR-017",
+        "predicate": "says",
+        "value": "25 C",
+        "quote": "- Old notebook says B7 20 C; CR-017 says 25 C.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "note",
+        "subject": "Physical K1",
+        "predicate": "exists",
+        "value": "",
+        "quote": "- Physical K1 exists; combined B5/K1 is only a simulation abstraction.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "note",
+        "subject": "combined B5/K1",
+        "predicate": "is",
+        "value": "only a simulation abstraction",
+        "quote": "- Physical K1 exists; combined B5/K1 is only a simulation abstraction.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "note",
+        "subject": "P&ID",
+        "predicate": "shows more valves",
+        "value": "",
+        "quote": "- P&ID shows more valves than the StateGraph. Determine ownership before generating controller ports.",
+        "confidence": 1.0
+      },
+      {
+        "kind": "note",
+        "subject": "StateGraph",
+        "predicate": "has fewer valves",
+        "value": "",
+        "quote": "- P&ID shows more valves than the StateGraph. Determine ownership before generating controller ports.",
+        "confidence": 1.0
+      }
+    ]
+  }
+}

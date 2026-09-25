@@ -1,0 +1,14 @@
+{
+  "text": "{\n  \"choice\": \"\",\n  \"confidence\": 0.0,\n  \"reason\": \"No candidate matches the component description exactly\",\n  \"parameter_map\": {}\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 831,
+  "completion_tokens": 36,
+  "latency_s": 8.619004726409912,
+  "data": {
+    "choice": "",
+    "confidence": 0.0,
+    "reason": "No candidate matches the component description exactly",
+    "parameter_map": {}
+  }
+}

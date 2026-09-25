@@ -1,0 +1,14 @@
+{
+  "text": "{\n  \"choice\": \"\",\n  \"confidence\": 0.0,\n  \"reason\": \"The component is a buffer tank with gravity feed and specific parameters (area, height, max_level, port_level_note). None of the provided Modelica classes match this description: OpenTank is for simple tanks but has different ports and parameters; Evaporator is for boiling; Complex blocks are for signal processing, not fluid tanks.\",\n  \"parameter_map\": {}\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 1298,
+  "completion_tokens": 94,
+  "latency_s": 14.882509469985962,
+  "data": {
+    "choice": "",
+    "confidence": 0.0,
+    "reason": "The component is a buffer tank with gravity feed and specific parameters (area, height, max_level, port_level_note). None of the provided Modelica classes match this description: OpenTank is for simple tanks but has different ports and parameters; Evaporator is for boiling; Complex blocks are for signal processing, not fluid tanks.",
+    "parameter_map": {}
+  }
+}

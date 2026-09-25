@@ -1,0 +1,183 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Type\",\n      \"predicate\": \"2/2-way solenoid/pneumatic discrete valve\",\n      \"value\": \"2/2-way solenoid/pneumatic discrete valve\",\n      \"quote\": \"Type 2/2-way solenoid/pneumatic discrete valve\",\n      \"unit\": \"null\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Command\",\n      \"predicate\": \"24 VDC / Boolean open command\",\n      \"value\": \"24 VDC / Boolean open command\",\n      \"quote\": \"Command 24 VDC / Boolean open command\",\n      \"unit\": \"null\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Fail action\",\n      \"predicate\": \"Spring return CLOSED\",\n      \"value\": \"Spring return CLOSED\",\n      \"quote\": \"Fail action Spring return CLOSED\",\n      \"unit\": \"null\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Nominal opening time\",\n      \"predicate\": \"0.7 s\",\n      \"value\": \"0.7\",\n      \"quote\": \"Nominal opening time 0.7 s\",\n      \"unit\": \"s\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Nominal closing time\",\n      \"predicate\": \"0.5 s\",\n      \"value\": \"0.5\",\n      \"quote\": \"Nominal closing time 0.5 s\",\n      \"unit\": \"s\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Leakage at closed\",\n      \"predicate\": \"<0.02% Kv\",\n      \"value\": \"<0.02\",\n      \"quote\": \"Leakage at closed <0.02% Kv\",\n      \"unit\": \"% Kv\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Permitted medium\",\n      \"predicate\": \"Water / aqueous NaCl, 0-120 degC\",\n      \"value\": \"Water / aqueous NaCl, 0-120 degC\",\n      \"quote\": \"Permitted medium Water / aqueous NaCl, 0-120 degC\",\n      \"unit\": \"null\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"requirement\",\n      \"subject\": \"Modelica abstraction\",\n      \"predicate\": \"ValveDiscrete; no modulation\",\n      \"value\": \"ValveDiscrete; no modulation\",\n      \"quote\": \"Modelica abstraction ValveDiscrete; no modulation\",\n      \"unit\": \"null\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"P1\",\n      \"predicate\": \"Service\",\n      \"value\": \"Concentrate return\",\n      \"quote\": \"Service Concentrate return\",\n      \"unit\": \"null\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"P2\",\n      \"predicate\": \"Service\",\n      \"value\": \"Condensate return\",\n      \"quote\": \"Service Condensate return\",\n      \"unit\": \"null\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"Nominal mass flow\",\n      \"predicate\": \"0.30 kg/s\",\n      \"value\": \"0.30\",\n      \"quote\": \"Nominal mass flow 0.30 kg/s\",\n      \"unit\": \"kg/s\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"Nominal differential pressure\",\n      \"predicate\": \"1.8 bar\",\n      \"value\": \"1.8\",\n      \"quote\": \"Nominal differential pressure 1.8 bar\",\n      \"unit\": \"bar\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"Minimum source level permissive LIS-701\",\n      \"predicate\": \">0.02 m\",\n      \"value\": \">0.02\",\n      \"quote\": \"Minimum source level permissive LIS-701 >0.02 m\",\n      \"unit\": \"m\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"Minimum source level permissive LIS-601\",\n      \"predicate\": \">0.02 m\",\n      \"value\": \">0.02\",\n      \"quote\": \"Minimum source level permissive LIS-601 >0.02 m\",\n      \"unit\": \"m\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"Low discharge pressure alarm PIS-901\",\n      \"predicate\": \"<0.8 bar\",\n      \"value\": \"<0.8\",\n      \"quote\": \"Low discharge pressure alarm PIS-901 <0.8 bar\",\n      \"unit\": \"bar\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"Low discharge pressure alarm PIS-1001\",\n      \"predicate\": \"<0.8 bar\",\n      \"value\": \"<0.8\",\n      \"quote\": \"Low discharge pressure alarm PIS-1001 <0.8 bar\",\n      \"unit\": \"bar\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"parameter\",\n      \"subject\": \"Dry-run policy\",\n      \"predicate\": \"Inhibit start / trip\",\n      \"value\": \"Inhibit start / trip\",\n      \"quote\": \"Dry-run policy Inhibit start / trip\",\n      \"unit\": \"null\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"Pump discharge headers\",\n      \"predicate\": \"are cross-connected to the charging-vessel return manifolds\",\n      \"value\": \"Pump discharge headers are cross-connected to the charging-vessel return manifolds\",\n      \"quote\": \"Pump discharge headers are cross-connected to the charging-vessel return manifolds. Final routing is\",\n      \"unit\": \"null\",\n      \"confidence\": 0.95\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"Final routing\",\n      \"predicate\": \"is determined by the approved process-routing change record, not by pump physical location alone\",\n      \"value\": \"is determined by the approved process-routing change record, not by pump physical location alone\",\n      \"quote\": \"Final routing is determined by the approved process-routing change record, not by pump physical location alone.\",\n      \"unit\": \"null\",\n      \"confidence\": 0.95\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 860,
+  "completion_tokens": 1559,
+  "latency_s": 62.9091112613678,
+  "data": {
+    "claims": [
+      {
+        "kind": "requirement",
+        "subject": "Type",
+        "predicate": "2/2-way solenoid/pneumatic discrete valve",
+        "value": "2/2-way solenoid/pneumatic discrete valve",
+        "quote": "Type 2/2-way solenoid/pneumatic discrete valve",
+        "unit": "null",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "Command",
+        "predicate": "24 VDC / Boolean open command",
+        "value": "24 VDC / Boolean open command",
+        "quote": "Command 24 VDC / Boolean open command",
+        "unit": "null",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "Fail action",
+        "predicate": "Spring return CLOSED",
+        "value": "Spring return CLOSED",
+        "quote": "Fail action Spring return CLOSED",
+        "unit": "null",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "Nominal opening time",
+        "predicate": "0.7 s",
+        "value": "0.7",
+        "quote": "Nominal opening time 0.7 s",
+        "unit": "s",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "Nominal closing time",
+        "predicate": "0.5 s",
+        "value": "0.5",
+        "quote": "Nominal closing time 0.5 s",
+        "unit": "s",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "Leakage at closed",
+        "predicate": "<0.02% Kv",
+        "value": "<0.02",
+        "quote": "Leakage at closed <0.02% Kv",
+        "unit": "% Kv",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "Permitted medium",
+        "predicate": "Water / aqueous NaCl, 0-120 degC",
+        "value": "Water / aqueous NaCl, 0-120 degC",
+        "quote": "Permitted medium Water / aqueous NaCl, 0-120 degC",
+        "unit": "null",
+        "confidence": 0.95
+      },
+      {
+        "kind": "requirement",
+        "subject": "Modelica abstraction",
+        "predicate": "ValveDiscrete; no modulation",
+        "value": "ValveDiscrete; no modulation",
+        "quote": "Modelica abstraction ValveDiscrete; no modulation",
+        "unit": "null",
+        "confidence": 0.95
+      },
+      {
+        "kind": "parameter",
+        "subject": "P1",
+        "predicate": "Service",
+        "value": "Concentrate return",
+        "quote": "Service Concentrate return",
+        "unit": "null",
+        "confidence": 0.95
+      },
+      {
+        "kind": "parameter",
+        "subject": "P2",
+        "predicate": "Service",
+        "value": "Condensate return",
+        "quote": "Service Condensate return",
+        "unit": "null",
+        "confidence": 0.95
+      },
+      {
+        "kind": "parameter",
+        "subject": "Nominal mass flow",
+        "predicate": "0.30 kg/s",
+        "value": "0.30",
+        "quote": "Nominal mass flow 0.30 kg/s",
+        "unit": "kg/s",
+        "confidence": 0.95
+      },
+      {
+        "kind": "parameter",
+        "subject": "Nominal differential pressure",
+        "predicate": "1.8 bar",
+        "value": "1.8",
+        "quote": "Nominal differential pressure 1.8 bar",
+        "unit": "bar",
+        "confidence": 0.95
+      },
+      {
+        "kind": "parameter",
+        "subject": "Minimum source level permissive LIS-701",
+        "predicate": ">0.02 m",
+        "value": ">0.02",
+        "quote": "Minimum source level permissive LIS-701 >0.02 m",
+        "unit": "m",
+        "confidence": 0.95
+      },
+      {
+        "kind": "parameter",
+        "subject": "Minimum source level permissive LIS-601",
+        "predicate": ">0.02 m",
+        "value": ">0.02",
+        "quote": "Minimum source level permissive LIS-601 >0.02 m",
+        "unit": "m",
+        "confidence": 0.95
+      },
+      {
+        "kind": "parameter",
+        "subject": "Low discharge pressure alarm PIS-901",
+        "predicate": "<0.8 bar",
+        "value": "<0.8",
+        "quote": "Low discharge pressure alarm PIS-901 <0.8 bar",
+        "unit": "bar",
+        "confidence": 0.95
+      },
+      {
+        "kind": "parameter",
+        "subject": "Low discharge pressure alarm PIS-1001",
+        "predicate": "<0.8 bar",
+        "value": "<0.8",
+        "quote": "Low discharge pressure alarm PIS-1001 <0.8 bar",
+        "unit": "bar",
+        "confidence": 0.95
+      },
+      {
+        "kind": "parameter",
+        "subject": "Dry-run policy",
+        "predicate": "Inhibit start / trip",
+        "value": "Inhibit start / trip",
+        "quote": "Dry-run policy Inhibit start / trip",
+        "unit": "null",
+        "confidence": 0.95
+      },
+      {
+        "kind": "note",
+        "subject": "Pump discharge headers",
+        "predicate": "are cross-connected to the charging-vessel return manifolds",
+        "value": "Pump discharge headers are cross-connected to the charging-vessel return manifolds",
+        "quote": "Pump discharge headers are cross-connected to the charging-vessel return manifolds. Final routing is",
+        "unit": "null",
+        "confidence": 0.95
+      },
+      {
+        "kind": "note",
+        "subject": "Final routing",
+        "predicate": "is determined by the approved process-routing change record, not by pump physical location alone",
+        "value": "is determined by the approved process-routing change record, not by pump physical location alone",
+        "quote": "Final routing is determined by the approved process-routing change record, not by pump physical location alone.",
+        "unit": "null",
+        "confidence": 0.95
+      }
+    ]
+  }
+}

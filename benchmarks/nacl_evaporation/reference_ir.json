@@ -157,6 +157,15 @@
       "workaround": "Tier 2 binds to acausal Modelica.Fluid components where these apply."
     },
     {
+      "id": "OPEN-ISSUE-06",
+      "kind": "deviation",
+      "subject": "B1.level_start, B2.level_start",
+      "detail": "The packet never states how much liquid the charging vessels hold. It gives their area (0.070 m2), height (0.6 m), maximum level (0.5 m), port level and composition; the requirement spec says only that 'B1 is initially charged with water and B2 with concentrated brine'; the operator runbook says to 'confirm B1 contains the water-rich initial charge'; and the legacy Modelica declares both tanks with no starting level at all. The 0.45 m and 0.30 m used here were chosen by us so the batch can complete.",
+      "requirement_ids": [],
+      "severity": "warn",
+      "workaround": "Ask the customer for the initial charge of B1 and B2. Until then these two numbers are the only values in this model that no document supports."
+    },
+    {
       "id": "OPEN-ISSUE-05",
       "kind": "unimplemented_requirement",
       "subject": "REQ-MOD-003",

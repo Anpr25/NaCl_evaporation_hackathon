@@ -23,7 +23,17 @@ tiers:
     model: qwen3:4b
     fallback_models: [qwen2.5:3b-instruct-q4_K_M, llama3.2:3b]
     base_url: http://localhost:11434
-    context: 8192
+    context: 4096
+    # MEASURED on a Quadro T1000 (4 GB, display on the iGPU):
+    #   default          -> 67% GPU, 13.3 tok/s   (Ollama leaves ~1.6 GB unused)
+    #   num_gpu: 99      -> 100% GPU, 43.1 tok/s, 3.18 GB resident
+    # Forcing every layer onto the card is a 3.2x speedup and still fits. Lower this if a
+    # teammate's card is smaller; `specalive models` will show the split.
+    options: {num_gpu: 99}
+    # qwen3 is a reasoning model: with thinking on, `response` comes back EMPTY and the whole
+    # answer lands in a separate `thinking` field, so every structured call fails and the
+    # router escalates for nothing. We want no reasoning here anyway.
+    think: false
     structured_output: json_schema
     max_tokens: 2048
     timeout_s: 120
@@ -52,20 +62,25 @@ tiers:
   # ---------------------------------------------------------------- T3
   t3_cloud_reasoning:
     kind: groq
-    model: llama-3.3-70b-versatile
-    fallback_models: [qwen/qwen3-32b, llama-3.1-8b-instant]
+    # Verified against the live /models endpoint on 2026-09-24. Hosted catalogues churn --
+    # llama-3.3-70b-versatile was configured here and 404s on a current key -- so the tier
+    # carries fallbacks and the provider walks the list on a model-not-found.
+    model: openai/gpt-oss-120b
+    fallback_models: [qwen/qwen3.8-27b, openai/gpt-oss-20b]
     api_key_env: GROQ_API_KEY
     structured_output: json_object
     max_tokens: 8192
     timeout_s: 120
     good_at: [conflict_adjudication, equation_synthesis, repair_diff, topology_inference]
-    quota: {rpm: 30, tpm: 12000, rpd: 1000}
+    quota: {rpm: 30, tpm: 8000, rpd: 1000}   # measured from Groq x-ratelimit headers, not guessed
 
   # ---------------------------------------------------------------- T4
   t4_cloud_vision:
     kind: gemini
-    model: gemini-2.5-flash
-    fallback_models: [gemini-2.0-flash]
+    # `-latest` tracks the current flash model so a rename cannot break the demo;
+    # reproducibility comes from the response cache, not from a pinned model id.
+    model: gemini-flash-latest
+    fallback_models: [gemini-3.8-flash, gemini-3.5-flash]
     api_key_env: GEMINI_API_KEY
     structured_output: response_schema
     max_tokens: 8192
@@ -80,25 +95,59 @@ tiers:
     base_url: http://localhost:11434
     good_at: [diagram_reading]
 
+  # ---------------------------------------------------------------- OpenRouter
+  # A single-key gateway to many hosted models (text and vision), used when neither a local
+  # Ollama daemon nor Groq/Gemini keys are available. Pinned to OpenRouter's free (":free",
+  # zero prompt/completion pricing) models: fine for a hackathon budget, but "free" means no
+  # uptime/rate-limit guarantee -- re-check https://openrouter.ai/collections/free-models
+  # before a live run, since the free catalog rotates.
+  t3_openrouter:
+    kind: openrouter
+    model: nvidia/nemotron-3-ultra-550b-a55b:free
+    fallback_models: [inclusionai/ling-3.0-flash-fin:free, nvidia/nemotron-3-super-120b-a12b:free]
+    api_key_env: OPENROUTER_API_KEY
+    structured_output: json_object
+    max_tokens: 8192
+    timeout_s: 120
+    good_at: [conflict_adjudication, equation_synthesis, repair_diff, topology_inference]
+
+  t4_openrouter_vision:
+    kind: openrouter
+    model: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free
+    fallback_models: [nex-agi/nex-n2.5-mini:free]
+    api_key_env: OPENROUTER_API_KEY
+    structured_output: json_object
+    max_tokens: 8192
+    timeout_s: 180
+    good_at: [diagram_reading, scanned_page_ocr]
+
 # Task -> ordered escalation chain. First entry is tried first.
 routes:
   parse_structured:      [t0_deterministic]
-  extract_claim:         [t1_local_small, t2_local_mid, t3_cloud_reasoning]
+  extract_claim:         [t1_local_small, t2_local_mid, t3_cloud_reasoning, t3_openrouter]
   extract_prose:         [t2_local_mid, t3_cloud_reasoning]
-  read_diagram:          [t4_cloud_vision, t4_local_vision]
+  read_diagram:          [t4_cloud_vision, t4_openrouter_vision, t4_local_vision]
   catalog_retrieve:      [t0_deterministic, t1_local_embed]
   catalog_pick:          [t1_local_small, t3_cloud_reasoning]
   adjudicate_conflict:   [t3_cloud_reasoning, t2_local_mid]
-  synthesise_equations:  [t3_cloud_reasoning, t4_cloud_vision]
+  equation_synthesis:    [t3_cloud_reasoning, t4_cloud_vision]
   repair_modelica:       [t0_deterministic, t3_cloud_reasoning, t4_cloud_vision]
   write_prose:           [t1_local_small, t0_deterministic]
 
 # Provider selection modes, chosen with `specalive --provider`.
 modes:
-  auto:   {allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid, t3_cloud_reasoning, t4_cloud_vision, t4_local_vision]}
+  auto:   {allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid, t3_cloud_reasoning, t4_cloud_vision, t4_local_vision, t3_openrouter, t4_openrouter_vision]}
   local:  {allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid, t4_local_vision]}
-  cloud:  {allow: [t0_deterministic, t3_cloud_reasoning, t4_cloud_vision]}
-  replay: {allow: [t0_deterministic], replay_only: true}   # demo-safe: cache hits or bust
+  cloud:  {allow: [t0_deterministic, t3_cloud_reasoning, t4_cloud_vision, t3_openrouter, t4_openrouter_vision]}
+  # Replay must allow the SAME tiers as auto. `replay_only` is what prevents a live call,
+  # and the router checks it *after* the cache lookup. Listing only t0 here left the tier
+  # chain empty, so run() raised before ever opening the cache and every model-derived claim
+  # silently vanished -- a replay that looked fast because it did nothing.
+  replay:
+    allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid,
+            t3_cloud_reasoning, t4_cloud_vision, t4_local_vision,
+            t3_openrouter, t4_openrouter_vision]
+    replay_only: true
   none:   {allow: [t0_deterministic]}                      # deterministic-only smoke path
 
 cache:

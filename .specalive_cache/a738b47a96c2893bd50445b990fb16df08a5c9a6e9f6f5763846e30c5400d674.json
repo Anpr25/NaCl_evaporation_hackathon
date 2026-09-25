@@ -1,0 +1,52 @@
+{
+  "text": "{\n  \"claims\": [\n    {\n      \"kind\": \"supersession\",\n      \"subject\": \"20 C\",\n      \"predicate\": \"superseded by\",\n      \"value\": \"CR-017\",\n      \"quote\": \"// STALE: 2: 20 C, superseded by CR-017\",\n      \"confidence\": 0.9\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"return routing\",\n      \"predicate\": \"preserved from\",\n      \"value\": \"archived teaching controller\",\n      \"quote\": \"// OLD return routing preserved from archived teaching controller:\",\n      \"confidence\": 0.8\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"Branch B\",\n      \"predicate\": \"routing\",\n      \"value\": \"B7/P1 to B1\",\n      \"quote\": \"Branch B: B7/P1 to B1\",\n      \"confidence\": 0.7\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"Branch A\",\n      \"predicate\": \"routing\",\n      \"value\": \"B6/P2 to B2\",\n      \"quote\": \"Branch A: B6/P2 to B2\",\n      \"confidence\": 0.7\n    },\n    {\n      \"kind\": \"note\",\n      \"subject\": \"return routing\",\n      \"predicate\": \"superseded by\",\n      \"value\": \"CR-017\",\n      \"quote\": \"This is superseded by CR-017 in the released benchmark.\",\n      \"confidence\": 0.8\n    }\n  ]\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 542,
+  "completion_tokens": 345,
+  "latency_s": 15.192829608917236,
+  "data": {
+    "claims": [
+      {
+        "kind": "supersession",
+        "subject": "20 C",
+        "predicate": "superseded by",
+        "value": "CR-017",
+        "quote": "// STALE: 2: 20 C, superseded by CR-017",
+        "confidence": 0.9
+      },
+      {
+        "kind": "note",
+        "subject": "return routing",
+        "predicate": "preserved from",
+        "value": "archived teaching controller",
+        "quote": "// OLD return routing preserved from archived teaching controller:",
+        "confidence": 0.8
+      },
+      {
+        "kind": "note",
+        "subject": "Branch B",
+        "predicate": "routing",
+        "value": "B7/P1 to B1",
+        "quote": "Branch B: B7/P1 to B1",
+        "confidence": 0.7
+      },
+      {
+        "kind": "note",
+        "subject": "Branch A",
+        "predicate": "routing",
+        "value": "B6/P2 to B2",
+        "quote": "Branch A: B6/P2 to B2",
+        "confidence": 0.7
+      },
+      {
+        "kind": "note",
+        "subject": "return routing",
+        "predicate": "superseded by",
+        "value": "CR-017",
+        "quote": "This is superseded by CR-017 in the released benchmark.",
+        "confidence": 0.8
+      }
+    ]
+  }
+}

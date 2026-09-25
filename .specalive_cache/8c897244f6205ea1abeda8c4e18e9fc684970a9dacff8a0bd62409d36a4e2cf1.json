@@ -1,0 +1,14 @@
+{
+  "text": "{\n  \"choice\": \"\",\n  \"confidence\": 0.0,\n  \"reason\": \"The component is a mixing tank with three fluid ports and specific dimensions. None of the listed Modelica classes match the description of a tank with inlet/outlet ports and a defined volume.\",\n  \"parameter_map\": {}\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 1483,
+  "completion_tokens": 65,
+  "latency_s": 16.103402376174927,
+  "data": {
+    "choice": "",
+    "confidence": 0.0,
+    "reason": "The component is a mixing tank with three fluid ports and specific dimensions. None of the listed Modelica classes match the description of a tank with inlet/outlet ports and a defined volume.",
+    "parameter_map": {}
+  }
+}

@@ -4,12 +4,17 @@ Deterministic. No model is involved: by the time we are here the hard thinking i
 IR is validated, so emission is a mechanical walk. That is deliberate -- a generated artefact
 that a language model touched is an artefact you have to re-verify.
 
-The emitted subset: package, part def / part usage, port def / port usage, interface (bind),
-attribute, state def with parallel regions and transitions, requirement def with satisfy and
-verify, and allocation from logical parts to their Modelica realisation.
+The emitted subset: package, port def, part def / part usage, interface (connect), attribute,
+constraint (interlocks), requirement usages, state def with parallel regions, entry states and
+transitions, `exhibit state` on the system, first-class `satisfy <requirement> by <element>`,
+verification defs whose objectives `verify` requirements, and allocation from logical parts to
+their Modelica realisation.
 
-`parse_back()` re-reads our own output and reconstructs the element graph. Comparing that to
-the IR is a real, dependency-free round-trip check: no Java, no pilot implementation needed.
+`parse_back()` re-reads our own output and reconstructs the element graph, including the
+satisfy and verify relationships. Comparing that to the IR is a real, dependency-free round-trip
+check: no Java, no pilot implementation needed. `parse_back()` also reports every line it did not
+recognise, so a construct added to the emitter without teaching the parser fails a test instead
+of silently escaping the check (backlog B5).
 
 Owner: B.
 """
@@ -20,7 +25,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from ..ir.system import Block, Connection, StateMachine, SystemModel
+from ..ir.system import Block, Connection, SystemModel
 
 INDENT = "    "
 
@@ -35,20 +40,54 @@ def _doc(text: str | None, depth: int) -> list[str]:
     if not text:
         return []
     pad = INDENT * depth
-    body = text.replace("*/", "* /").strip()
+    body = " ".join(text.replace("*/", "* /").split())
     return [f"{pad}doc /* {body} */"]
 
 
-def _trace_comment(*, requirements: list[str], claims: list[str], depth: int) -> list[str]:
-    if not requirements and not claims:
+def _str(text: str) -> str:
+    return str(text).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _evidence_comment(claims: list[str], depth: int) -> list[str]:
+    if not claims:
         return []
-    pad = INDENT * depth
-    bits = []
-    if requirements:
-        bits.append("satisfies " + ", ".join(requirements))
-    if claims:
-        bits.append("evidence " + ", ".join(claims[:4]) + ("..." if len(claims) > 4 else ""))
-    return [f"{pad}// @trace {'; '.join(bits)}"]
+    return [f"{INDENT * depth}// @evidence {', '.join(claims[:4])}{'...' if len(claims) > 4 else ''}"]
+
+
+def system_name(model: SystemModel) -> str:
+    return f"{_ident(model.name)}System"
+
+
+def sysml_target(model: SystemModel, eid: str) -> str | None:
+    """Qualified SysML name of the element an IR id refers to, or None if it has none.
+
+    The one resolver both the emitter and the round-trip check use, so the two can never
+    disagree about where a satisfy relationship should point.
+    """
+    sysname = system_name(model)
+    if model.block(eid) is not None or any(c.id == eid for c in model.connections):
+        return f"{sysname}.{_ident(eid)}"
+    sig = model.signal(eid) or next((s for s in model.signals if s.name == eid), None)
+    if sig is not None:
+        return f"{sysname}.{_ident(sig.name)}"
+    if any(il.id == eid for il in model.interlocks):
+        return f"{sysname}.{_ident(eid)}"
+    sm = next((sm for sm in model.state_machines if eid == sm.id or eid.startswith(f"{sm.id}.")), None)
+    if sm is not None:
+        return f"{sysname}.{_ident(sm.id)}"
+    return None
+
+
+def _scenario_ids(model: SystemModel) -> set[str]:
+    return {sc.id for sc in model.scenarios}
+
+
+def _part_def_name(b: Block) -> str:
+    return _ident(b.kind or b.name)
+
+
+def _port_def_name(domain: str, direction: str) -> str:
+    return f"{_ident(domain.title())}{_ident(direction.title())}Port"
 
 
 class SysMLEmitter:
@@ -74,6 +113,7 @@ class SysMLEmitter:
         self._emit_part_defs()
         self._emit_system()
         self._emit_state_machines()
+        self._emit_satisfaction()
         self._emit_allocations()
         self._emit_verification()
 
@@ -87,10 +127,7 @@ class SysMLEmitter:
             for p in b.ports:
                 # Name by domain AND direction: two port defs that differ only in direction
                 # must not collide, or the emitted package declares the same name twice.
-                seen.setdefault(
-                    (p.domain, p.direction),
-                    f"{_ident(p.domain.title())}{_ident(p.direction.title())}Port",
-                )
+                seen.setdefault((p.domain, p.direction), _port_def_name(p.domain, p.direction))
         if not seen:
             return
         self._w(1, "// ---------------------------------------------------------------- ports")
@@ -102,51 +139,58 @@ class SysMLEmitter:
         self._w(0)
 
     def _emit_requirements(self) -> None:
+        """Requirement *usages*: `satisfy` and `verify` must reference a usage, not a def."""
         if not self.m.requirements:
             return
         self._w(1, "// --------------------------------------------------------- requirements")
         for r in self.m.requirements:
             rid = _ident(r.id)
             status = f" // status: {r.status}" + (f", superseded by {r.superseded_by}" if r.superseded_by else "")
-            self._w(1, f"requirement def {rid} {{{status}")
-            self._w(2, f'doc /* {r.text.strip()} */')
+            self._w(1, f"requirement {rid} {{{status}")
+            self.lines += _doc(r.text, 2)
+            self._w(2, f'attribute status : String default "{r.status}";')
             if r.authority:
-                self._w(2, f'attribute authority : String default "{r.authority}";')
+                self._w(2, f'attribute authority : String default "{_str(r.authority)}";')
             if r.priority != "unknown":
                 self._w(2, f'attribute priority : String default "{r.priority}";')
             if r.verification_method:
-                self._w(2, f'attribute verificationMethod : String default "{r.verification_method}";')
+                self._w(2, f'attribute verificationMethod : String default "{_str(r.verification_method)}";')
             for cid in r.provenance.claim_ids[:6]:
                 claim = self.m.claim(cid)
                 if claim:
-                    self._w(2, f"// @evidence {claim.ref()}: {claim.quote[:110]}")
+                    self._w(2, f"// @evidence {claim.ref()}: {' '.join(claim.quote[:110].split())}")
             self._w(1, "}")
         self._w(0)
 
     def _emit_part_defs(self) -> None:
-        """A part def per distinct block kind, so repeated equipment shares a definition."""
-        kinds: dict[str, Block] = {}
+        """A part def per distinct block kind, declaring every port and attribute any block of
+        that kind uses -- a def built from one exemplar would leave its siblings' extra ports
+        undeclared and their connections dangling."""
+        kinds: dict[str, list[Block]] = {}
         for b in self.m.blocks:
-            kinds.setdefault(_ident(b.kind or b.name), b)
+            kinds.setdefault(_part_def_name(b), []).append(b)
         self._w(1, "// ------------------------------------------------------------ part defs")
-        for kind, exemplar in sorted(kinds.items()):
+        for kind, blocks in sorted(kinds.items()):
             self._w(1, f"part def {kind} {{")
-            self.lines += _doc(exemplar.description or exemplar.kind, 2)
-            for p in exemplar.ports:
-                self._w(
-                    2,
-                    f"port {_ident(p.name)} : "
-                    f"{_ident(p.domain.title())}{_ident(p.direction.title())}Port;",
-                )
-            for prm in exemplar.parameters:
-                self._w(2, f"attribute {_ident(prm.name)} : Real; // {prm.quantity.unit or 'dimensionless'}")
+            self.lines += _doc(blocks[0].description or blocks[0].kind, 2)
+            ports: dict[str, str] = {}
+            attrs: dict[str, str] = {}
+            for b in blocks:
+                for p in b.ports:
+                    ports.setdefault(_ident(p.name), _port_def_name(p.domain, p.direction))
+                for prm in b.parameters:
+                    attrs.setdefault(_ident(prm.name), prm.quantity.unit or "dimensionless")
+            for name, pdef in ports.items():
+                self._w(2, f"port {name} : {pdef};")
+            for name, unit in attrs.items():
+                self._w(2, f"attribute {name} : Real; // {unit}")
             self._w(1, "}")
         self._w(0)
 
     def _emit_system(self) -> None:
         m = self.m
         self._w(1, "// -------------------------------------------------------- system usage")
-        self._w(1, f"part {_ident(m.name)}System {{")
+        self._w(1, f"part {system_name(m)} {{")
         for b in m.blocks:
             self._emit_part_usage(b, depth=2)
         self._w(0)
@@ -155,21 +199,26 @@ class SysMLEmitter:
         self._w(0)
         for s in m.signals:
             tag = "sensor" if s.role == "sensor" else "actuator"
-            binding = f" // bound to {s.binding}" if s.binding else ""
+            binding = f" bound to {s.binding}" if s.binding else ""
             self._w(2, f"attribute {_ident(s.name)} : {_sysml_type(s.datatype)}; // {tag}{binding}")
         for il in m.interlocks:
-            self._w(2, f"// @interlock {il.sense} on {il.actuator}: {il.condition}")
+            self._w(2, f"constraint {_ident(il.id)} {{")
+            self.lines += _doc(f"{il.sense} on {il.actuator}: {il.condition}", 3)
+            self._w(2, "}")
+        for sm in m.state_machines:
+            self._w(2, f"exhibit state {_ident(sm.id)} : {_ident(sm.name)};")
         self._w(1, "}")
         self._w(0)
 
     def _emit_part_usage(self, b: Block, depth: int) -> None:
-        kind = _ident(b.kind or b.name)
-        self._w(depth, f"part {_ident(b.id)} : {kind} {{")
-        self.lines += _trace_comment(
-            requirements=[_ident(r) for r in b.provenance.requirement_ids],
-            claims=b.provenance.claim_ids,
-            depth=depth + 1,
-        )
+        self._w(depth, f"part {_ident(b.id)} : {_part_def_name(b)} {{")
+        # A part def carries ONE doc for the whole kind, taken from the first block of that
+        # kind, so without this every tank reads as "Initial w_NaCl = 0.000" -- B1's text.
+        # That is not cosmetic: stated values are recovered from descriptions, so B2 was
+        # being given B1's initial charge and the batch could never reach its recipe target.
+        # A part's own documentation belongs on the part. (Raised by C for C-08.)
+        self.lines += _doc(b.description, depth + 1)
+        self.lines += _evidence_comment(b.provenance.claim_ids, depth + 1)
         if b.abstracted_into:
             self._w(
                 depth + 1,
@@ -186,29 +235,32 @@ class SysMLEmitter:
 
     def _emit_connection(self, c: Connection, depth: int) -> None:
         (sb, sp), (tb, tp) = c.endpoints()
+        src, tgt = self._port_ref(sb, sp), self._port_ref(tb, tp)
         label = f" // {c.medium}" if c.medium else ""
-        self._w(depth, f"interface {_ident(c.id)} connect {_ident(sb)}.{_ident(sp)} to {_ident(tb)}.{_ident(tp)};{label}")
+        self._w(depth, f"interface {_ident(c.id)} connect {src} to {tgt};{label}")
         if c.series_elements:
-            self._w(depth, f"{INDENT}// @series {', '.join(c.series_elements)}")
-        self.lines += _trace_comment(
-            requirements=[_ident(r) for r in c.provenance.requirement_ids],
-            claims=[],
-            depth=depth,
-        )
+            self._w(depth + 1, f"// @series {', '.join(c.series_elements)}")
+
+    def _port_ref(self, bid: str, pid: str) -> str:
+        blk = self.m.block(bid)
+        port = next((p for p in blk.ports if p.id == pid), None) if blk else None
+        return f"{_ident(bid)}.{_ident(port.name if port else pid)}"
 
     def _emit_state_machines(self) -> None:
         for sm in self.m.state_machines:
+            nested = len(sm.regions) > 1
             self._w(1, f"// ---------------------------------------------------- behaviour: {sm.name}")
-            self._w(1, f"state def {_ident(sm.name)} {{")
+            self._w(1, f"state def {_ident(sm.name)}{' parallel' if nested else ''} {{")
             for region in sm.regions:
-                nested = len(sm.regions) > 1
                 d = 2
                 if nested:
-                    self._w(2, f"state {_ident(region)}Region parallel {{")
+                    self._w(2, f"state region_{_ident(region)} {{")
                     d = 3
+                initial = next((s for s in sm.states_in(region) if s.initial), None)
+                if initial is not None:
+                    self._w(d, f"entry; then {_ident(initial.id)};")
                 for s in sm.states_in(region):
-                    entry = " // initial" if s.initial else ""
-                    self._w(d, f"state {_ident(s.id)} {{{entry}")
+                    self._w(d, f"state {_ident(s.id)} {{")
                     self.lines += _doc(s.description, d + 1)
                     for sig, expr in s.actions.items():
                         self._w(d + 1, f"do action set_{_ident(sig)} {{ /* {sig} := {expr} */ }}")
@@ -222,6 +274,14 @@ class SysMLEmitter:
                         extra = f" // fork -> {', '.join(t.forks)}"
                     elif t.joins:
                         extra = f" // join <- {', '.join(t.joins)}"
+                    if t.declared_fallback:
+                        # The architecture artefact has to show the same two exits the
+                        # executable one has, and say which of them we added. A SysML model
+                        # that shows only the customer's guard would be describing a plant we
+                        # did not simulate.
+                        extra = (f" // DECLARED FALLBACK (SA-05), not specified by the "
+                                 f"customer: backs up {t.fallback_for}, which is unreachable"
+                                 + extra)
                     self._w(
                         d,
                         f"transition {_ident(t.id)} first {_ident(t.source_state)} "
@@ -231,6 +291,30 @@ class SysMLEmitter:
                     self._w(2, "}")
             self._w(1, "}")
             self._w(0)
+
+    def _emit_satisfaction(self) -> None:
+        """`satisfy <requirement> by <element>` for every resolvable satisfied_by entry."""
+        rows: list[str] = []
+        scenarios = _scenario_ids(self.m)
+        for r in self.m.requirements:
+            if r.status != "active":
+                continue
+            done: set[str] = set()
+            for eid in r.satisfied_by:
+                if eid in scenarios:
+                    continue  # verification scenarios *verify*; see _emit_verification
+                target = sysml_target(self.m, eid)
+                if target is None or target in done:
+                    continue
+                done.add(target)
+                note = f" // {eid}" if target.rsplit(".", 1)[-1] != _ident(eid) else ""
+                rows.append(f"satisfy {_ident(r.id)} by {target};{note}")
+        if not rows:
+            return
+        self._w(1, "// ----------------------------------------------------------- satisfaction")
+        for row in rows:
+            self._w(1, row)
+        self._w(0)
 
     def _emit_allocations(self) -> None:
         """Logical part -> executable realisation. This is the SysML/Modelica bridge."""
@@ -247,18 +331,45 @@ class SysMLEmitter:
         self._w(0)
 
     def _emit_verification(self) -> None:
-        checks = [c for s in self.m.scenarios for c in s.checks]
-        if not checks:
+        cases = _verification_cases(self.m)
+        if not cases:
             return
         self._w(1, "// ----------------------------------------------------------- verification")
-        for c in checks:
-            self._w(1, f"verification def {_ident(c.id)} {{")
-            self._w(2, f"doc /* {c.description} */")
-            self._w(2, f'attribute expression : String default "{c.expression}";')
-            for rid in c.requirement_ids:
-                self._w(2, f"// @verifies {rid}")
+        for vid, doc, attrs, reqs in cases:
+            self._w(1, f"verification def {vid} {{")
+            self.lines += _doc(doc, 2)
+            if reqs:
+                self._w(2, "objective {")
+                for rid in reqs:
+                    self._w(3, f"verify {rid};")
+                self._w(2, "}")
+            for name, value in attrs:
+                self._w(2, f'attribute {name} : String default "{_str(value)}";')
             self._w(1, "}")
         self._w(0)
+
+
+def _verification_cases(model: SystemModel) -> list[tuple[str, str, list[tuple[str, str]], list[str]]]:
+    """(name, doc, string attributes, verified requirement idents) per verification def."""
+    known = {r.id for r in model.requirements}
+    out: list[tuple[str, str, list[tuple[str, str]], list[str]]] = []
+    for sc in model.scenarios:
+        reqs = [r.id for r in model.requirements if sc.id in r.satisfied_by]
+        reqs += [r for r in sc.provenance.requirement_ids if r not in reqs and r in known]
+        out.append((
+            _ident(sc.id),
+            f"acceptance scenario {sc.name}: stop time {sc.stop_time} s, {len(sc.checks)} checks",
+            [("stopTime", f"{sc.stop_time}")],
+            [_ident(r) for r in reqs],
+        ))
+        for c in sc.checks:
+            out.append((
+                _ident(c.id),
+                c.description,
+                [("expression", c.expression)],
+                [_ident(r) for r in c.requirement_ids if r in known],
+            ))
+    return out
 
 
 def emit_sysml(model: SystemModel, out_path: str | Path) -> Path:
@@ -277,65 +388,178 @@ class ParsedSysML:
     """Structural skeleton recovered from emitted text, for the round-trip check."""
 
     parts: set[str] = field(default_factory=set)
+    part_types: dict[str, str] = field(default_factory=dict)
     part_defs: set[str] = field(default_factory=set)
+    part_def_ports: set[tuple[str, str]] = field(default_factory=set)
+    port_defs: set[str] = field(default_factory=set)
     interfaces: set[tuple[str, str]] = field(default_factory=set)
     requirements: set[str] = field(default_factory=set)
+    signals: set[str] = field(default_factory=set)
+    constraints: set[str] = field(default_factory=set)
+    exhibits: set[tuple[str, str]] = field(default_factory=set)
     states: set[str] = field(default_factory=set)
+    regions: set[str] = field(default_factory=set)
+    initials: set[str] = field(default_factory=set)
     transitions: set[str] = field(default_factory=set)
     allocations: set[str] = field(default_factory=set)
+    satisfies: set[tuple[str, str]] = field(default_factory=set)
+    verifications: set[str] = field(default_factory=set)
+    verifies: set[tuple[str, str]] = field(default_factory=set)
+    #: Lines that look like SysML but matched no pattern. Must be empty: a non-empty list means
+    #: the emitter learned a construct the parser does not know, i.e. parse_back is stale.
+    unparsed: list[str] = field(default_factory=list)
 
 
-_RE_PART = re.compile(r"^\s*part\s+(\w+)\s*:\s*(\w+)")
-_RE_PART_DEF = re.compile(r"^\s*part\s+def\s+(\w+)")
-_RE_REQ = re.compile(r"^\s*requirement\s+def\s+(\w+)")
-_RE_IFACE = re.compile(r"^\s*interface\s+\w+\s+connect\s+([\w.]+)\s+to\s+([\w.]+)")
-_RE_STATE = re.compile(r"^\s*state\s+(\w+)\s*\{")
-_RE_TRANS = re.compile(r"^\s*transition\s+(\w+)\s+first")
-_RE_ALLOC = re.compile(r"^\s*allocation\s+\w+\s+allocate\s+(\w+)\s+to")
+_ID = r"[A-Za-z_]\w*"
+_Q = r"[A-Za-z_][\w.:]*"
+_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("package", re.compile(rf"^package ({_ID}) \{{$")),
+    ("port_def", re.compile(rf"^port def ({_ID}) \{{$")),
+    ("string_attr", re.compile(rf'^attribute ({_ID}) : String default "(?:[^"\\]|\\.)*";$')),
+    ("requirement", re.compile(rf"^requirement ({_ID}) \{{$")),
+    ("part_def", re.compile(rf"^part def ({_ID}) \{{$")),
+    ("port", re.compile(rf"^port ({_ID}) : ({_ID});$")),
+    ("typed_attr", re.compile(rf"^attribute ({_ID}) : (Real|Boolean|Integer|String);$")),
+    ("system", re.compile(rf"^part ({_ID}) \{{$")),
+    ("part", re.compile(rf"^part ({_ID}) : ({_ID}) \{{$")),
+    ("redefine", re.compile(rf"^attribute redefines ({_ID}) = (.+);$")),
+    ("interface", re.compile(rf"^interface ({_ID}) connect ({_Q}) to ({_Q});$")),
+    ("constraint", re.compile(rf"^constraint ({_ID}) \{{$")),
+    ("exhibit", re.compile(rf"^exhibit state ({_ID}) : ({_ID});$")),
+    ("state_def", re.compile(rf"^state def ({_ID})(?: parallel)? \{{$")),
+    ("region", re.compile(rf"^state region_({_ID}) \{{$")),
+    ("state", re.compile(rf"^state ({_ID}) \{{$")),
+    ("entry", re.compile(rf"^entry; then ({_ID});$")),
+    ("action", re.compile(rf"^do action set_({_ID}) \{{ /\* .* \*/ \}}$")),
+    ("transition", re.compile(rf"^transition ({_ID}) first ({_ID}) if (.+) then ({_ID});$")),
+    ("satisfy", re.compile(rf"^satisfy ({_ID}) by ({_Q});$")),
+    ("allocation", re.compile(rf"^allocation ({_ID}) allocate ({_ID}) to ({_Q});$")),
+    ("verification", re.compile(rf"^verification def ({_ID}) \{{$")),
+    ("objective", re.compile(r"^objective \{$")),
+    ("verify", re.compile(rf"^verify ({_ID});$")),
+    ("doc", re.compile(r"^doc /\* .* \*/$")),
+    ("close", re.compile(r"^\}$")),
+]
+
+
+def _code(line: str) -> str:
+    """The statement on a line, without its trailing // comment (doc comments are kept whole)."""
+    s = line.strip()
+    if s.startswith("doc /*") or s.startswith("do action"):
+        return s
+    return s.split(" //", 1)[0].rstrip() if not s.startswith("//") else ""
 
 
 def parse_back(text: str) -> ParsedSysML:
     out = ParsedSysML()
-    for line in text.splitlines():
-        if m := _RE_PART_DEF.match(line):
-            out.part_defs.add(m.group(1))
-        elif m := _RE_PART.match(line):
-            out.parts.add(m.group(1))
-        if m := _RE_REQ.match(line):
+    stack: list[tuple[str, str]] = []
+    for raw in text.splitlines():
+        code = _code(raw)
+        if not code:
+            continue
+        kind, m = next(((k, p.match(code)) for k, p in _PATTERNS if p.match(code)), (None, None))
+        if kind is None or m is None:
+            out.unparsed.append(raw.strip())
+            continue
+        top = stack[-1] if stack else ("", "")
+        if kind == "port_def":
+            out.port_defs.add(m.group(1))
+        elif kind == "requirement":
             out.requirements.add(m.group(1))
-        if m := _RE_IFACE.match(line):
-            out.interfaces.add((m.group(1), m.group(2)))
-        if m := _RE_STATE.match(line):
+        elif kind == "part_def":
+            out.part_defs.add(m.group(1))
+        elif kind == "port" and top[0] == "part_def":
+            out.part_def_ports.add((top[1], m.group(1)))
+        elif kind == "typed_attr" and top[0] == "system":
+            out.signals.add(m.group(1))
+        elif kind == "part":
+            out.parts.add(m.group(1))
+            out.part_types[m.group(1)] = m.group(2)
+        elif kind == "interface":
+            out.interfaces.add((m.group(2), m.group(3)))
+        elif kind == "constraint":
+            out.constraints.add(m.group(1))
+        elif kind == "exhibit":
+            out.exhibits.add((m.group(1), m.group(2)))
+        elif kind == "region":
+            out.regions.add(m.group(1))
+        elif kind == "state":
             out.states.add(m.group(1))
-        if m := _RE_TRANS.match(line):
+        elif kind == "entry":
+            out.initials.add(m.group(1))
+        elif kind == "transition":
             out.transitions.add(m.group(1))
-        if m := _RE_ALLOC.match(line):
-            out.allocations.add(m.group(1))
+        elif kind == "satisfy":
+            out.satisfies.add((m.group(1), m.group(2)))
+        elif kind == "allocation":
+            out.allocations.add(m.group(2))
+        elif kind == "verification":
+            out.verifications.add(m.group(1))
+        elif kind == "verify":
+            owner = next((name for k, name in reversed(stack) if k == "verification"), "")
+            out.verifies.add((owner, m.group(1)))
+
+        if code.endswith("{"):
+            stack.append((kind, m.group(1) if m.groups() else ""))
+        elif kind == "close" and stack:
+            stack.pop()
     return out
 
 
 def round_trip_check(model: SystemModel, text: str) -> list[str]:
-    """Every IR element must be findable in the emitted text. Returns a list of losses."""
+    """Every IR element and relationship must be findable in the emitted text. Returns losses."""
     parsed = parse_back(text)
-    problems: list[str] = []
+    problems: list[str] = [f"parse_back does not recognise emitted line: {u!r}" for u in parsed.unparsed]
     for b in model.blocks:
         if _ident(b.id) not in parsed.parts:
             problems.append(f"block '{b.id}' did not survive emission")
+        for p in b.ports:
+            if (_part_def_name(b), _ident(p.name)) not in parsed.part_def_ports:
+                problems.append(f"port '{b.id}.{p.id}' is not declared on part def {_part_def_name(b)}")
     for r in model.requirements:
         if _ident(r.id) not in parsed.requirements:
             problems.append(f"requirement '{r.id}' did not survive emission")
     for c in model.connections:
         (sb, sp), (tb, tp) = c.endpoints()
-        pair = (f"{_ident(sb)}.{_ident(sp)}", f"{_ident(tb)}.{_ident(tp)}")
+        emitter = SysMLEmitter(model)
+        pair = (emitter._port_ref(sb, sp), emitter._port_ref(tb, tp))
         if pair not in parsed.interfaces:
             problems.append(f"connection '{c.id}' did not survive emission")
+    for s in model.signals:
+        if _ident(s.name) not in parsed.signals:
+            problems.append(f"signal '{s.id}' did not survive emission")
+    for il in model.interlocks:
+        if _ident(il.id) not in parsed.constraints:
+            problems.append(f"interlock '{il.id}' did not survive emission")
     for sm in model.state_machines:
+        if (_ident(sm.id), _ident(sm.name)) not in parsed.exhibits:
+            problems.append(f"state machine '{sm.id}' is not exhibited by the system")
         for s in sm.states:
             if _ident(s.id) not in parsed.states:
                 problems.append(f"state '{s.id}' did not survive emission")
+            if s.initial and _ident(s.id) not in parsed.initials:
+                problems.append(f"initial state '{s.id}' lost its entry marker")
         for t in sm.transitions:
             if _ident(t.id) not in parsed.transitions:
                 problems.append(f"transition '{t.id}' did not survive emission")
+    scenarios = _scenario_ids(model)
+    for r in model.requirements:
+        if r.status != "active":
+            continue
+        for eid in r.satisfied_by:
+            if eid in scenarios:
+                if (_ident(eid), _ident(r.id)) not in parsed.verifies:
+                    problems.append(f"'{r.id}' verified by scenario '{eid}' has no verify relationship")
+                continue
+            target = sysml_target(model, eid)
+            if target is not None and (_ident(r.id), target) not in parsed.satisfies:
+                problems.append(f"'{r.id}' satisfied by '{eid}' has no satisfy relationship")
+    for vid, _doc_text, _attrs, reqs in _verification_cases(model):
+        if vid not in parsed.verifications:
+            problems.append(f"verification '{vid}' did not survive emission")
+        for rid in reqs:
+            if (vid, rid) not in parsed.verifies:
+                problems.append(f"verification '{vid}' lost 'verify {rid}'")
     return problems
 
 

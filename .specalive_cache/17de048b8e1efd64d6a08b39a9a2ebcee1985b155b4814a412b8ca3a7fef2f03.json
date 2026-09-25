@@ -1,0 +1,14 @@
+{
+  "text": "{\n  \"choice\": \"\",\n  \"confidence\": 0.0,\n  \"reason\": \"The component is a charging tank with initial pure-water charge and specific parameters (area, height, max_level, port_level_note). None of the provided Modelica classes match this description exactly.\",\n  \"parameter_map\": {}\n}",
+  "tier": "t1_local_small",
+  "model": "qwen3:4b",
+  "prompt_tokens": 1433,
+  "completion_tokens": 66,
+  "latency_s": 16.714210510253906,
+  "data": {
+    "choice": "",
+    "confidence": 0.0,
+    "reason": "The component is a charging tank with initial pure-water charge and specific parameters (area, height, max_level, port_level_note). None of the provided Modelica classes match this description exactly.",
+    "parameter_map": {}
+  }
+}

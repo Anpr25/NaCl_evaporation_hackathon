@@ -42,24 +42,53 @@ USABLE_VRAM_GB = 3.7  # 4096 MiB card with the display on the iGPU, minus driver
 
 EXTRACT_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "required": ["subject", "predicate", "value", "quote"],
+    "required": ["subject", "predicate", "value", "unit", "quote"],
     "properties": {
-        "subject": {"type": "string"},
-        "predicate": {"type": "string"},
-        "value": {"type": "string"},
-        "unit": {"type": "string"},
-        "quote": {"type": "string"},
+        # Every field carries a description. Ollama feeds the schema to the constrained
+        # decoder, and the descriptions are the cheapest steering available -- without them
+        # a small model happily writes a whole clause into `value`.
+        "subject": {
+            "type": "string",
+            "description": "The tag or identifier the fact is about, e.g. B5, V8, LIS-301. "
+                           "A short tag, never a sentence.",
+        },
+        "predicate": {
+            "type": "string",
+            "description": "What property of the subject is being stated, e.g. "
+                           "target_concentration, minimum_level, cooling_temperature.",
+        },
+        "value": {
+            "type": "string",
+            "description": "ONLY the number, with no words and no unit. "
+                           "For '0.13 m' answer '0.13'. For 'at least 25 degC' answer '25'.",
+        },
+        "unit": {
+            "type": "string",
+            "description": "Only the unit symbol, e.g. m, kg/kg, kg/s, degC. Empty if none.",
+        },
+        "quote": {
+            "type": "string",
+            "description": "The sentence copied character for character from the text.",
+        },
     },
 }
 
 EXTRACT_PROMPT = """\
-Extract the single engineering fact stated in the text below.
+Extract the single engineering fact stated in the text.
 
-Rules:
-- `quote` must be copied VERBATIM from the text. If you cannot quote it, do not answer.
-- Never convert, round or infer a number that is not written down.
-- `subject` is the tag or identifier the fact is about.
-- Answer JSON only.
+WORKED EXAMPLE
+text:  "V11 shall transfer the mixed batch from B3 to B4 until LIS-301 is below 0.01 m."
+answer: {{"subject": "LIS-301", "predicate": "low_level_threshold", "value": "0.01",
+          "unit": "m", "quote": "V11 shall transfer the mixed batch from B3 to B4 until \
+LIS-301 is below 0.01 m."}}
+
+Note what `value` is: the bare number 0.01. Not "below 0.01 m", not "0.01 m", not a phrase.
+
+RULES
+- `value` is ONLY the number. Strip every word and the unit.
+- `unit` is ONLY the unit symbol.
+- `quote` must be copied from the text character for character.
+- Never convert or round. Report what the text says, even if it looks wrong.
 
 TEXT
 {text}
@@ -125,24 +154,48 @@ def score_extract(data: Any, case: dict[str, str]) -> tuple[bool, str]:
 
 PICK_SCHEMA: dict[str, Any] = {
     "type": "object",
-    "required": ["choice_index"],
-    "properties": {"choice_index": {"type": "integer"}, "reason": {"type": "string"}},
+    "required": ["choice"],
+    "properties": {
+        "choice": {
+            "type": "string",
+            "description": "The full dotted class name, copied exactly from the list. "
+                           "Use the empty string if none of them fit.",
+        },
+        "reason": {"type": "string"},
+    },
 }
 
 PICK_PROMPT = """\
 An engineering document describes a component as: "{query}"
 
-Choose the single best Modelica class from these candidates:
+Which of these Modelica classes models exactly that component?
 
 {shortlist}
 
-Answer JSON only, with choice_index set to the number of your choice.
+The candidates are in no particular order. Compare each description against the text above.
+
+Answer JSON only, copying the full dotted class name exactly as written:
+  {{"choice": "Modelica.Some.Package.ClassName"}}
+If none of them fit, answer {{"choice": ""}}.
 """
 
 
 def build_pick_cases(catalog_path: str | Path, n: int = 6) -> list[dict[str, Any]]:
-    """Ground truth generated from the catalog itself: the query is a class's own description,
-    the correct answer is that class, and the distractors are its nearest neighbours."""
+    """Ground truth generated from the catalog itself: the query is a class's own description
+    and the correct answer is that class.
+
+    Two subtleties, both of which made the first version of this benchmark lie:
+
+    * The shortlist is **shuffled with a fixed seed**. Otherwise the correct answer is always
+      index 0 -- the query is the class's own description, so BM25 ranks it first -- and a
+      model scores 100% by always replying "0".
+
+    * **Any candidate whose description is identical counts as correct.** MSL has genuine
+      near-duplicates: `Spice3.Basic.C_Capacitor` and `Analog.Basic.Capacitor` are both
+      described as "Ideal linear electrical capacitor", word for word. Asking a model to
+      distinguish them from the shown information is unanswerable, and marking one wrong
+      measures nothing but our own arbitrariness.
+    """
     from ..catalog.retrieve import CatalogIndex
 
     ix = CatalogIndex.from_file(catalog_path)
@@ -155,10 +208,6 @@ def build_pick_cases(catalog_path: str | Path, n: int = 6) -> list[dict[str, Any
         "Modelica.Electrical.Analog.Basic.Inductor",
     ][:n]
 
-    # The shortlist is shuffled with a fixed seed before it is shown. Without that, the
-    # correct answer is always index 0 -- the query is the class's own description, so BM25
-    # ranks it first -- and a model could score 100% by always replying "0". A benchmark that
-    # a constant answer can win measures nothing.
     rng = random.Random(20260923)
 
     cases: list[dict[str, Any]] = []
@@ -171,15 +220,35 @@ def build_pick_cases(catalog_path: str | Path, n: int = 6) -> list[dict[str, Any
             continue  # retrieval did not surface it; not the model's fault, skip
         shuffled = list(hits)
         rng.shuffle(shuffled)
+        target = entry.comment.strip().lower()
+        acceptable = sorted(
+            h.entry.key for h in shuffled if h.entry.comment.strip().lower() == target
+        )
         cases.append(
             {
                 "query": entry.comment,
                 "shortlist": ix.render_shortlist(shuffled, max_params=4),
-                "answer": next(i for i, h in enumerate(shuffled) if h.entry.key == key),
+                "answers": acceptable,
+                "offered": [h.entry.key for h in shuffled],
+                "ambiguous": len(acceptable) > 1,
                 "key": key,
             }
         )
     return cases
+
+
+def _score_pick(data: Any, case: dict[str, Any]) -> tuple[bool, str]:
+    """Correct means the named class is one of the acceptable ones. A name that was never
+    offered is a hallucination and is reported as such, not merely as a wrong pick."""
+    choice = str((data or {}).get("choice", "")).strip()
+    if not choice:
+        return False, "declined to choose"
+    if choice in case["answers"]:
+        return True, "ok"
+    if choice not in case["offered"]:
+        return False, f"hallucinated a class not in the list: {choice}"
+    want = ", ".join(k.rsplit(".", 1)[-1] for k in case["answers"])
+    return False, f"chose {choice.rsplit('.', 1)[-1]}, wanted {want}"
 
 
 # ------------------------------------------------------------------------------- the runner
@@ -229,8 +298,18 @@ def bake_off(
     results: list[ModelResult] = []
     for cand in candidates:
         tag = cand["tag"]
+        # num_gpu 99 forces every layer onto the card. Measured on a 4 GB T1000: without it
+        # Ollama leaves ~1.6 GB unused and runs at 33% CPU for a 3.2x slowdown. think=false
+        # matters because a reasoning model otherwise returns an EMPTY `response` field.
         provider = OllamaProvider(
-            "bakeoff", {"model": tag, "base_url": base_url, "timeout_s": 180}
+            "bakeoff",
+            {
+                "model": tag,
+                "base_url": base_url,
+                "timeout_s": 300,
+                "options": {"num_gpu": 99, "num_ctx": 4096, **cand.get("options", {})},
+                "think": cand.get("think", False),
+            },
         )
         res = ModelResult(
             tag=tag,
@@ -260,8 +339,7 @@ def bake_off(
             prompt = PICK_PROMPT.format(query=case["query"], shortlist=case["shortlist"])
             ok, why = _one(
                 provider, prompt, PICK_SCHEMA,
-                lambda d: (d.get("choice_index") == case["answer"],
-                           f"chose {d.get('choice_index')}, wanted {case['answer']}"),
+                lambda d: _score_pick(d, case),
                 latencies, tok_rates, res,
             )
             res.pick_pass += int(ok)

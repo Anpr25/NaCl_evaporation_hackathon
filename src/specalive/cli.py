@@ -22,8 +22,14 @@ from rich.console import Console
 from rich.table import Table
 
 from .pipeline import Pipeline, PipelineConfig, PipelineEvent
+from .settings import load_env
 
-app = typer.Typer(add_completion=False, help="From specs to live engineering models.")
+# Providers read os.getenv in their constructor, so the env file has to be in place before
+# any of them is built. Doing it here means every command gets it, including `doctor`.
+load_env()
+
+app = typer.Typer(add_completion=False,
+                  help="ModelAlchemist - engineering evidence to SysML v2 and running Modelica.")
 con = Console()
 
 _STATUS_STYLE = {"ok": "green", "warn": "yellow", "fail": "red", "skip": "dim", "start": "cyan"}
@@ -56,9 +62,10 @@ def _router(mode: str):
 def doctor() -> None:
     """Check every external dependency and say plainly what is missing."""
     from .llm.router import Router
+    from .settings import key_status
     from .verify.omc import describe_environment
 
-    t = Table(title="SpecAlive environment", show_lines=False)
+    t = Table(title="ModelAlchemist environment", show_lines=False)
     t.add_column("Component")
     t.add_column("Status")
     t.add_column("Detail", overflow="fold")
@@ -71,6 +78,16 @@ def doctor() -> None:
         env.get("omc_version") or env.get("error", ""),
     )
     t.add_row("Python", "[green]ok[/]", sys.version.split()[0])
+
+    loaded = load_env()
+    t.add_row(
+        "Env file",
+        "[green]loaded[/]" if loaded else "[yellow]none[/]",
+        ", ".join(loaded) if loaded else "no .env found; using shell environment only",
+    )
+    for var, state in key_status().items():
+        good = state.startswith("set (")
+        t.add_row(f"  {var}", "[green]ok[/]" if good else "[dim]--[/]", state)
 
     cat = Path("out/catalog.jsonl")
     n = sum(1 for _ in cat.open(encoding="utf-8")) if cat.exists() else 0
@@ -146,6 +163,10 @@ def run(
     stop_time: Optional[float] = typer.Option(None, "--stop-time"),
     no_sim: bool = typer.Option(False, "--no-sim", help="Compile only; skip simulation"),
     repair: int = typer.Option(6, help="Maximum repair iterations"),
+    from_sysml: bool = typer.Option(
+        False, "--from-sysml",
+        help="C-08: build the Modelica by re-reading the emitted SysML, not from the IR",
+    ),
 ) -> None:
     """Run the whole pipeline: evidence in, SysML + Modelica + results + report out."""
     cfg = PipelineConfig(
@@ -158,6 +179,7 @@ def run(
         stop_time=stop_time,
         repair_iterations=repair,
         skip_simulation=no_sim,
+        from_sysml=from_sysml,
     )
     result = Pipeline(cfg, _router(provider)).run(on_event=_print)
 
@@ -179,7 +201,20 @@ def run(
     if not result.ok:
         con.print("\n[red]HARD GATE NOT MET[/] - the Modelica does not compile and run.")
         raise typer.Exit(1)
-    con.print("\n[green]HARD GATE MET[/] - the model compiles and simulates.")
+
+    # C10. Three states, not two. A model can compile, simulate to completion, and have
+    # integrated a system in which nothing happens -- which is what printing "HARD GATE MET"
+    # above "0/10 acceptance checks" used to mean. Say so.
+    if result.gate.get("live") is False:
+        con.print("\n[yellow]HARD GATE MET, BUT THE MODEL IS INERT[/]")
+        con.print(f"  {result.gate.get('liveness', '')}")
+        con.print(
+            "  It compiles and simulates, so the gate is met -- but nothing happens in the\n"
+            "  run, so the simulation is not evidence that the system was modelled correctly.\n"
+            "  Usually extraction missed an actuator or a connection: check the report's gap list."
+        )
+        return
+    con.print("\n[green]HARD GATE MET[/] - the model compiles, simulates and runs its sequence.")
 
 
 # ------------------------------------------------------------------------------------ gate
@@ -429,7 +464,7 @@ def serve(
     import uvicorn
 
     os.environ["SPECALIVE_PROVIDER"] = provider
-    con.print(f"SpecAlive on http://{host}:{port}  (provider={provider})")
+    con.print(f"ModelAlchemist on http://{host}:{port}  (provider={provider})")
     uvicorn.run("specalive.web.app:app", host=host, port=port, log_level="warning")
 
 
@@ -451,12 +486,23 @@ def ir_diff(
     for label, got, want in (
         ("requirements", {r.id for r in a.requirements}, {r.id for r in b.requirements}),
         ("blocks", {x.id for x in a.blocks}, {x.id for x in b.blocks}),
-        ("connections", {(c.source, c.target) for c in a.connections},
-         {(c.source, c.target) for c in b.connections}),
-        ("signals", {s.id for s in a.signals}, {s.id for s in b.signals}),
+        # Edges compared block-to-block, not endpoint-string to endpoint-string. The
+        # extractor reads a vessel's drain port off the drawing as `bottom_port` and the
+        # reference calls it `out`; both are honest readings of the same documents, and a
+        # metric that scores one of them wrong is measuring vocabulary, not extraction. This
+        # row read 0% against a topologically identical graph, which sent us looking for a
+        # fault that was not there.
+        ("connections", _edges(a), _edges(b)),
+        # Likewise signals: `cmd_B5_Heater` and `cmd_heater` are the same actuator if they
+        # drive the same thing. What matters is the binding into the plant.
+        ("signals", {_signal_key(x) for x in a.signals}, {_signal_key(x) for x in b.signals}),
         ("states", {s.id for sm in a.state_machines for s in sm.states},
          {s.id for sm in b.state_machines for s in sm.states}),
         ("parameters", {p.id for p in a.parameters}, {p.id for p in b.parameters}),
+        # Naming-independent: node-to-node routes with lumped paths collapsed, and the series
+        # element set each route carries. Port and path names may differ; topology may not.
+        ("topology", set(_routes(a)), set(_routes(b))),
+        ("series groups", {(k, v) for k, v in _routes(a).items() if v}, {(k, v) for k, v in _routes(b).items() if v}),
     ):
         hit = len(got & want)
         total_hit += hit
@@ -467,6 +513,152 @@ def ir_diff(
     con.print(t)
     con.print(f"overall recall: [bold]{100 * total_hit // max(total_ref, 1)}%[/]")
 
+    # Naming agreement is worth knowing and worth keeping out of the score. A low number here
+    # costs nothing at simulation time -- the emitter resolves names against the catalog --
+    # but it is what a reviewer notices first when reading the SysML beside the source.
+    same = len({s_.id for s_ in a.signals} & {s_.id for s_ in b.signals})
+    con.print(
+        f"vocabulary agreement: {same}/{len(b.signals)} signal ids spelled the same "
+        f"(not scored: different names for the same bound signal are not an extraction error)"
+    )
+
+
+def _edges(m) -> set[tuple[str, str, int]]:
+    """Block-to-block edges with multiplicity, ignoring port spelling.
+
+    The index disambiguates parallel edges: B3 feeds B4 once, but a header feeding a vessel
+    twice is two edges and losing one of them is a real miss.
+    """
+    seen: dict[tuple[str, str], int] = {}
+    out: set[tuple[str, str, int]] = set()
+    for c in m.connections:
+        key = (c.source.split(".")[0], c.target.split(".")[0])
+        seen[key] = seen.get(key, 0) + 1
+        out.add((*key, seen[key]))
+    return out
+
+
+def _signal_key(s) -> tuple[str, str]:
+    """Identify a signal by what it is wired to, falling back to its id when unbound."""
+    return (s.role, (s.binding or f"#{s.id.lower().replace('_', '')}"))
+
+
+def _routes(m) -> dict[tuple[str, str], frozenset[str]]:
+    """(source part, target part) -> series elements, collapsing lumped path blocks: a block with
+    exactly one inbound and one outbound connection whose outbound side carries series elements."""
+    ins: dict[str, list] = {}
+    outs: dict[str, list] = {}
+    for c in m.connections:
+        outs.setdefault(c.source.split(".")[0], []).append(c)
+        ins.setdefault(c.target.split(".")[0], []).append(c)
+    lumped = {b for b in outs if len(outs[b]) == 1 and len(ins.get(b, [])) == 1 and outs[b][0].series_elements}
+    routes: dict[tuple[str, str], frozenset[str]] = {}
+    for c in m.connections:
+        src, dst = c.source.split(".")[0], c.target.split(".")[0]
+        if src in lumped:
+            continue
+        series = set(c.series_elements)
+        while dst in lumped:
+            nxt = outs[dst][0]
+            series |= set(nxt.series_elements)
+            dst = nxt.target.split(".")[0]
+        routes[(src, dst)] = frozenset(series)
+    return routes
+
 
 if __name__ == "__main__":
     app()
+
+
+@app.command()
+def faults(
+    target: Path = typer.Argument(..., help="A generated .mo that already compiles"),
+    model: str = typer.Option(..., "--model", "-m", help="Fully qualified model to check"),
+    library: list[Path] = typer.Option(
+        [Path("modelica/SpecAlive.mo")], "--library", "-l", help="Support .mo files"
+    ),
+    provider: str = typer.Option("auto", help="auto | local | cloud | replay | none"),
+    stop_time: Optional[float] = typer.Option(None, "--stop-time",
+                                              help="Also require the model to simulate"),
+    catalog: Path = typer.Option(Path("out/catalog.jsonl")),
+    iterations: int = typer.Option(4, help="Repair budget per fault"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Write the matrix as JSON"),
+) -> None:
+    """C-AI-5. Break a working model in known ways and measure what the repair loop recovers.
+
+    A packet that happens to compile exercises none of the repair code. This makes the
+    failure paths run on demand, and turns "we have AI repair" into a number we can defend.
+    Run it twice -- `--provider none` then `--provider cloud` -- to get the honest delta.
+    """
+    import shutil
+    import tempfile
+
+    from .repair.faults import FAULTS, inject
+    from .repair.loop import RepairLoop
+    from .verify.omc import OmcRunner
+
+    load_env()
+    source = target.read_text(encoding="utf-8")
+    index = None
+    if catalog.exists():
+        from .catalog.retrieve import CatalogIndex
+
+        index = CatalogIndex.from_file(catalog)
+
+    router = _router(provider)
+    rows: list[dict] = []
+
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        libs = [Path(shutil.copy(lib, work / Path(lib).name)) for lib in library]
+        runner = OmcRunner(workdir=str(work / "omc"))
+
+        # A baseline that does not pass makes every later number meaningless.
+        probe = work / target.name
+        probe.write_text(source, encoding="utf-8")
+        base = runner.check(model, [probe, *libs])
+        if not base.ok:
+            con.print(f"[red]baseline does not compile[/]: {base.summary()}")
+            raise typer.Exit(1)
+        con.print(f"baseline: {base.summary()}\n")
+
+        for f in FAULTS:
+            broken = inject(source, f)
+            if broken is None:
+                rows.append({"id": f.id, "outcome": "n/a", "detail": "pattern absent from this model"})
+                continue
+            probe.write_text(broken, encoding="utf-8")
+            before = runner.check(model, [probe, *libs])
+            if before.ok and not stop_time:
+                # It slipped past checkModel. That is the C-AI-1 case, and without a stop
+                # time we cannot see it -- so say so rather than scoring it as a pass.
+                rows.append({"id": f.id, "outcome": "undetected",
+                             "detail": "passes checkModel; rerun with --stop-time"})
+                continue
+            loop = RepairLoop(runner, router, max_iterations=iterations, index=index)
+            outcome = loop.run(model, probe, libs, stop_time=stop_time)
+            used = {s.method for s in outcome.steps}
+            rows.append({
+                "id": f.id,
+                "outcome": "recovered" if outcome.ok else "declared gap",
+                "iterations": outcome.iterations,
+                "method": "+".join(sorted(used)) or "-",
+                "detail": outcome.summary(),
+                "surfaces_at": f.surfaces_at,
+            })
+
+    t = Table(title=f"Fault injection -- provider={provider}")
+    for c in ("Fault", "Surfaces at", "Outcome", "Iter", "Method"):
+        t.add_column(c)
+    for r in rows:
+        colour = {"recovered": "green", "declared gap": "yellow"}.get(r["outcome"], "dim")
+        t.add_row(r["id"], r.get("surfaces_at", "-"), f"[{colour}]{r['outcome']}[/]",
+                  str(r.get("iterations", "-")), r.get("method", "-"))
+    con.print(t)
+
+    applied = [r for r in rows if r["outcome"] in ("recovered", "declared gap", "undetected")]
+    ok = [r for r in rows if r["outcome"] == "recovered"]
+    con.print(f"\nrecovered {len(ok)}/{len(applied)} injected fault(s)")
+    if out:
+        out.write_text(json.dumps({"provider": provider, "rows": rows}, indent=2), encoding="utf-8")
+        con.print(f"wrote {out}")

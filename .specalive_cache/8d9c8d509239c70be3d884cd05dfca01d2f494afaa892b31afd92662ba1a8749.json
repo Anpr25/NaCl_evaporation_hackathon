@@ -1,0 +1,14 @@
+{
+  "text": "{\"winner\":\"CR-017\",\"loser\":\"legacy_mo\",\"rule\":\"approved change supersedes legacy record\",\"rationale\":\"The approved change record CR-017 overrides the legacy record, making its temperature limit the effective value.\"}",
+  "tier": "t3_cloud_reasoning",
+  "model": "openai/gpt-oss-120b",
+  "prompt_tokens": 416,
+  "completion_tokens": 216,
+  "latency_s": 2.1976208686828613,
+  "data": {
+    "winner": "CR-017",
+    "loser": "legacy_mo",
+    "rule": "approved change supersedes legacy record",
+    "rationale": "The approved change record CR-017 overrides the legacy record, making its temperature limit the effective value."
+  }
+}

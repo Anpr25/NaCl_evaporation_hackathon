@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import traceback
 import uuid
 from pathlib import Path
 from typing import Any, Iterator
@@ -20,8 +21,11 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from ..pipeline import Pipeline, PipelineConfig
+from ..settings import load_env
 
-app = FastAPI(title="SpecAlive", docs_url="/api/docs")
+load_env()
+
+app = FastAPI(title="ModelAlchemist", docs_url="/api/docs")
 
 STATIC = Path(__file__).parent / "static"
 RUNS = Path("out/runs")
@@ -50,15 +54,43 @@ def index() -> str:
 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
+    """Environment plus the agent roster, so the UI can show who is available to work."""
     from ..verify.omc import describe_environment
 
     env = describe_environment()
     catalog = Path("out/catalog.jsonl")
+    agents: list[dict[str, Any]] = [
+        {"tier": "t0_deterministic", "label": "Parsers", "model": "deterministic",
+         "up": True, "kind": "code"}
+    ]
+    try:
+        from ..llm.router import Router
+
+        r = Router(mode=os.getenv("SPECALIVE_PROVIDER", "auto"))
+        labels = {
+            "t1_local_small": "Extractor", "t1_local_embed": "Retriever",
+            "t2_local_mid": "Extractor+", "t3_cloud_reasoning": "Adjudicator",
+            "t4_cloud_vision": "Diagram reader", "t4_local_vision": "Diagram reader (local)",
+        }
+        for tier, spec in r.cfg["tiers"].items():
+            if spec.get("kind") == "deterministic":
+                continue
+            agents.append({
+                "tier": tier,
+                "label": labels.get(tier, tier),
+                "model": spec.get("model", ""),
+                "up": r.is_available(tier),
+                "kind": "local" if "ollama" in spec.get("kind", "") else "cloud",
+            })
+    except Exception:
+        pass
+
     return {
         "omc": env.get("omc_version"),
         "omc_ok": env.get("omc_version") is not None,
         "catalog_classes": sum(1 for _ in catalog.open(encoding="utf-8")) if catalog.exists() else 0,
         "provider": os.getenv("SPECALIVE_PROVIDER", "auto"),
+        "agents": agents,
     }
 
 
@@ -116,10 +148,19 @@ def stream_events(run_id: str) -> StreamingResponse:
         try:
             for ev in pipeline.stream():
                 yield "data: " + json.dumps(
-                    {"stage": ev.stage, "status": ev.status, "message": ev.message, "data": ev.data},
+                    {
+                        "stage": ev.stage,
+                        "status": ev.status,
+                        "message": ev.message,
+                        "data": ev.data,
+                        # Wall-clock elapsed. Without it the UI redraws instantly and the
+                        # whole run looks faked, which is the opposite of the point.
+                        "elapsed": ev.elapsed_s,
+                    },
                     default=str,
                 ) + "\n\n"
         except Exception as exc:  # a crash must reach the browser, not vanish into the log
+            traceback.print_exc()
             yield "data: " + json.dumps(
                 {"stage": "report", "status": "fail", "message": f"pipeline crashed: {exc!r}"}
             ) + "\n\n"
@@ -132,6 +173,8 @@ def stream_events(run_id: str) -> StreamingResponse:
                 "data": {
                     "artifacts": result.artifacts,
                     "gate": result.gate,
+                    "coverage": result.model.coverage() if result.model else None,
+                    "router": pipeline.router.stats() if pipeline.router else None,
                     "acceptance": (
                         {"passed": result.scorecard.passed, "total": result.scorecard.total}
                         if result.scorecard

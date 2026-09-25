@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
-from .evidence import DecisionRecord, EvidenceClaim, Gap, Source
+from .evidence import Assumption, DecisionRecord, EvidenceClaim, Gap, Question, Source
 
 SCHEMA_VERSION = "1.0.0"
 
@@ -166,6 +166,18 @@ class Transition(BaseModel):
     target_state: str
     guard: str = Field(description="Boolean expression over signal ids and parameter ids")
     effect: str | None = None
+
+    #: True when this transition is not in the customer's specification: it is a declared
+    #: fallback added under SA-05 because the specified guard was *proved* unreachable and the
+    #: sequence would otherwise deadlock. The specified transition is always kept exactly as
+    #: written and evaluated first; this one only catches what it cannot.
+    declared_fallback: bool = False
+    fallback_for: str | None = Field(
+        default=None, description="Id of the specified transition this one backs up"
+    )
+    #: Seconds in the source state after which a declared fallback fires. Derived from how
+    #: long the quantity actually took to reach its limit in the trace, not picked.
+    dwell_timeout: float | None = None
     #: For a split: the region states entered concurrently. For a join: the states awaited.
     forks: list[str] = Field(default_factory=list)
     joins: list[str] = Field(default_factory=list)
@@ -247,6 +259,11 @@ class SystemModel(BaseModel):
     claims: list[EvidenceClaim] = Field(default_factory=list)
     decisions: list[DecisionRecord] = Field(default_factory=list)
     gaps: list[Gap] = Field(default_factory=list)
+    #: The brief requires missing information to be "inferred with a stated assumption, or
+    #: surfaced as a question". These are those two, kept apart from `gaps` so a reviewer can
+    #: find what we invented and what we are asking without reading every warning.
+    assumptions: list[Assumption] = Field(default_factory=list)
+    questions: list[Question] = Field(default_factory=list)
 
     requirements: list[Requirement] = Field(default_factory=list)
     parameters: list[Parameter] = Field(default_factory=list)
@@ -312,4 +329,8 @@ class SystemModel(BaseModel):
             "decisions_provisional": sum(1 for d in self.decisions if d.provisional),
             "gaps": len(self.gaps),
             "gaps_blocking": sum(1 for g in self.gaps if g.severity == "blocking"),
+            "assumptions": len(self.assumptions),
+            "assumptions_unfounded": sum(1 for a in self.assumptions if not a.basis),
+            "questions": len(self.questions),
+            "questions_blocking": sum(1 for q in self.questions if q.blocking),
         }
