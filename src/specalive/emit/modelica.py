@@ -293,6 +293,15 @@ class Binder:
         domain = next((d for d in block.domains if d != "unknown"), None)
         query = f"{block.name} {block.kind} {block.description or ''}"
         hits = self.index.search(query, k=12, domain=domain)
+        # Modelica.Fluid's own connectors (pressure/enthalpy stream ports, array-sized with a
+        # PortsData record per port) are a different convention from the causal
+        # SpecAlive.Interfaces ports every other fluid-domain part in this plant binds to
+        # (SpecAlive.Transport.*, SpecAlive.Sources.*). resolve_ports's array/count-modifier
+        # logic is built for the latter; against the former it produced `connect(TK.ports,
+        # ...)` to a nPorts=0 array and a fluid discharge wired to a thermal heatPort. A vessel
+        # a hand-built SpecAlive template already covers should not be offered the mismatched
+        # standard-library one at all.
+        hits = [h for h in hits if not h.entry.key.startswith("Modelica.Fluid.")]
         if not hits:
             return None
 

@@ -58,6 +58,10 @@ HEADER_SYNONYMS: dict[str, tuple[str, ...]] = {
     "region": ("region", "branch", "thread", "parallel"),
     "next": ("next", "next state", "successor", "goto"),
     "ownership": ("ownership", "control source", "controlled by", "actuation type"),
+    #: Which existing part a global/shared value applies to -- distinct from "id": a scope
+    #: column names the SAME part on many rows (every setpoint for one tank), so it must never
+    #: be mistaken for a row identifier.
+    "scope": ("scope", "tag / scope", "applies to"),
 }
 
 _NUM = re.compile(r"^\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*([A-Za-z%/°.^0-9()·]*)\s*$")
@@ -66,8 +70,17 @@ _NUM = re.compile(r"^\s*([-+]?\d*\.?\d+(?:[eE][-+]?\d+)?)\s*([A-Za-z%/°.^0-9()�
 def normalise_header(cell: str) -> str | None:
     c = re.sub(r"[^a-z0-9 /]", " ", (cell or "").lower()).strip()
     c = re.sub(r"\s+", " ", c)
+    # An exact match always outranks a fuzzy one, tried across every predicate before any
+    # predicate's prefix rule runs. Without this, 'Tag / Scope' matched 'id' on its "tag "
+    # prefix before 'scope' ever got a chance at its own exact synonym -- and a scope column,
+    # read as an id, hands a shared part's name to every row that merely refers to it, merging
+    # unrelated facts (a tank's own equipment record and every setpoint that just cites it)
+    # into one entity.
     for predicate, synonyms in HEADER_SYNONYMS.items():
-        if c in synonyms or any(c.startswith(s + " ") or c == s for s in synonyms):
+        if c in synonyms:
+            return predicate
+    for predicate, synonyms in HEADER_SYNONYMS.items():
+        if any(c.startswith(s + " ") for s in synonyms):
             return predicate
     return None
 
@@ -179,6 +192,13 @@ def claims_from_table(doc: Document, block: DocBlock, seq: Iterable[int]) -> lis
             if vals and len(vals) == len(set(vals)):
                 id_col = j
                 break
+        if id_col is None:
+            # Nothing is unique, e.g. a register carrying revision history where the same
+            # named parameter legitimately repeats across superseded and current rows. Fall
+            # back to the first column, exactly as the docstring says: it is still where every
+            # register we have seen puts the row's name, distinct or not. Dropping the table
+            # here instead lost every claim in it, silently.
+            id_col = min(best_map) if best_map else None
         if id_col is None:
             return []
     out: list[EvidenceClaim] = []

@@ -245,7 +245,14 @@ class Assembler:
             everything = " ".join(str(c.value) for c in e.facts.values() if isinstance(c.value, str)).lower()
             ownership = " ".join((e.text("ownership"), e.text("controlsource"))).lower()
             manual = any(w in ownership for w in MANUAL_WORDS)
-            physical_only = manual or any(w in everything for w in PHYSICAL_ONLY_WORDS)
+            # A controller's behaviour is realised by build_behaviour()'s state machine, a
+            # different code path with its own Modelica emission (_emit_controller). Letting it
+            # ALSO enter the L0/L1/L2 binding cascade as ordinary equipment asks that cascade to
+            # invent physics for something that has none of its own -- L2 duly synthesised a
+            # controller out of two equations, one of them referencing a member no plain
+            # RealInput has.
+            is_controller = "controller" in kind.lower()
+            physical_only = manual or is_controller or any(w in everything for w in PHYSICAL_ONLY_WORDS)
             params = self._block_parameters(e, bid)
             for c in e.facts.values():
                 if isinstance(c.value, str):
@@ -307,8 +314,12 @@ class Assembler:
     # ------------------------------------------------------------------ B2 topology
     def build_topology(self) -> None:
         edges = collect_edges(self.entities, self.topo.resolve)
-        bus = [e for e in edges if is_signal_medium(e.medium)
-               and not (self.m.block(ident(e.src)) and self.m.block(ident(e.dst)))]
+        # A command or measurement is a signal-bundle interface whether or not both ends turned
+        # out to be modeled parts -- a controller commanding a real valve is still a Boolean
+        # open/close signal, not a structural connection, and routing it as one collided its
+        # path id with the valve's real fluid path (same id, two Block instances) once the
+        # controller itself was no longer mis-typed as architecture-only.
+        bus = [e for e in edges if is_signal_medium(e.medium)]
         physical = [e for e in edges if e not in bus]
         if bus:
             self._gap("deviation", "controller interfaces",
