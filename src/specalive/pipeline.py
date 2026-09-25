@@ -28,6 +28,7 @@ from .ir.validate import validate
 from .ir.assumptions import AssumptionLog
 from .ir.fallback import apply_declared_fallbacks
 from .repair.loop import RepairLoop
+from .repair.structural import plan_structural_repair
 from .repair.writeback import apply_ir_edits
 from .verify.acceptance import Scorecard, score
 from .verify.diagnose import Diagnosis, diagnose, record
@@ -243,6 +244,22 @@ class Pipeline:
             losses=losses,
         )
 
+    @staticmethod
+    def _structural_diagnostic(outcome: Any) -> str:
+        """What to tell structural repair the compiler said.
+
+        Prefer the loop's own refusal, because it is the more informative sentence: it already
+        names the unbound blocks and the equation deficit. Fall back to the raw diagnostics
+        when the run failed some other way, so this stage still gets the real error rather
+        than a summary of why there isn't one.
+        """
+        last = outcome.steps[-1] if outcome.steps else None
+        if last is not None and last.method == "declared":
+            return last.description
+        if outcome.final is not None and outcome.final.diagnostics:
+            return "\n".join(d.raw for d in outcome.final.diagnostics[:3])
+        return "the model did not compile"
+
     def _build_and_verify(
         self, model: SystemModel, runner: OmcRunner, t0: float
     ) -> Iterator[PipelineEvent]:
@@ -368,7 +385,51 @@ class Pipeline:
                 f"the Modelica is repaired but the SysML will not show the correction",
             )
 
+        # The repair loop can only edit the file the compiler pointed at. When it reports that
+        # no edit could have worked -- a block never bound, so the equations it owes simply do
+        # not exist -- the defect is in the IR, and refusing to act on it would leave the .mo,
+        # the SysML and the IR all describing a plant that cannot run. Correct the IR instead
+        # and rebuild from it; under --from-sysml that is the only path by which the fix
+        # reaches the code at all.
         if not outcome.ok:
+            plan = plan_structural_repair(
+                model,
+                self._structural_diagnostic(outcome),
+                index=index,
+                router=self.router,
+            )
+            # A gap declared on an earlier pass goes stale the moment that block binds, and a
+            # stale blocking gap in the report is worse than none: it describes a defect the
+            # run went on to fix. Re-derive them rather than accumulate.
+            bound_now = {b.id for b in model.blocks if b.modelica_class}
+            model.gaps = [
+                g for g in model.gaps
+                if not (g.id.startswith("GAP-STRUCT-") and g.subject in bound_now)
+            ]
+            for gap in plan.gaps:
+                if not any(g.id == gap.id for g in model.gaps):
+                    model.gaps.append(gap)
+            fresh_s = [e for e in plan.edits if str(e) not in self._written_back]
+            if fresh_s:
+                landed_s = apply_ir_edits(model, fresh_s)
+                self._written_back.update(str(e) for e in fresh_s)
+                if landed_s:
+                    yield self._emit(
+                        "compile", "warn",
+                        f"structural repair ({plan.method}) corrected the IR: "
+                        f"{'; '.join(landed_s)}; re-deriving SysML and Modelica from the "
+                        f"corrected model",
+                        writeback=landed_s,
+                        structural=plan.notes,
+                    )
+                    return "retry"
+            if plan.notes:
+                yield self._emit(
+                    "compile", "warn",
+                    "structural repair found nothing it could correct: " + "; ".join(plan.notes[:3]),
+                    structural=plan.notes,
+                )
+
             yield self._emit("simulate", "skip", "model does not compile")
             return "halt"
 
