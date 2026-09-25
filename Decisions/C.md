@@ -16,7 +16,191 @@ gracefully.
 
 ---
 
-## 2026-09-25 (latest) — repair now corrects the IR, not just the Modelica; SysML→Modelica reaches parity
+## 2026-09-25 (latest) — structural repair: when no edit to the .mo could have worked, correct the IR
+
+**Status: implemented.** 15 new tests in `tests/test_structural.py`, 162 fast tests green
+(the `pdfplumber` failure in §4 is still environment drift, still not ours). New file
+`repair/structural.py`; `writeback.py` gains two edit kinds; one hook in `pipeline.py`.
+
+Found on the TwoTank packet, which C-24 does not help at all — and the reason it does not is
+the interesting part.
+
+### The gap C-24 left, stated precisely
+
+C-24 promotes a **catalog-tier** fix to the IR. That covers a binding we got *wrong*. It does
+nothing for a binding we never *made*, and that is what a judge's packet actually hands us:
+
+```
+ITER  DIAGNOSTIC          METHOD    CHANGE
+0     unbalanced_system   declared  under-determined by 9 equation(s) because 4 block(s)
+                                    never bound: LT_101, LT_102, SRC_101, DRN_101
+```
+
+`_unrepairable_reason()` is right to refuse — no minimal diff conjures a boundary source, and
+a model asked to try invents one, which compiles. But refusing is half an answer. **The defect
+is real and it has an address: the IR.** Stopping there left the `.mo`, the SysML and the IR
+all describing a plant that cannot run, and under `--from-sysml` there was no route by which
+any correction could ever reach the code.
+
+### C-27 | A structural failure produces IR edits, deterministic first, and the graph decides | because "which blocks must exist" is a graph question and "which class realises one" is not | costs one extra build pass, and one model call on packets that need it
+
+Two stages, split on whether the question has an exact answer.
+
+**Stage 1 is a graph rule and costs nothing.** `TK_101` arrived flagged `physical_only`, so
+the emitter skipped it. But the connection register puts it here:
+
+```
+SRC_101 -> L_XV_101 -> TK_101 -> L_XV_102 -> TK_102 -> L_XV_103 -> DRN_101
+                       ^^^^^^                ^^^^^^
+```
+
+It has a simulatable neighbour on its inlet *and* on its outlet. It is an interior node of the
+executable graph, and deleting an interior node severs the path and strands both ends — which
+is exactly the under-determined system reported. No knowledge of what a tank is was required
+to reach that, and none is used.
+
+The same rule leaves `PLC_101` alone, and **that is why it is stated as a graph test rather
+than a list of kinds**. The controller is also flagged `physical_only`, but every edge
+touching it is inbound. It is a terminal, it is realised by a state machine rather than a
+component, and a rule written as "materialise anything that looks like a vessel" would have
+been wrong in both directions at once.
+
+**Stage 2 is the agent, on what stage 1 cannot settle.** Choosing the class is a judgement:
+`TK_101`'s stated `kind` is `"external boundary"` — the extractor read it off prose and it is
+simply wrong, while the graph plainly shows an interior vessel. Four properties keep it safe:
+
+* **one call for every unresolved block**, so token cost does not scale with how broken the
+  packet is;
+* candidates come from the harvested catalog and an off-list answer is **rejected, not
+  escalated on** — the same check that makes `catalog_pick` honest;
+* the shortlist is grounded in the *graph*, not the block's own words (below);
+* declining is a legitimate answer and produces a declared gap.
+
+### Three things that did not work, and what replaced them
+
+**Matching connector *types* rejects every correct answer.** My first shortlist required a
+candidate to expose the same connector types as its bound neighbours. It returned nothing
+usable, and the reason is in `SpecAlive.mo`: connectors mate **complementarily**, not
+identically. `Outlet` (output w, T, avail) mates with `Suction` (input w, T, avail);
+`Discharge` with `Inlet`. Same variables, opposite causality, four different type names. What
+does hold — in MSL and anything that follows it — is that connectors which mate are declared
+side by side in one interfaces package. Matching on the **package** finds
+`SpecAlive.Vessels.Reservoir` from a neighbouring `Suction`; matching on the type cannot.
+
+**`Modelica.Blocks.Interfaces` matches everything, so it means nothing.** Measured over the
+1,402-class harvest:
+
+| share | package |
+| ---: | --- |
+| 0.466 | `Modelica.Blocks.Interfaces` |
+| 0.158 | `Modelica.Electrical.Analog.Interfaces` |
+| 0.141 | `Modelica.Thermal.HeatTransfer.Interfaces` |
+| 0.076 | `Modelica.Mechanics.Rotational.Interfaces` |
+| 0.031 | `Modelica.Fluid.Interfaces` |
+| 0.006 | `SpecAlive.Interfaces` |
+
+One genuine outlier and a long tail of real domain packages. A connector package on half the
+catalog carries no signal, so the cut goes in the gap: **0.30**, measured rather than named so
+it survives a machine with different libraries installed. My first attempt used 0.20 and had
+four points of margin above *electrical* — a domain we bind in, not noise.
+
+**A shortlist with no graph signal is worse than no shortlist.** `LT_101`'s only neighbour is
+the controller, which is not a component, so there is nothing to ground on and BM25 returns
+`Modelica.Blocks.Math.Sqrt` for a level transmitter. Offering that list asks the model to
+choose from candidates whose right answer is absent, and the likely outcome is a component
+that compiles and is wrong. Ungrounded blocks now **never reach the model** — declared gap,
+zero tokens, and the gap says the fix is upstream.
+
+### Token cost, because it is the constraint that actually binds
+
+The first working version sent **35,883 characters** for four blocks: the same twelve-class
+library re-rendered under each one. Against `tpm: 8000` that is one call that cannot succeed.
+Factoring the classes into a single shared table and letting the block entries carry only key
+names brings it to **7,955 characters, ~2,000 tokens** — one call, comfortably inside a
+minute's budget. The cap on the shortlist deliberately bites the *text* search, which is
+ordered last: on a mislabelled block the block's own words are not merely weak, they point the
+wrong way.
+
+### What it does to the packet, and what it does not
+
+| | before | after |
+| --- | --- | --- |
+| L0 bound | 3 | **5** |
+| interior vessels in the executable model | 0 | **2** (deterministic, 0 tokens) |
+| model calls spent reaching that | — | **0** for the materialise, 1 for the binds |
+| compiles | no | **still no** |
+
+`SRC_101` and `DRN_101` bound, both tanks materialised. It still does not compile, and the
+reason is not in C's half — see below.
+
+### ⚠ Affects you
+
+**A and B — this is yours now, and it is the whole remaining gap on this packet.** The IR has
+`"state_machines": []`. Nothing. Meanwhile the report lists, as *resolved* claims that were
+never traced into any IR element: 30 connections, 27 requirements, 26 parameters, 20 states,
+15 transitions. Extraction found them and reconcile resolved them; the IR builder dropped
+them. Consequences, in order: no controller, so all three valves take
+`SA-03-unbound-input-inert` and sit closed; 3/32 requirements satisfied; and `LT_101`/`LT_102`
+arrive as **blocks** when a level transmitter is a `Signal` bound to `TK_101.level`. Nothing
+in the emitter or in either repair stage can fix any of it. C's side of this packet is done.
+
+**D — my gap message conflates two different facts, and it is the bug C.md already fixed
+once.** When `_agent_bindings` catches a router failure, or the model answers for only some
+of the blocks, every undecided block falls into the same branch and reads *"declined to choose
+one"*. That is `RepairOutcome.summary()`'s old "out of quota reported as unfixable" defect,
+reintroduced one layer up. The schema also does not require one decision per block, so a
+truncated answer is indistinguishable from a considered refusal. Reporting defect, not a
+cause, but it will mislead a judge reading the gaps table.
+
+**D — the router treats a rolling limit as terminal, and that is why runs die at 35 s.**
+Measured: 37,351 tokens requested against `tpm: 8000` in a ~35 s run, i.e. 4.7× one minute's
+budget. Two things make it unrecoverable rather than slow:
+
+* `except QuotaExhausted: self.quota.disable(tier)` blacklists the tier **for the whole run**.
+  `disable()` is never cleared, so one 429 at second 20 kills Groq even though the window
+  refills by second 80.
+* there is no `sleep`, no backoff and no `retry_after` anywhere in `llm/`. `quota.allows()`
+  returns False and the tier is *skipped*, never deferred.
+
+Paced, 37k tokens is ~4.7 minutes and the run **completes**. A five-minute run that works
+beats a 35-second one that does not.
+
+**D — the two chains that need a fallback most are the two that do not have one.**
+`extract_claim` ends in `t3_openrouter`; `catalog_pick: [t1_local_small, t3_cloud_reasoning]`
+and `repair_modelica: [t0_deterministic, t3_cloud_reasoning, t4_cloud_vision]` do not list it
+at all. Those two run **last**, so they always arrive after extraction has spent the minute.
+The failure reads `failed on every tier: t3 quota exhausted, t4 unavailable` — OpenRouter was
+configured, allowed in `auto`, free, and never tried. One line each.
+
+**Everyone — the local tier is not a way out on this hardware, and I measured it rather than
+assuming.** Ollama 0.34.4 installed, `qwen3:4b` pulled, `t1_local_small` reports `up` in
+`doctor`. It is still unusable here: the card is a **Quadro P500 with 2 GB**, not the 4 GB
+T1000 `options: {num_gpu: 99}` was tuned on, so every layer on the GPU is an unconditional
+OOM.
+
+| `num_gpu` | result |
+| --- | --- |
+| 99 (config) | OOM — `unable to allocate Vulkan0 buffer` |
+| 16 | 2.9 tok/s, spent all 200 output tokens reasoning, never emitted JSON |
+| 8 | 1.7 tok/s — offloading to the P500 is *slower* than not |
+| 0 (CPU) | 2.8 tok/s, and a 2k-token prompt exceeds `timeout_s: 120` |
+
+The real structural call on CPU timed out and the attempt cost 246 s. qwen3 being a
+*reasoning* model makes it worse: it spends output budget thinking before answering, which is
+pure cost on a multiple-choice task. A non-reasoning 3B (`qwen2.5:3b-instruct-q4_K_M`, already
+in `fallback_models`) is the only local option worth trying, and I have not measured it.
+**Do not change `num_gpu` in the shared `config/models.yaml` on my account** — 99 is correct
+for a 4 GB card and wrong here, which makes it a per-machine setting the file has no way to
+express.
+
+**Everyone — a green NaCl run still proves nothing here either.** NaCl binds everything, so it
+exercises no line of `structural.py`. Both stages are covered by `tests/test_structural.py`
+against a hand-built chain fixture instead; the packet that found the defect was one nobody
+had run.
+
+---
+
+## 2026-09-25 — repair now corrects the IR, not just the Modelica; SysML→Modelica reaches parity
 
 **Status: both green.** `--from-sysml` now scores exactly what the IR path scores. NaCl 8/10,
 `main=8/8`, gate met on both paths. 29 tests in `test_agentic.py`.

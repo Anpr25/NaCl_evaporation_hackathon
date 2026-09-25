@@ -27,6 +27,11 @@ skips a block that already carries a tier and a class, and connector resolution 
 name the class already declares (see `emit/modelica.py`). A corrected value is therefore
 read back, not overwritten.
 
+The same channel carries **structural** repairs (`repair/structural.py`): `materialise` and
+`bind`. Those come from a failure no text edit could have fixed -- a block missing from the
+executable model, or one the tier cascade never bound -- so the IR is not merely the durable
+place to put them, it is the *only* place. See that module for how they are decided.
+
 Owner: C.
 """
 
@@ -36,7 +41,7 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-EditKind = Literal["class", "modifier", "port"]
+EditKind = Literal["class", "modifier", "port", "materialise", "bind"]
 
 
 def _mid(raw: str) -> str:
@@ -97,7 +102,31 @@ def apply_ir_edits(model: Any, edits: list[IREdit]) -> list[str]:
         if block is None:
             continue
 
-        if edit.kind == "modifier":
+        if edit.kind == "materialise":
+            # The block was excluded from the executable model and the connection graph says
+            # it cannot be. Clearing the flag is the whole edit: the emitter picks it up on
+            # the next pass, and the Binder will bind it like any other block.
+            if not block.physical_only:
+                continue  # already materialised by an earlier pass; not an error
+            block.physical_only = False
+            block.provenance.note = " | ".join(
+                filter(None, [block.provenance.note, f"materialised by structural repair: {edit.detail}"])
+            )
+            applied.append(f"{block.id}: materialised into the executable model")
+
+        elif edit.kind == "bind":
+            # Only ever fills a hole. Overwriting a tier the cascade already chose would let a
+            # repair silently outrank L0, and the cascade saw evidence this stage does not.
+            if block.modelica_class:
+                continue
+            block.modelica_class = edit.new
+            block.binding_tier = "L0"  # the class was validated against the harvested catalog
+            block.binding_rationale = (
+                f"bound by structural repair after the tier cascade found nothing: {edit.detail}"
+            )
+            applied.append(f"{block.id}: bound to {edit.new}")
+
+        elif edit.kind == "modifier":
             if edit.old not in block.modelica_modifiers:
                 continue
             # Order is not meaningful in a modifier list, so a pop/insert is a rename.
