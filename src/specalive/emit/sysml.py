@@ -212,6 +212,12 @@ class SysMLEmitter:
 
     def _emit_part_usage(self, b: Block, depth: int) -> None:
         self._w(depth, f"part {_ident(b.id)} : {_part_def_name(b)} {{")
+        # A part def carries ONE doc for the whole kind, taken from the first block of that
+        # kind, so without this every tank reads as "Initial w_NaCl = 0.000" -- B1's text.
+        # That is not cosmetic: stated values are recovered from descriptions, so B2 was
+        # being given B1's initial charge and the batch could never reach its recipe target.
+        # A part's own documentation belongs on the part. (Raised by C for C-08.)
+        self.lines += _doc(b.description, depth + 1)
         self.lines += _evidence_comment(b.provenance.claim_ids, depth + 1)
         if b.abstracted_into:
             self._w(

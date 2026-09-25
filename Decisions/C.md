@@ -16,7 +16,129 @@ gracefully.
 
 ---
 
-## 2026-09-25 (latest) — a latent emitter bug that only fires on packets we had not run
+## 2026-09-25 (latest) — repair now corrects the IR, not just the Modelica; SysML→Modelica reaches parity
+
+**Status: both green.** `--from-sysml` now scores exactly what the IR path scores. NaCl 8/10,
+`main=8/8`, gate met on both paths. 29 tests in `test_agentic.py`.
+
+### C-24 | A catalog-tier repair is written back to the IR, then re-derived | because a binding is an IR decision | costs one extra build pass per correction
+
+The repair loop edited `GeneratedPlant.mo`, because that is where the compiler points. For a
+**deterministic** fix that is right and it is the only option: `pre()` around a state read, a
+missing semicolon, a unit annotation. None of those are decisions the IR ever made, so there
+is nothing upstream to correct, and they stay `.mo`-only.
+
+A **catalog-tier** fix is different in kind. `Class SpecAlive.Vessels.Resevoir not found`,
+`Modified element surfaceArea not found`, `Variable B1.nonexistent_port not found` — each one
+is a wrong *binding decision*, and binding decisions live in the IR (`modelica_class`,
+`modelica_modifiers`, `Port.name`). Patching only the `.mo` was wrong twice over:
+
+* the next emission re-derived the same wrong binding, so the fix survived exactly until
+  something re-ran the emitter; and
+* **the SysML we ship as a deliverable still described the wrong plant**, because SysML comes
+  from the IR and the IR was never told.
+
+So a catalog fix now goes both ways: to the `.mo`, so the current compile can proceed, and to
+the IR, so the correction is durable and the architecture artefact agrees with the code. The
+pass then returns `retry` and the next one re-derives SysML and Modelica from the corrected
+model. New file `repair/writeback.py`; the three catalog fixers now return an `IREdit`
+alongside their text patch.
+
+**This is only safe because both bindings are idempotent on re-emission** — `Binder` skips a
+block that already carries a tier and a class, and connector resolution keeps a port name the
+class already declares. Verified before relying on it; if either stops being true, write-back
+silently stops working.
+
+**How far back it goes, and why it stops there.** To the IR, and no further. A catalog fix
+corrects the *binding we chose*, not the evidence we chose it from. If the customer's document
+genuinely says "Resevoir", that is their text and we do not rewrite it — the gap belongs in
+the report, not in a silent edit to their spec.
+
+Two guards:
+
+* **only accepted fixes are promoted.** Keep-best applies upstream too: a patch the compiler
+  rejected is a disproved guess, and writing it to the IR would put it in the shipped SysML.
+* **an edit that matches no IR element is a traceability gap, not a failure.** The `.mo` is
+  repaired either way. The run says so plainly rather than pretending the SysML shows the
+  correction.
+
+### C-25 | SysML is re-emitted at the top of every build pass, not once per run | because the IR is not fixed after validation | costs one emit per pass (milliseconds)
+
+**This was the bug blocking SysML→Modelica parity, and it had nothing to do with the parser.**
+
+SysML was emitted once before the build loop and once after it. Every retry pass therefore
+rebuilt the Modelica from the *previous* pass's SysML text. When a pass proved a guard
+unreachable and added a declared fallback (SA-05) to the IR, that fallback never reached the
+SysML the emitter was reading — so under `--from-sysml` it never reached the Modelica at all.
+The sequence stayed deadlocked at Step 5 and the run spent its remaining passes rediscovering
+the same deadlock.
+
+The symptom I chased for an hour was "the reader recovers 15 transitions but the file has 17".
+The reader was fine: parsing the *final* file gives 17/17 with both fallback flags recovered.
+It was being handed a stale file. **Worth remembering: the artefact on disk at the end of a
+run is not the artefact a mid-run stage read.**
+
+One emit point now, at the top of every pass, so `IR → SysML → Modelica` holds for pass 6
+exactly as for pass 1.
+
+| `--from-sysml` | before | after | IR path |
+| --- | --- | --- | --- |
+| transitions read | 15 | 17 | — |
+| variables moved | 42% | 84% | 84% |
+| controller | `main=5/8` | `main=8/8` | `main=8/8` |
+| acceptance | 3/10 | 8/10 | 8/10 |
+
+Both paths now fail the same two checks, and those are the genuine flagged contradictions in
+the customer's own numbers (`B5.level` cannot reach 0.18, `B7.level` cannot reach 0.01) — not
+modelling defects.
+
+### C-26 | A grounded fix is judged on "does not make things worse"; a model-authored one still has to improve | because omc stops at the first error | costs a slightly weaker keep-best at the deterministic tier
+
+Found by probing, not by a benchmark. A deliberately mis-bound drivetrain IR was **fully
+repairable** and the loop reported `unrepaired after 6 iteration(s): 0 fixes`.
+
+`omc` reports the first failure and stops. Correcting a class that provably does not exist
+uncovers the *next* latent error, so the error count stays flat — and keep-best discarded the
+correct fix. A fixer is a pure function of `(source, diagnostic)`, so every later iteration
+re-derived the identical patch and re-discarded it. Six iterations, no progress, and a report
+that blamed the model.
+
+Two changes, both following standing rule 1:
+
+* a **deterministic or catalog** fix is grounded in something checkable — the language's own
+  grammar, or a harvested signature — so it cannot invent a class or a parameter. Its bar is
+  *does not make things worse*. A **model-authored** patch is a guess and keeps the stricter
+  *must improve* bar. That asymmetry is the entire reason for tiering; the loop was not
+  honouring it.
+* a rejected `(diagnostic, patch)` pair is remembered and never re-derived. It wasted the
+  iteration budget, and at the model tier it wastes the minute's tokens.
+
+Same probe after: repaired in 2 iterations, both fixes accepted and both correctly attributed.
+
+### ⚠ Affects you
+
+**B — one line in `emit/sysml.py`.** `_emit_part_usage` now writes the part's own
+`description`. A part def carries one doc for the whole *kind*, taken from the first block of
+that kind, so every tank was reading as B1's `Initial w_NaCl = 0.000`. Not cosmetic: stated
+values are recovered from descriptions, so B2 was being handed B1's initial charge and the
+batch could never reach its recipe target. That single line moved `--from-sysml` from 0/10 to
+3/10. Marked in the source as raised by C for C-08 — shout if you want it done differently.
+
+**D / A — the IR we write cannot be fed back in.** `--reference-ir` on any run that added a
+declared fallback fails validation: `guard references unknown symbol 'dwell'`. That breaks the
+documented resume-from-IR workflow for exactly the runs most worth resuming. Found while
+building the write-back probe. Not mine, unowned, still open.
+
+**Everyone — a green NaCl run proves nothing about repair.** NaCl repairs in 0 iterations, so
+it exercises none of this code. Both defects in C-26 were invisible to it and would have
+reached a judge's unseen packet. The corrupted-IR probe (`--reference-ir` with a deliberately
+wrong binding) is the cheapest way to make the repair path actually run; `specalive faults`
+cannot do it, because it corrupts the emitted `.mo` while the IR stays correct, so there is
+nothing upstream to write back.
+
+---
+
+## 2026-09-25 — a latent emitter bug that only fires on packets we had not run
 
 **Status: fixed and committed (`eeb38aa`).** Found on the TwoTankController packet, not on
 anything in `benchmarks/`. NaCl unchanged: 8/10, gate met. 140 fast tests, 9 slow.

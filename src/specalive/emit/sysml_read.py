@@ -118,6 +118,7 @@ class SysPartDef:
 class SysPart:
     id: str
     part_def: str
+    doc: str = ""
     redefines: dict[str, str] = field(default_factory=dict)  # attribute -> literal
     units: dict[str, str] = field(default_factory=dict)
     physical_only: bool = False
@@ -169,6 +170,10 @@ class SysTransition:
     #: sequence deadlocks at the end of Step6.
     forks: list[str] = field(default_factory=list)
     joins: list[str] = field(default_factory=list)
+    #: SA-05. A step the evidence leaves no way out of gets an added exit, and the
+    #: Modelica emitter only declares the dwell clock `tEnter_<region>` for regions that
+    #: have one. Lose the flag and a guard referring to `dwell(...)` has no clock.
+    declared_fallback: bool = False
 
 
 @dataclass
@@ -212,6 +217,7 @@ _ABSTRACTION = re.compile(r"^//\s*@abstraction\b.*merged into (\w+)")
 _ROLE = re.compile(r"^(sensor|actuator)(?:\s+bound to\s+(\S+))?$")
 _CONSTRAINT_DOC = re.compile(r"^(permissive|inhibit) on (\S+):\s*(.*)$")
 _FORK = re.compile(r"^fork ->\s*(.*)$")
+_FALLBACK = re.compile(r"DECLARED FALLBACK", re.I)
 _JOIN = re.compile(r"^join <-\s*(.*)$")
 _DOC = re.compile(r"^doc /\* (.*) \*/$")
 _EXPR = re.compile(r'^attribute expression : String default "(.*)";$')
@@ -305,9 +311,11 @@ def read_sysml(text: str) -> SysMLModel:
             cur_state.actions[m.group(1)] = "true"
         elif kind == "transition":
             tr = SysTransition(m.group(1), m.group(2), m.group(3).strip(), m.group(4))
-            if fm := _FORK.match(comment):
+            if _FALLBACK.search(comment):
+                tr.declared_fallback = True
+            if fm := _FORK.search(comment):
                 tr.forks = [x.strip() for x in fm.group(1).split(",") if x.strip()]
-            elif jm := _JOIN.match(comment):
+            elif jm := _JOIN.search(comment):
                 tr.joins = [x.strip() for x in jm.group(1).split(",") if x.strip()]
             out.transitions.append(tr)
         elif kind == "allocation":
@@ -332,6 +340,8 @@ def read_sysml(text: str) -> SysMLModel:
                 cur_state.doc = txt
             elif top[0] == "part_def" and cur_def:
                 cur_def.doc = txt
+            elif top[0] == "part" and cur_part is not None:
+                cur_part.doc = txt
         elif kind == "string_attr" and cur_ver and top[0] == "verification":
             if em := _EXPR.match(code):
                 cur_ver.expression = em.group(1)
@@ -425,11 +435,22 @@ def to_system_model(
         entry = index.get(cls)
         return {p.name for p in entry.ports} if entry else None
 
+    # A part def declares every port ANY block of that kind uses, so reading a part's ports
+    # straight off its def hands a two-port vessel a third port belonging to a sibling. Only
+    # the ports this part is actually wired through are its own.
+    used: dict[str, set[str]] = {}
+    for iface in sysml.interfaces:
+        for ref in (iface.source, iface.target):
+            bid, _, port = ref.partition(".")
+            if port:
+                used.setdefault(bid, set()).add(port)
+
     blocks: list[Block] = []
     for p in sysml.parts:
         cls, tier = sysml.allocations.get(p.id, (None, "unbound"))
         pdef = sysml.part_defs.get(p.part_def)
         known = ports_of(cls) if cls else None
+        mine = used.get(p.id)
         ports = [
             Port(
                 id=sp.name,
@@ -438,6 +459,7 @@ def to_system_model(
                 direction=_domain_direction(sp.port_def)[1],  # type: ignore[arg-type]
             )
             for sp in (pdef.ports if pdef else [])
+            if mine is None or sp.name in mine
         ]
         params = [
             Parameter(
@@ -452,14 +474,33 @@ def to_system_model(
             Block(
                 id=p.id,
                 name=p.id,
-                kind=p.part_def,
+                # `_ident()` folds a kind into an identifier -- "Cooling tank" becomes
+                # `Cooling_tank` -- and the binder matches L1 templates on kind WORDS
+                # ("cooling tank", "evaporator"). Left sanitised, `Cooling_tank` misses the
+                # cooled-vessel template and falls through to the plain vessel one, so B6/B7
+                # came back as Reservoir and lost the `cooler` connector the controller
+                # drives. Restoring the spacing is what makes the round trip re-bind to the
+                # same class the IR path picks.
+                kind=p.part_def.replace("_", " ").strip(),
                 domains=[ports[0].domain] if ports else ["unknown"],  # type: ignore[list-item]
                 ports=ports,
                 parameters=params,
-                description=(pdef.doc if pdef else None) or None,
+                # The part's own doc first: a part def's doc belongs to the KIND, and
+                # handing it to every instance gave B2 B1's stated initial charge.
+                description=p.doc or (pdef.doc if pdef else None) or None,
                 binding_tier=tier if tier in ("L0", "L1", "L2") else "unbound",  # type: ignore[arg-type]
                 modelica_class=cls,
-                modelica_modifiers={k: _modelica_literal(v) for k, v in p.redefines.items()},
+                # The SysML carries the DOCUMENT's word for each attribute -- `height`,
+                # `max_level` -- because that is what the evidence says and what the system
+                # model should show. Modelica needs the class's own parameter names. Copying
+                # the document names straight across produced `Reservoir(height = 1)`, which
+                # is not a parameter of that class and does not compile.
+                #
+                # So map them, exactly as the binder does when it binds a block for the first
+                # time: tolerate case and word order, and emit only names the catalog confirms
+                # the class really has. That also makes this a derivation rather than a
+                # transcription, which is the point of C-08.
+                modelica_modifiers=_map_to_class(p.redefines, cls, index),
                 physical_only=p.physical_only,
                 abstracted_into=p.abstracted_into,
             )
@@ -508,6 +549,7 @@ def to_system_model(
             guard=t.guard,
             forks=list(t.forks),
             joins=list(t.joins),
+            declared_fallback=t.declared_fallback,
         )
         for t in sysml.transitions
     ]
@@ -567,6 +609,28 @@ def _number(raw: str) -> Any:
         return float(raw)
     except ValueError:
         return raw
+
+
+def _map_to_class(redefines: dict[str, str], cls: str | None, index: Any) -> dict[str, str]:
+    """Document attribute names -> the bound class's real parameter names.
+
+    Without a catalog we cannot tell a valid modifier from an invalid one, so we pass the
+    names through unchanged and let the compiler (and the repair loop) be the judge -- better
+    than silently dropping a value the evidence supplied.
+    """
+    from ..ir.complete import match_parameter
+
+    literals = {k: _modelica_literal(v) for k, v in redefines.items()}
+    entry = index.get(cls) if (index is not None and cls) else None
+    if entry is None:
+        return literals
+    valid = {p.name for p in entry.params}
+    out: dict[str, str] = {}
+    for name, value in literals.items():
+        target = match_parameter(name, valid)
+        if target:
+            out[target] = value
+    return out
 
 
 def _modelica_literal(raw: str) -> str:

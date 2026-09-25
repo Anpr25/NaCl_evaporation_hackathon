@@ -28,6 +28,7 @@ from .ir.validate import validate
 from .ir.assumptions import AssumptionLog
 from .ir.fallback import apply_declared_fallbacks
 from .repair.loop import RepairLoop
+from .repair.writeback import apply_ir_edits
 from .verify.acceptance import Scorecard, score
 from .verify.diagnose import Diagnosis, diagnose, record
 from .verify.omc import OmcRunner, describe_environment, liveness, read_result
@@ -105,6 +106,9 @@ class Pipeline:
         #: Check ids whose contradiction an earlier pass already proved, so a later pass does
         #: not re-diagnose them from a trace that no longer shows it.
         self._contradicted: set[str] = set()
+        #: Catalog fixes already folded into the IR, so a pass cannot re-apply one and
+        #: retry forever on a correction that has already landed.
+        self._written_back: set[str] = set()
         self._pass = 1
         self.router = router
         self.result = PipelineResult()
@@ -201,47 +205,43 @@ class Pipeline:
             yield self._emit("sysml", "skip", "blocked by validation errors")
             return
 
-        # ---------------------------------------------------------- 5. SysML
-        yield self._emit("sysml", "start", "emitting SysML v2")
-        sysml_path = emit_sysml(model, cfg.out_dir / f"{model.name}.sysml")
-        losses = round_trip_check(model, sysml_path.read_text(encoding="utf-8"))
-        self.result.artifacts["SysML v2"] = str(sysml_path)
-        yield self._emit(
-            "sysml",
-            "warn" if losses else "ok",
-            f"{sysml_path.name}" + (f", {len(losses)} element(s) lost in round-trip" if losses else
-                                    ", round-trip clean"),
-            losses=losses,
-        )
-
-        # ---------------------------------------------------------- 6-9. build and verify
-        # Up to two passes. The second only happens when the first proved a guard unreachable
-        # and a declared fallback was added, and a third is never needed: fallbacks are added
-        # once per blocked transition and `apply_declared_fallbacks` will not re-add one.
+        # ---------------------------------------------------------- 5-9. build and verify
+        # SysML is emitted inside the pass, not here: see `_emit_sysml`.
+        #
+        # A pass repeats only when it learned something the IR did not already know: a guard
+        # proved unreachable (a declared fallback is added, SA-05) or a catalog-tier repair
+        # corrected a binding. Both are recorded so they cannot be re-derived, so this
+        # terminates on its own; MAX_BUILD_PASSES is there in case a bug says otherwise.
         runner = OmcRunner(workdir=str(cfg.out_dir / "work"))
         for attempt in range(1, MAX_BUILD_PASSES + 1):
             self._pass = attempt
             verdict = yield from self._build_and_verify(model, runner, t0)
             if verdict != "retry":
                 break
-            yield self._emit("modelica", "start", f"pass {attempt + 1}: re-emitting with the "
-                                                  f"declared fallback in place")
-        # The SysML was emitted before any fallback existed. If the model we actually
-        # simulated grew a transition, the architecture artefact has to grow it too, or the
-        # two deliverables describe different plants.
-        if any(t.declared_fallback for sm in model.state_machines for t in sm.transitions):
-            sysml_path = emit_sysml(model, cfg.out_dir / f"{model.name}.sysml")
-            losses = round_trip_check(model, sysml_path.read_text(encoding="utf-8"))
-            self.result.artifacts["SysML v2"] = str(sysml_path)
-            yield self._emit(
-                "sysml", "warn" if losses else "ok",
-                f"{sysml_path.name} re-emitted with the declared fallback shown alongside "
-                f"the specified guard"
-                + (f", {len(losses)} element(s) lost in round-trip" if losses else ""),
-                losses=losses,
-            )
 
         yield from self._finish(t0, runner)
+
+    # ------------------------------------------------------------------ SysML
+    def _emit_sysml(self, model: SystemModel, note: str) -> Iterator[PipelineEvent]:
+        """Write the architecture artefact from the current IR.
+
+        Called at the top of every build pass rather than once per run, because the IR is no
+        longer fixed after validation: a declared fallback (SA-05) adds a transition, and a
+        catalog-tier repair corrects a binding. Both change what the plant *is*, so both have
+        to reach the SysML before the Modelica is derived from it -- otherwise the two
+        deliverables describe different plants and, under --from-sysml, the correction never
+        reaches the code at all.
+        """
+        yield self._emit("sysml", "start", note)
+        path = emit_sysml(model, self.cfg.out_dir / f"{model.name}.sysml")
+        losses = round_trip_check(model, path.read_text(encoding="utf-8"))
+        self.result.artifacts["SysML v2"] = str(path)
+        yield self._emit(
+            "sysml", "warn" if losses else "ok",
+            f"{path.name}" + (f", {len(losses)} element(s) lost in round-trip" if losses
+                              else ", round-trip clean"),
+            losses=losses,
+        )
 
     def _build_and_verify(
         self, model: SystemModel, runner: OmcRunner, t0: float
@@ -253,6 +253,13 @@ class Pipeline:
         way: a run that halts still owes the reader a report saying why.
         """
         cfg = self.cfg
+
+        # ---------------------------------------------------------- 5. SysML
+        yield from self._emit_sysml(
+            model,
+            "emitting SysML v2" if self._pass == 1 else
+            f"pass {self._pass}: re-emitting SysML from the corrected IR",
+        )
 
         # ---------------------------------------------------------- 6. Modelica
         yield self._emit("modelica", "start", "binding components and emitting Modelica")
@@ -324,13 +331,43 @@ class Pipeline:
             model_name, mo_path, list(cfg.library_files),
             stop_time=None if cfg.skip_simulation else stop_time,
         )
-        self._repair_steps = outcome.steps
+        # Accumulate across passes. A successful write-back means the NEXT pass needs no
+        # repair at all, so keeping only the last pass's steps would report "0 fixes" for a
+        # run whose model only compiles because of them.
+        self._repair_steps = getattr(self, "_repair_steps", []) + outcome.steps
         self.result.gate["compiled"] = outcome.ok
         self.result.gate["repair"] = outcome.summary()
         yield self._emit(
             "compile", "ok" if outcome.ok else "fail", outcome.summary(),
             steps=[s.__dict__ for s in outcome.steps],
         )
+
+        # A catalog-tier fix corrected a binding decision, and binding decisions belong to
+        # the IR. Patching only the .mo made the repair last exactly until the next emission
+        # and left the SysML describing the uncorrected plant. Fold it upstream, then rebuild
+        # from there -- which is also the only way the fix reaches the code under
+        # --from-sysml, since that path reads the SysML and never sees our .mo edits.
+        fresh = [e for e in outcome.ir_edits if str(e) not in self._written_back]
+        if fresh:
+            landed = apply_ir_edits(model, fresh)
+            self._written_back.update(str(e) for e in fresh)
+            if landed:
+                yield self._emit(
+                    "compile", "warn",
+                    f"{len(landed)} catalog fix(es) written back to the IR "
+                    f"({'; '.join(landed)}); re-deriving SysML and Modelica from the "
+                    f"corrected model",
+                    writeback=landed,
+                )
+                return "retry"
+            # Nothing matched an IR element -- the .mo is still fixed, so this is a
+            # traceability gap, not a failure. Say so rather than retrying for no reason.
+            yield self._emit(
+                "compile", "warn",
+                f"{len(fresh)} catalog fix(es) could not be traced back to an IR element; "
+                f"the Modelica is repaired but the SysML will not show the correction",
+            )
+
         if not outcome.ok:
             yield self._emit("simulate", "skip", "model does not compile")
             return "halt"

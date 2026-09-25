@@ -101,7 +101,7 @@ def test_the_agent_can_ask_the_catalog_instead_of_guessing():
     loop = RepairLoop(runner=None, router=router, index=FakeIndex())
     src = "model P\n  R b1(surfaceArea = 1);\nend P;\n"
     diag = Diagnostic(kind="undeclared", message="surfaceArea not found", line=2, raw="")
-    patched, method, _ = loop._attempt(src, diag, Path("P.mo"), "", None)
+    patched, method, _, _edit = loop._attempt(src, diag, Path("P.mo"), "", None)
 
     assert method == "model" and patched is not None and "area = 1" in patched
     assert len(router.prompts) == 2, "the loop must ask again after answering the lookup"
@@ -426,3 +426,191 @@ def test_closest_refuses_when_nothing_is_close():
     from specalive.repair.loop import _closest
 
     assert _closest("completelyUnrelated", ["area", "levelMax"]) is None
+
+
+# ------------------------------------------------------- C-AI-6: repair writes back to the IR
+
+
+def _toy_model():
+    """Minimal SystemModel with one bound block, one modifier and one port."""
+    from specalive.ir.system import Block, Port, SystemModel
+
+    return SystemModel(
+        name="Toy",
+        blocks=[
+            Block(
+                id="TK-101",
+                name="Tank",
+                kind="tank",
+                modelica_class="SpecAlive.Vessels.Resevoir",
+                binding_tier="L1",
+                modelica_modifiers={"surfaceArea": "2.0"},
+                ports=[Port(id="p1", name="inlet[1]")],
+            )
+        ],
+    )
+
+
+def test_mid_matches_the_emitter_so_a_diagnostic_can_be_traced_to_a_block():
+    """The compiler says `TK_101`; the IR says `TK-101`. If these two drift, write-back
+    silently stops matching anything and the SysML quietly goes stale again."""
+    from specalive.emit.modelica import _mid as emit_mid
+    from specalive.repair.writeback import _mid as repair_mid
+
+    for raw in ("TK-101", "B 7", "9lives", "already_ok"):
+        assert emit_mid(raw) == repair_mid(raw)
+
+
+def test_catalog_fixes_are_applied_to_the_ir_not_just_the_modelica():
+    from specalive.repair.writeback import IREdit, apply_ir_edits
+
+    m = _toy_model()
+    landed = apply_ir_edits(m, [
+        IREdit("class", "SpecAlive.Vessels.Resevoir", "SpecAlive.Vessels.Reservoir"),
+        IREdit("modifier", "surfaceArea", "area", block="TK_101"),
+        IREdit("port", "inlet", "port_a", block="TK_101"),
+    ])
+    b = m.blocks[0]
+    assert b.modelica_class == "SpecAlive.Vessels.Reservoir"
+    assert b.modelica_modifiers == {"area": "2.0"}
+    assert b.ports[0].name == "port_a"
+    assert len(landed) == 3
+    # The correction has to be explainable, not just present.
+    assert "Resevoir" in (b.binding_rationale or "")
+
+
+def test_writeback_ignores_an_edit_it_cannot_place():
+    """A fix the IR cannot account for is a traceability gap, not a crash: the .mo is
+    already repaired either way."""
+    from specalive.repair.writeback import IREdit, apply_ir_edits
+
+    m = _toy_model()
+    assert apply_ir_edits(m, [IREdit("port", "x", "y", block="NOPE")]) == []
+    assert apply_ir_edits(m, [IREdit("modifier", "absent", "y", block="TK_101")]) == []
+
+
+def test_only_accepted_repairs_reach_the_ir():
+    """Keep-best applies to write-back too. A patch the compiler rejected is a disproved
+    guess, and pushing it into the IR would put it into the SysML we ship."""
+    from specalive.repair.loop import RepairOutcome, RepairStep
+    from specalive.repair.writeback import IREdit
+
+    good = IREdit("class", "A", "B")
+    bad = IREdit("class", "C", "D")
+    out = RepairOutcome(True, "", 2, [
+        RepairStep(0, "undeclared", "catalog", "", 2, 1, True, good),
+        RepairStep(1, "undeclared", "catalog", "", 1, 3, False, bad),
+        RepairStep(2, "syntax", "deterministic", "", 1, 0, True, None),
+    ])
+    assert out.ir_edits == [good]
+
+
+def test_a_grounded_fix_survives_uncovering_the_next_error():
+    """omc stops at the first failure, so a correct catalog fix often leaves the error count
+    unchanged by exposing the next latent one. Judging it on count alone discarded it -- and
+    since a fixer is a pure function of the diagnostic, every later iteration re-derived the
+    same patch and re-discarded it. The model repaired fine; the loop reported "0 fixes"."""
+    from specalive.repair.loop import RepairLoop
+
+    calls = {"n": 0}
+
+    class Runner:
+        omc = "omc"
+
+        def check(self, model, files):
+            src = Path(files[0]).read_text(encoding="utf-8")
+            calls["n"] += 1
+            if "Bad" in src:
+                return _res(False, [Diagnostic("undeclared", "Class Bad not found", line=2)])
+            if "wrongMod" in src:
+                # Same count as before: one error in, one error out.
+                return _res(False, [Diagnostic("undeclared",
+                                               "Modified element wrongMod not found in class Good",
+                                               line=2)])
+            return _res(True, [])
+
+    def _res(ok, diags):
+        from specalive.verify.omc import OmcResult
+
+        return OmcResult(ok=ok, stage="check", diagnostics=diags)
+
+    def to_good(src, diag, index):
+        from specalive.repair.writeback import IREdit
+
+        if "Class Bad not found" not in diag.message:
+            return None
+        return src.replace("Bad", "Good"), "Bad -> Good", IREdit("class", "Bad", "Good")
+
+    def drop_mod(src, diag, index):
+        from specalive.repair.writeback import IREdit
+
+        if "wrongMod" not in diag.message:
+            return None
+        return (src.replace("wrongMod", "rightMod"), "wrongMod -> rightMod",
+                IREdit("modifier", "wrongMod", "rightMod", block="C1"))
+
+    import specalive.repair.loop as L
+
+    original = L.CATALOG_FIXERS
+    L.CATALOG_FIXERS = (to_good, drop_mod)
+    try:
+        p = Path(_tmp("grounded.mo"))
+        p.write_text("model P\n  Bad C1(wrongMod = 1);\nend P;\n", encoding="utf-8")
+        out = RepairLoop(Runner(), None, max_iterations=4, index=object()).run("P", p, [])
+    finally:
+        L.CATALOG_FIXERS = original
+
+    assert out.ok, [s.description for s in out.steps]
+    # Both accepted, and both reached the IR -- the first one despite not lowering the count.
+    assert [s.accepted for s in out.steps] == [True, True]
+    assert len(out.ir_edits) == 2
+
+
+def test_the_same_rejected_patch_is_not_derived_twice():
+    """A fixer is a pure function of (source, diagnostic). Re-running it on an unchanged
+    source cannot produce anything new, so retrying is pure budget burn."""
+    from specalive.repair.loop import RepairLoop
+    from specalive.verify.omc import OmcResult
+
+    seen = {"n": 0}
+
+    class Runner:
+        omc = "omc"
+
+        def check(self, model, files):
+            seen["n"] += 1
+            r = OmcResult(ok=False, stage="check")
+            # Always worse after the patch, so the patch is always rejected.
+            r.diagnostics = [Diagnostic("undeclared", "Class Bad not found", line=2)] * (
+                2 if "Worse" in Path(files[0]).read_text(encoding="utf-8") else 1
+            )
+            return r
+
+    def always_worse(src, diag, index):
+        from specalive.repair.writeback import IREdit
+
+        return src.replace("Bad", "Worse"), "Bad -> Worse", IREdit("class", "Bad", "Worse")
+
+    import specalive.repair.loop as L
+
+    original = L.CATALOG_FIXERS
+    L.CATALOG_FIXERS = (always_worse,)
+    try:
+        p = Path(_tmp("repeat.mo"))
+        p.write_text("model P\n  Bad C1;\nend P;\n", encoding="utf-8")
+        out = RepairLoop(Runner(), None, max_iterations=6, index=object()).run("P", p, [])
+    finally:
+        L.CATALOG_FIXERS = original
+
+    assert not out.ok
+    # One real attempt, then one step saying it will not be retried. Not six.
+    assert len(out.steps) == 2, [s.description for s in out.steps]
+    assert "not retried" in out.steps[-1].description
+    # And a rejected patch never reaches the IR.
+    assert out.ir_edits == []
+
+
+def _tmp(name: str) -> str:
+    import tempfile
+
+    return str(Path(tempfile.mkdtemp()) / name)

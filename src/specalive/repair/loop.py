@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from ..verify.omc import Diagnostic, OmcResult, OmcRunner
+from .writeback import IREdit
 
 # --------------------------------------------------------------------- deterministic fixes
 
@@ -228,7 +229,13 @@ DETERMINISTIC_FIXERS: tuple[Fixer, ...] = (
 # Each of these was recovered by the model before, at a round trip apiece. Every one moved here
 # is a model call never made.
 
-CatalogFixer = Callable[[str, Diagnostic, Any], "tuple[str, str] | None"]
+CatalogFixer = Callable[[str, Diagnostic, Any], "tuple[str, str, IREdit] | None"]
+"""Returns (new_source, description, edit).
+
+Unlike a deterministic fixer, a catalog fixer also says what the correction means in IR
+terms, so the same repair can be folded back upstream and the next emission does not
+reproduce the fault. See `repair/writeback.py`.
+"""
 
 
 def _closest(name: str, options: Iterable[str], cutoff: float = 0.8) -> str | None:
@@ -309,6 +316,7 @@ def fix_unknown_class(src: str, diag: Diagnostic, index: Any) -> tuple[str, str]
     return (
         re.sub(rf"(?<![\w.]){re.escape(missing)}(?![\w.])", best, src),
         f"corrected class '{missing}' to '{best}' (nearest in the catalog)",
+        IREdit("class", missing, best, detail="not in the harvested catalog"),
     )
 
 
@@ -329,7 +337,7 @@ def fix_wrong_modifier(src: str, diag: Diagnostic, index: Any) -> tuple[str, str
     i = diag.line - 1
     if not 0 <= i < len(lines) or bad not in lines[i]:
         return None
-    cls = re.match(r"\s*([\w.]+)\s+\w+\s*\(", lines[i])
+    cls = re.match(r"\s*([\w.]+)\s+(\w+)\s*\(", lines[i])
     entry = index.get(cls.group(1)) if cls else None
     if entry is None:
         return None
@@ -340,6 +348,7 @@ def fix_wrong_modifier(src: str, diag: Diagnostic, index: Any) -> tuple[str, str
     return (
         "\n".join(lines) + "\n",
         f"renamed modifier '{bad}' to '{best}' on {cls.group(1)} (from the catalog)",
+        IREdit("modifier", bad, best, block=cls.group(2), detail=cls.group(1)),
     )
 
 
@@ -387,6 +396,7 @@ def fix_unknown_connector(src: str, diag: Diagnostic, index: Any) -> tuple[str, 
     return (
         src.replace(f"{comp}.{port}{sub}", f"{comp}.{best}{sub}"),
         f"corrected connector '{comp}.{port}' to '{comp}.{best}' (declared by {cls})",
+        IREdit("port", port, best, block=comp, detail=f"declared by {cls}"),
     )
 
 
@@ -518,6 +528,9 @@ class RepairStep:
     errors_before: int
     errors_after: int
     accepted: bool
+    #: Set on an accepted catalog-tier fix: the same correction stated against the IR, for
+    #: the pipeline to fold back upstream before it re-emits. None for every other method.
+    ir_edit: IREdit | None = None
 
 
 @dataclass
@@ -527,6 +540,16 @@ class RepairOutcome:
     iterations: int
     steps: list[RepairStep] = field(default_factory=list)
     final: OmcResult | None = None
+
+    @property
+    def ir_edits(self) -> list[IREdit]:
+        """The accepted catalog-tier fixes, restated as corrections to the IR.
+
+        Only accepted ones. A patch the compiler rejected is not evidence of anything, and
+        writing it upstream would push a guess we have already disproved into the IR -- and
+        from there into the SysML we ship.
+        """
+        return [s.ir_edit for s in self.steps if s.accepted and s.ir_edit is not None]
 
     def summary(self) -> str:
         det = sum(1 for s in self.steps if s.method in ("deterministic", "catalog") and s.accepted)
@@ -582,6 +605,11 @@ class RepairLoop:
         #: C-AI-2 memory. What was tried, and what the compiler said about it. Fed back to
         #: the agent so the next pass is a refinement rather than another first guess.
         history: list[str] = []
+        #: (diagnostic, patch) pairs already rejected. A deterministic fixer is a pure
+        #: function of the two, so re-deriving one is guaranteed to produce the same patch
+        #: and the same rejection -- pure waste of the iteration budget, and for the model
+        #: tier, of the minute's tokens.
+        tried: set[str] = set()
 
         def gate(files: list[Any]) -> OmcResult:
             """The bar a candidate has to clear.
@@ -613,9 +641,21 @@ class RepairLoop:
             if diag is None:
                 break
 
-            patched, method, desc = self._attempt(source, diag, target, catalog_note, history)
+            patched, method, desc, edit = self._attempt(
+                source, diag, target, catalog_note, history
+            )
             if patched is None or patched == source:
-                steps.append(RepairStep(it, diag.kind, method, desc or "no fix found", n_errors, n_errors, False))
+                steps.append(RepairStep(it, diag.kind, method, desc or "no fix found",
+                                        n_errors, n_errors, False, edit))
+                break
+
+            signature = f"{diag.kind}|{diag.message}|{desc or method}"
+            if signature in tried:
+                steps.append(RepairStep(
+                    it, diag.kind, method,
+                    f"{desc or method} -- already rejected once, not retried",
+                    n_errors, n_errors, False, None,
+                ))
                 break
 
             # Evaluate the candidate against the same bar the loop exits on -- otherwise a
@@ -624,8 +664,22 @@ class RepairLoop:
             target.write_text(patched, encoding="utf-8")
             probe = gate([target, *support_files])
             after = 0 if probe.ok else max(len(probe.diagnostics), 1)
-            accepted = after < n_errors or probe.ok
-            steps.append(RepairStep(it, diag.kind, method, desc or "", n_errors, after, accepted))
+            # Error COUNT is the wrong bar for a grounded fix. omc reports the first failure
+            # and stops, so correcting a class that provably does not exist routinely
+            # uncovers the next latent error and leaves the count unchanged -- at which point
+            # keep-best discards a correct fix, the source never changes, and the next
+            # iteration derives the identical patch from the identical diagnostic. That is
+            # how a repairable model burned six iterations and reported "0 fixes".
+            #
+            # A deterministic or catalog fix is grounded in something checkable: the
+            # language's own grammar, or a harvested signature. It cannot invent a class or a
+            # parameter, so the honest bar for it is "does not make things worse". A
+            # model-authored patch is a guess and keeps the stricter bar -- that asymmetry is
+            # the whole reason for the tiering.
+            grounded = method in ("deterministic", "catalog")
+            accepted = probe.ok or after < n_errors or (grounded and after <= n_errors)
+            steps.append(RepairStep(it, diag.kind, method, desc or "", n_errors, after,
+                                    accepted, edit))
             if accepted:
                 source = patched
                 history.append(f"[accepted] {desc or method}: errors {n_errors} -> {after}")
@@ -635,6 +689,7 @@ class RepairLoop:
                 # stopping at the first bad guess -- that is the difference between a loop
                 # that refines and a loop that gives up.
                 target.write_text(source, encoding="utf-8")
+                tried.add(signature)
                 history.append(
                     f"[rejected] {desc or method}: errors {n_errors} -> {after}, discarded"
                 )
@@ -670,14 +725,17 @@ class RepairLoop:
         path: Path,
         catalog_note: str,
         history: list[str] | None = None,
-    ) -> tuple[str | None, str, str]:
+    ) -> tuple[str | None, str, str, IREdit | None]:
         for fixer in DETERMINISTIC_FIXERS:
             try:
                 result = fixer(source, diag)
             except Exception:
                 continue
             if result is not None:
-                return result[0], "deterministic", result[1]
+                # Deterministic fixes stay .mo-only, by design. `pre()` around a state read
+                # or a missing semicolon corrects the emitter's output, not a decision the
+                # IR ever made -- there is nothing upstream to write back to.
+                return result[0], "deterministic", result[1], None
 
         # C5. Then the ones that need ground truth. Still no tokens spent: the compiler names
         # what it could not find and the catalog holds what exists, so the correction is a
@@ -688,7 +746,7 @@ class RepairLoop:
             except Exception:
                 continue
             if result is not None:
-                return result[0], "catalog", result[1]
+                return result[0], "catalog", result[1], result[2]
 
         # Before spending a model call, ask whether ANY local edit could fix this. Some
         # failures are structural -- the model is under-determined because components were
@@ -697,10 +755,11 @@ class RepairLoop:
         # output is a declared gap naming what is absent.
         reason = _unrepairable_reason(source, diag)
         if reason:
-            return None, "declared", reason
+            return None, "declared", reason, None
 
         if self.router is None:
-            return None, "deterministic", "no deterministic fixer matched and no router configured"
+            return (None, "deterministic",
+                    "no deterministic fixer matched and no router configured", None)
 
         lines = source.splitlines()
         centre = (diag.line or len(lines) // 2) - 1
@@ -745,7 +804,7 @@ class RepairLoop:
                     "repair_modelica", build(note), schema=REPAIR_SCHEMA, validator=validate
                 )
             except Exception as exc:
-                return None, "model", f"router failed: {exc}"
+                return None, "model", f"router failed: {exc}", None
             data = resp.data or {}
             wanted = [w for w in (data.get("lookup") or []) if isinstance(w, str)]
             if wanted and not data.get("replacements") and round_no == 0:
@@ -756,11 +815,11 @@ class RepairLoop:
         reps = data.get("replacements") or []
         rationale = (data.get("strategy") or data.get("explanation") or "").strip()
         if not reps:
-            return None, "model", (rationale or "model declined to patch")[:200]
+            return None, "model", (rationale or "model declined to patch")[:200], None
         patched = source
         for r in reps:
             patched = patched.replace(r["find"], r["replace"], 1)
-        return patched, "model", rationale[:200]
+        return patched, "model", rationale[:200], None
 
 
 #: Fix the errors most likely to be causing the others first.
