@@ -19,6 +19,7 @@ import httpx
 
 from .base import (
     LLMError,
+    ModelOverloaded,
     LLMRequest,
     LLMResponse,
     ModelUnavailable,
@@ -27,6 +28,28 @@ from .base import (
     QuotaExhausted,
     json_only_system,
 )
+
+
+#: Waits between retries of a model that answered "temporarily overloaded". Short, bounded
+#: and only for that one answer: a free Gemini endpoint returns HTTP 503 under load several
+#: times an hour, and it clears in seconds. Without this the tier walked its whole fallback
+#: list, found every model "unavailable", and the router escalated away from a backend that
+#: was about to work -- which on the extraction path means silently losing the packet read.
+_OVERLOAD_BACKOFF_S: tuple[float, ...] = (1.5, 4.0)
+
+
+def _retry_overloaded(model: str, req: LLMRequest, call) -> LLMResponse:
+    """Call `call(model, req)`, retrying only the 'this model is busy right now' answer."""
+    for wait in (*_OVERLOAD_BACKOFF_S, None):
+        try:
+            return call(model, req)
+        except ModelOverloaded as exc:
+            if wait is None:
+                # Out of patience. Report it as a stale model so the tier walks on to its
+                # next fallback rather than failing outright.
+                raise ModelUnavailable(str(exc)) from exc
+            time.sleep(wait)
+    raise AssertionError("unreachable")  # the loop's last pass always raises
 
 
 def _try_models(provider: Provider, req: LLMRequest, call) -> LLMResponse:
@@ -43,14 +66,25 @@ def _try_models(provider: Provider, req: LLMRequest, call) -> LLMResponse:
         candidates.remove(provider.resolved_model)
         candidates.insert(0, provider.resolved_model)
     errors: list[str] = []
+    starved = 0
     for model in candidates:
         try:
-            resp = call(model, req)
+            resp = _retry_overloaded(model, req, call)
         except ModelUnavailable as exc:
+            errors.append(f"{model}: {exc}")
+            continue
+        except QuotaExhausted as exc:
+            # A free-tier quota is per MODEL, not per key: the Pro models on a Google AI
+            # Studio key run out long before the Flash ones do. Treating the first 429 as
+            # "this tier is finished" disabled the tier for the rest of the run and threw
+            # away the fallback models that were still answering.
+            starved += 1
             errors.append(f"{model}: {exc}")
             continue
         provider.resolved_model = model
         return resp
+    if starved == len(candidates):
+        raise QuotaExhausted(f"every model in {provider.name} is rate limited: " + "; ".join(errors))
     raise ProviderUnavailable(
         f"no model in {provider.name} is served to this key: " + "; ".join(errors)
     )
@@ -245,7 +279,7 @@ class GroqProvider(Provider):
             # Transient overload is the single most likely free-tier failure. Treat it as
             # "this model is unavailable right now" so the fallback list is walked, instead
             # of retrying the same busy model and then giving up on the whole tier.
-            raise ModelUnavailable(f"groq '{model}' is overloaded (HTTP {r.status_code})")
+            raise ModelOverloaded(f"groq '{model}' is busy (HTTP {r.status_code})")
         if r.status_code >= 400:
             raise LLMError(f"groq HTTP {r.status_code}: {r.text[:300]}")
 
@@ -444,7 +478,7 @@ class GeminiProvider(Provider):
         if r.status_code == 404 or "is not found" in r.text:
             raise ModelUnavailable(f"gemini does not serve '{model}' to this key")
         if r.status_code in (502, 503, 529) or "UNAVAILABLE" in r.text:
-            raise ModelUnavailable(f"gemini '{model}' is overloaded (HTTP {r.status_code})")
+            raise ModelOverloaded(f"gemini '{model}' is busy (HTTP {r.status_code})")
         if r.status_code >= 400:
             raise LLMError(f"gemini HTTP {r.status_code}: {r.text[:300]}")
 

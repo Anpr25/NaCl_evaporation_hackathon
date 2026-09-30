@@ -1,0 +1,43 @@
+Subject: RE: Tank demo timing / high-level tuning and shutdown semantics
+From: s.patel@synthetic-controls.example
+To: a.mehta@synthetic-customer.example, j.lin@synthetic-sim.example
+Date: Thu, 12 Mar 2026 09:14:00 +0530
+Content-Type: text/plain; charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+MIME-Version: 1.0
+
+Asha / Jin,
+
+CR-004 is now approved. Please treat 0.80 m as the effective T1 high limit. A=
+lso use 12 s after T1 reaches low level before opening the drain valve, and 8=
+ s after T2 reaches low before the next fill starts.
+
+No state-logic change from DR-02: SHUT remains higher priority than STOP; dur=
+ing SHUT, V2 and V3 stay commanded open until both low-level conditions are s=
+atisfied. START during SHUT is ignored.
+
+Jin - the archived Modelica demo still says 0.78 / 10 / 10. Please do not use=
+ those three values as configuration authority for the hackathon test log.
+
+Regards,
+Samir
+
+-----Original Message-----
+From: a.mehta@synthetic-customer.example
+Sent: Tuesday, March 10, 2026 16:42
+To: s.patel@synthetic-controls.example
+Subject: RE: Tank demo timing
+
+We can accept 0.80 m for T1 high. The operators also prefer a little longer s=
+ettling after transfer, so make that 12 s. The 10 s dead time after tank 2 is=
+ empty feels unnecessarily slow; 8 s is acceptable.
+
+-----Original Message-----
+From: j.lin@synthetic-sim.example
+Sent: Monday, February 16, 2026 11:05
+To: s.patel@synthetic-controls.example
+Subject: Model parameters used in demo
+
+My current model has T1_high=3D0.78 m and all three waits at 10 s. STOP is im=
+plemented as a latch that forces all valves closed; START clears it. I have n=
+ot modeled the SHUT priority question yet.

@@ -1,0 +1,24 @@
+@startuml
+title Partial Magnetic Architecture - Draft
+component CurrentRamp
+component ExcitingCoil
+component IronCore
+component AirGap
+component FluxSensor
+component MeasuringCoil
+
+CurrentRamp --> ExcitingCoil : current phasor
+ExcitingCoil --> IronCore : mmf / flux
+IronCore --> AirGap : flux
+AirGap --> FluxSensor : Phi
+AirGap --> MeasuringCoil : induction
+
+note right of IronCore
+  Draft model does not expose:
+  - leakage branch
+  - element-wise core segmentation
+  - electric ground
+  - magnetic ground
+  - revision/configuration values
+end note
+@enduml

@@ -27,3 +27,4 @@ out/
 
 # Visual Studio per-user workspace state (created when the folder is opened in VS).
 .vs/
+.specalive_cache

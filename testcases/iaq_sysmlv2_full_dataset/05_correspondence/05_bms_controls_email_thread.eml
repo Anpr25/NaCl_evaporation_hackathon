@@ -1,0 +1,46 @@
+From: Elena Ruiz <elena.ruiz@example.invalid>
+To: Controls Team <controls@example.invalid>
+Date: Tue, 10 Feb 2026 09:14:00 +0000
+Subject: RM-201 CO2 loop - setpoint wording
+Message-ID: <iaq-001@example.invalid>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+
+Team,
+
+I am translating the owner's note into the BMS sequence. The note says "do not exceed 1000 ppm." Can someone confirm whether that is 1000 ppm total or 1000 ppm above outdoor? I have seen both conventions. For quick sizing I assumed outside is 300 ppm.
+
+- Elena
+
+-----Original Message-----
+From: Ravi Menon <ravi.menon@example.invalid>
+Date: Tue, 10 Feb 2026 11:02:00 +0000
+Subject: RE: RM-201 CO2 loop - setpoint wording
+
+My first read was 1000 ppm above ambient (so around 1300 ppm total), but the demo screenshot has CO2Set=1 and gainSensor=1/1.519E-3, which looks like a hard 1000 ppm absolute target. We should not freeze this until design review.
+
+Also note the Modelica freshAir source wants negative m_flow for flow into the zone. Please do not turn that into a negative physical ventilation requirement.
+
+- Ravi
+
+-----Original Message-----
+From: Mei Ortega <mei.ortega@example.invalid>
+Date: Sat, 14 Feb 2026 16:35:00 +0000
+Subject: RE: RM-201 CO2 loop - DR-IAQ-05 decision
+
+DR-IAQ-05 closed this today: owner intent is 1000 ppm ABSOLUTE room concentration. The 1300 ppm interpretation is rejected for this benchmark. Outdoor model remains 300 ppm.
+
+Please also keep the people source trick explicit in the model notes. C=100 kg/kg is not a physical room concentration; it is only there so the carrier mass flow is 1/100 of the actual CO2 emission.
+
+- Mei
+
+-----Original Message-----
+From: Elena Ruiz <elena.ruiz@example.invalid>
+Date: Sun, 1 Mar 2026 10:08:00 +0000
+Subject: RM-201 reference tuning after OCC-SCH-04 Rev C
+
+Peak occupancy is now 15 from 13:00-15:00. CR-IAQ-007 approved Kp=6.0, bias=3.5 ACH, min=0.2, max=6.0, integral disabled for the released reference run. The old model file still has Kp=4 and peak 12.
+
+I generated a clean run using the new values.
+
+- Elena

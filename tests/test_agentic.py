@@ -603,9 +603,13 @@ def test_the_same_rejected_patch_is_not_derived_twice():
         L.CATALOG_FIXERS = original
 
     assert not out.ok
-    # One real attempt, then one step saying it will not be retried. Not six.
-    assert len(out.steps) == 2, [s.description for s in out.steps]
-    assert "not retried" in out.steps[-1].description
+    # One real attempt and one omc round trip to measure it. Not six, and no second
+    # iteration either: the loop now stops as soon as every reported fault has had every
+    # approach it has, rather than spending an iteration to rediscover the same patch and
+    # record that it will not be retried.
+    assert len(out.steps) == 1, [s.description for s in out.steps]
+    assert out.steps[0].accepted is False
+    assert (out.steps[0].errors_before, out.steps[0].errors_after) == (1, 2)
     # And a rejected patch never reaches the IR.
     assert out.ir_edits == []
 

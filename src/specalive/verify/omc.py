@@ -116,7 +116,11 @@ _PATTERNS: tuple[tuple[DiagKind, re.Pattern[str]], ...] = (
     ("unbalanced_connector", re.compile(r"connector .* is not balanced", re.I)),
     ("missing_inner", re.compile(r"no 'inner' declaration|missing inner declaration", re.I)),
     ("undeclared", re.compile(r"(?:Variable|Class|Component) (\S+) not found", re.I)),
-    ("connect_mismatch", re.compile(r"connect\(.*\).*(?:incompatible|mismatch|different)", re.I)),
+    # omc words this as "are not type compatible", which the old alternation missed on the
+    # word 'incompatible' -- so a connector-library mismatch came through as kind 'other',
+    # sorted last in the repair priority, and never reached the fixer written for it.
+    ("connect_mismatch",
+     re.compile(r"connect\(.*\).*(?:not (?:type )?compatible|incompatible|mismatch|different)", re.I | re.S)),
     ("type_mismatch", re.compile(r"type mismatch|expected type|cannot be converted", re.I)),
     ("discrete_loop", re.compile(r"[Pp]urely discrete algebraic loops", re.I)),
     ("singular", re.compile(r"structurally singular|singular system", re.I)),

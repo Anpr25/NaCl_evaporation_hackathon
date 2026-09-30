@@ -1,0 +1,10 @@
+Engineer scratchpad - uncontrolled
+
+- Remember: EP-03 current is RMS phasor magnitude. Scope screenshot from bench uses peak scale, so 2 Arms would be 2.828 A peak if converted to instantaneous sine amplitude.
+- Old v1 model sigma=0.05 is not release truth.
+- Useful/core = 1 - sigma. With sigma=.08 -> .92.
+- Gap + leakage are parallel: same magnetic voltage, different flux.
+- Do not put total Phi_core into gap B calculation.
+- Physical prototype measured ~1.58 mm gap, but analytic case is 1.50 mm.
+- Excitation induced U is positive orientation; measurement coil negative. Magnitudes are both proportional to ramp.
+- Linear benchmark only. Saturation discussion belongs to a separate nonlinear inductor case.

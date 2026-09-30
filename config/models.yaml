@@ -88,6 +88,42 @@ tiers:
     good_at: [diagram_reading, scanned_page_ocr, long_context_crossdoc, repair_diff]
     quota: {rpm: 10, rpd: 250}
 
+  # ------------------------------------------------------- T4 extraction (Gemini, text)
+  # The same backend as the vision tier but its own entry, because it does a different job
+  # under a different budget. Extraction is the stage where being wrong is most expensive:
+  # everything downstream is deterministic codegen, so a component the extractor never saw
+  # is a component that cannot appear in the Modelica no matter how good the emitter is.
+  # A local 3B is adequate at turning one sentence into one claim and poor at reading a
+  # control-sequence table out of a design note; the cloud flash model is good at both and
+  # free at this volume.
+  t4_cloud_extract:
+    kind: gemini
+    model: gemini-flash-latest
+    fallback_models: [gemini-3.8-flash, gemini-3.7-flash, gemini-3.5-flash, gemini-3.1-flash-lite]
+    api_key_env: GEMINI_API_KEY
+    structured_output: response_schema
+    max_tokens: 8192
+    timeout_s: 180
+    good_at: [prose_extraction, span_to_claim, guard_normalisation, catalog_shortlist_pick]
+    quota: {rpm: 12, rpd: 400}
+
+  # ------------------------------------------------- T5 whole-packet reasoning (Gemini Pro)
+  # Reserved for the two jobs that need the WHOLE packet in one context rather than a chunk
+  # of it: reading a system skeleton off fifteen documents at once, and repairing a model
+  # whose fault is a relationship between a declaration and a connect two hundred lines
+  # apart. Both are few-calls-per-run, so the stronger model is affordable here and nowhere
+  # else.
+  t5_cloud_deep:
+    kind: gemini
+    model: gemini-pro-latest
+    fallback_models: [gemini-3.1-pro-preview, gemini-flash-latest, gemini-3.8-flash]
+    api_key_env: GEMINI_API_KEY
+    structured_output: response_schema
+    max_tokens: 16384
+    timeout_s: 300
+    good_at: [system_skeleton, long_context_crossdoc, repair_diff, topology_inference]
+    quota: {rpm: 5, rpd: 100}
+
   # ---------------------------------------------------------------- local vision fallback
   t4_local_vision:
     kind: ollama
@@ -124,29 +160,36 @@ tiers:
 # Task -> ordered escalation chain. First entry is tried first.
 routes:
   parse_structured:      [t0_deterministic]
-  extract_claim:         [t1_local_small, t2_local_mid, t3_cloud_reasoning, t3_openrouter]
-  extract_prose:         [t2_local_mid, t3_cloud_reasoning]
+  # Extraction leads with the cloud flash model, not with the local 3B. The tiering rule is
+  # "cheapest tier that CAN DO THE JOB", and measurement on four packets says the 3B cannot
+  # do this one: what it misses here is not recoverable downstream, because a part no claim
+  # mentions is a part the emitter is right to leave out. The local tiers stay in the chain
+  # underneath, so `--provider local` and an offline machine still work.
+  extract_claim:         [t4_cloud_extract, t1_local_small, t2_local_mid, t3_cloud_reasoning, t3_openrouter]
+  extract_prose:         [t4_cloud_extract, t2_local_mid, t3_cloud_reasoning]
+  #: Whole-packet structural read. See src/specalive/extract/skeleton.py.
+  system_skeleton:       [t5_cloud_deep, t4_cloud_extract, t3_cloud_reasoning]
   read_diagram:          [t4_cloud_vision, t4_openrouter_vision, t4_local_vision]
   catalog_retrieve:      [t0_deterministic, t1_local_embed]
-  catalog_pick:          [t1_local_small, t3_cloud_reasoning]
+  catalog_pick:          [t4_cloud_extract, t1_local_small, t3_cloud_reasoning]
   adjudicate_conflict:   [t3_cloud_reasoning, t2_local_mid]
   equation_synthesis:    [t3_cloud_reasoning, t4_cloud_vision]
-  repair_modelica:       [t0_deterministic, t3_cloud_reasoning, t4_cloud_vision]
+  repair_modelica:       [t0_deterministic, t5_cloud_deep, t3_cloud_reasoning, t4_cloud_vision]
   write_prose:           [t1_local_small, t0_deterministic]
 
 # Provider selection modes, chosen with `specalive --provider`.
 modes:
-  auto:   {allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid, t3_cloud_reasoning, t4_cloud_vision, t4_local_vision, t3_openrouter, t4_openrouter_vision]}
+  auto:   {allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid, t3_cloud_reasoning, t4_cloud_vision, t4_cloud_extract, t5_cloud_deep, t4_local_vision, t3_openrouter, t4_openrouter_vision]}
   local:  {allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid, t4_local_vision]}
-  cloud:  {allow: [t0_deterministic, t3_cloud_reasoning, t4_cloud_vision, t3_openrouter, t4_openrouter_vision]}
+  cloud:  {allow: [t0_deterministic, t3_cloud_reasoning, t4_cloud_vision, t4_cloud_extract, t5_cloud_deep, t3_openrouter, t4_openrouter_vision]}
   # Replay must allow the SAME tiers as auto. `replay_only` is what prevents a live call,
   # and the router checks it *after* the cache lookup. Listing only t0 here left the tier
   # chain empty, so run() raised before ever opening the cache and every model-derived claim
   # silently vanished -- a replay that looked fast because it did nothing.
   replay:
     allow: [t0_deterministic, t1_local_small, t1_local_embed, t2_local_mid,
-            t3_cloud_reasoning, t4_cloud_vision, t4_local_vision,
-            t3_openrouter, t4_openrouter_vision]
+            t3_cloud_reasoning, t4_cloud_vision, t4_cloud_extract, t5_cloud_deep,
+            t4_local_vision, t3_openrouter, t4_openrouter_vision]
     replay_only: true
   none:   {allow: [t0_deterministic]}                      # deterministic-only smoke path
 

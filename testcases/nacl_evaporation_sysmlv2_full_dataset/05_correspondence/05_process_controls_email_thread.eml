@@ -1,0 +1,40 @@
+From: lena.hoffmann@synthetic-lab.example
+To: controls-team@synthetic-lab.example; process@synthetic-lab.example
+Date: Tue, 3 Mar 2026 09:18:00 +0100
+Subject: RE: return headers and B7 cooling setpoint
+
+Team,
+
+The old StateGraph note still says:
+  P1 branch (B7) -> V18/V23/V22 + V1/V3 -> B1
+  P2 branch (B6) -> V20/V24/V25 + V5/V6 -> B2
+
+That is what the teaching model did, but it does not preserve the stream identities stated in the URS. Process wants recovered condensate back to B1 and cooled concentrate back to B2.
+
+Also, my handwritten commissioning sheet says both coolers go to 20 C. Marco thinks B7 only needs 25 C.
+
+- Lena
+
+---- Original message ----
+From: marco.silva@synthetic-lab.example
+Date: Tue, 3 Mar 2026 10:02:00 +0100
+Subject: RE: return headers and B7 cooling setpoint
+
+Agree on routing. The bottom headers are cross-connected, so pump physical location is not the destination.
+For the benchmark update I propose:
+  B6 <= 20 C
+  B7 <= 25 C
+I will raise CR-017.
+
+On the medium: please do not remove P1/P2 just because WaterNaCl dies at pump start in the old file. The StandardWater variant runs the sequence. I think we have a nonlinear initialization / medium-state issue.
+
+---- Follow-up ----
+From: a.mehta@synthetic-lab.example
+Date: Thu, 5 Mar 2026 16:41:00 +0100
+Subject: CR-017 approved
+
+CR-017 is approved:
+1) B6 condensate returns to B1.
+2) B7 concentrate returns to B2.
+3) B7 cooling completion is <=25 C.
+The legacy StateGraph routing text is superseded. Keep it in the archive for traceability.

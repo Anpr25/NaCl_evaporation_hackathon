@@ -89,24 +89,40 @@ class QuotaTracker:
     tokens: dict[str, list[tuple[float, int]]] = field(default_factory=lambda: defaultdict(list))
     disabled: set[str] = field(default_factory=set)
 
+    #: How long a caller may be made to wait for a per-minute window to reopen. A minute
+    #: limit is a pause, not a verdict: skipping the tier on one means a run that makes
+    #: thirty binding decisions silently downgrades most of them to whatever tier is left,
+    #: which is a quality cliff nobody asked for. A day limit is a verdict, and is never
+    #: waited on.
+    max_wait_s: float = 25.0
+
     def allows(self, tier: str) -> bool:
+        return self.wait_for(tier) == 0.0
+
+    def wait_for(self, tier: str) -> float:
+        """0 to proceed now, a positive number of seconds to wait, or -1 to give up."""
         if tier in self.disabled:
-            return False
+            return -1.0
         lim = self.limits.get(tier)
         if not lim:
-            return True
+            return 0.0
         now = time.time()
         recent_min = [t for t in self.calls[tier] if now - t < 60]
         recent_day = [t for t in self.calls[tier] if now - t < 86400]
-        if "rpm" in lim and len(recent_min) >= lim["rpm"]:
-            return False
         if "rpd" in lim and len(recent_day) >= lim["rpd"]:
-            return False
+            return -1.0
+        waits: list[float] = []
+        if "rpm" in lim and len(recent_min) >= lim["rpm"]:
+            waits.append(60.0 - (now - sorted(recent_min)[-lim["rpm"]]) + 0.25)
         if "tpm" in lim:
             used = sum(n for t, n in self.tokens[tier] if now - t < 60)
             if used >= lim["tpm"]:
-                return False
-        return True
+                oldest = min((t for t, _ in self.tokens[tier] if now - t < 60), default=now)
+                waits.append(60.0 - (now - oldest) + 0.25)
+        if not waits:
+            return 0.0
+        wait = max(waits)
+        return wait if wait <= self.max_wait_s else -1.0
 
     def record(self, tier: str, total_tokens: int) -> None:
         now = time.time()
@@ -224,10 +240,15 @@ class Router:
                 errors.append(f"{tier}: unavailable")
                 previous_tier = tier
                 continue
-            if not self.quota.allows(tier):
+            wait = self.quota.wait_for(tier)
+            if wait < 0:
                 errors.append(f"{tier}: quota exhausted")
                 previous_tier = tier
                 continue
+            if wait > 0:
+                # The minute window is about to reopen. Waiting for it keeps the run on the
+                # tier that was chosen for the job instead of quietly demoting it.
+                time.sleep(wait)
 
             if attempted >= max_esc + 1:
                 errors.append(f"{tier}: escalation cap reached ({max_esc + 1} tiers already tried)")

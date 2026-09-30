@@ -55,12 +55,56 @@ def predicate_key(predicate: str) -> str:
 
 # --------------------------------------------------------------------------------- tags
 
-#: An engineering tag: letters then digits, optionally hyphenated. B5, K1, V20, LIS-301, PIS-1001.
-TAG_RE = re.compile(r"(?<![A-Za-z0-9_])([A-Z]{1,4})[-_]?(\d{1,4}[A-Z]?)(?![A-Za-z0-9_])")
+#: An engineering tag: letters then digits, optionally hyphenated, and optionally with one or
+#: two alphabetic qualifier segments in between. B5, K1, V20, LIS-301, PIS-1001, SRC-OA-201.
+#:
+#: The qualifier segments matter more than they look. A process packet tags by discipline and
+#: number (LIS-301); an HVAC or building packet tags by function, service and number
+#: (SRC-OA-201, GAIN-NORM-201), and the two-segment form was rejected outright -- so every
+#: component in such a packet failed `looks_like_tag`, never became a part, and was re-invented
+#: downstream as a `physical_only` boundary. That is the whole of why the IAQ packet emitted a
+#: Modelica model with no components in it.
+TAG_RE = re.compile(
+    r"(?<![A-Za-z0-9_])([A-Z]{1,5}(?:[-_][A-Z]{1,5}){0,2})[-_]?(\d{1,4}[A-Z]?)(?![A-Za-z0-9_])"
+)
+
+#: A part identifier that carries no number at all: `CORE-L`, `ExcitingCoil`, `MagneticGround`.
+#: Whole families of packets name components this way -- a magnetic circuit has a left leg and
+#: an upper yoke, not a V-101 -- and a numbering convention is not a precondition for being a
+#: component. Deliberately strict about *shape* (one compact token, no spaces, no sentence
+#: punctuation) because the caller decides whether the fact-shape says "part"; this only rules
+#: out prose, values and free text masquerading as an identifier.
+PART_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9]{0,23}(?:[-_.][A-Za-z0-9]{1,24}){0,3}")
+
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
 
 
 def looks_like_tag(s: str) -> bool:
     return bool(TAG_RE.fullmatch(str(s).strip()))
+
+
+def looks_like_part_id(s: str) -> bool:
+    """Could this string be the identifier of a component, as opposed to prose or a value?
+
+    Broader than `looks_like_tag` on purpose, and used only where the *shape of the facts*
+    already says "this subject is a part" -- a row in a component schedule, or a name that
+    another record uses as a connection endpoint. Shape alone never promotes anything here.
+    """
+    t = str(s).strip()
+    if not (2 <= len(t) <= 48) or not PART_ID_RE.fullmatch(t):
+        return False
+    # A bare number, a time of day or a date is an index or a schedule row, never a part.
+    return not re.fullmatch(r"[\d.:\-/]+", t)
+
+
+def humanise(name: str) -> str:
+    """'ExcitingCoil' -> 'Exciting Coil'; 'SRC-OA-201' -> 'SRC OA 201'.
+
+    Retrieval and domain inference both work on words. An identifier written as one CamelCase
+    token hides every word in it from a lexical index, so `ExcitingCoil` matched nothing in a
+    catalog that holds `ElectroMagneticConverter` under the words "exciting" and "coil".
+    """
+    return re.sub(r"\s+", " ", _CAMEL.sub(" ", str(name or "").replace("-", " ").replace("_", " "))).strip()
 
 
 def find_tags(text: str, known: dict[str, str]) -> list[str]:
@@ -138,16 +182,24 @@ def is_temperature_unit(unit: str | None) -> bool:
 DOMAIN_WORDS: dict[str, tuple[str, ...]] = {
     "fluid": ("tank", "vessel", "reservoir", "pump", "valve", "pipe", "condenser", "evaporator",
               "liquid", "water", "brine", "condensate", "vapor", "vapour", "steam", "fluid",
-              "concentrate", "gas", "oil", "coolant", "duct", "compressor", "batch", "drum"),
+              "concentrate", "gas", "oil", "coolant", "duct", "compressor", "batch", "drum",
+              # A ventilation packet is a fluid packet, but none of its words were here: its
+              # parts are rooms, zones, ducts and supply/exhaust boundaries, so every one of
+              # them inferred 'unknown' and was disqualified from being a part at all.
+              "air", "room", "zone", "plenum", "fan", "damper", "ventilation", "exhaust",
+              "supply", "trace substance", "co2", "humidity", "moist"),
     "thermal": ("heater", "heating", "cooler", "cooling", "condenser", "evaporator", "heat",
                 "thermal", "boiler", "chiller", "furnace"),
     "electrical": ("resistor", "capacitor", "inductor", "battery", "voltage", "current", "motor",
-                   "generator", "transformer", "breaker", "cable", "electrical"),
-    "magnetic": ("magnetic", "flux", "reluctance", "magnet", "yoke"),
+                   "generator", "transformer", "breaker", "cable", "electrical", "coil",
+                   "winding", "phasor", "ampere", "electric"),
+    "magnetic": ("magnetic", "flux", "reluctance", "magnet", "yoke", "core", "air gap",
+                 "airgap", "leakage", "mmf", "permeability", "pole"),
     "rotational": ("shaft", "gear", "gearbox", "flywheel", "inertia", "torque", "agitator",
                    "clutch", "bearing", "rotor"),
     "translational": ("spring", "piston", "slider", "linear actuator", "mass-spring"),
-    "signal": ("sensor", "measured", "command", "signal", "boolean", "transmitter", "setpoint"),
+    "signal": ("sensor", "measured", "command", "signal", "boolean", "transmitter", "setpoint",
+               "controller", "gain", "schedule", "pid", "feedback", "limiter"),
 }
 
 #: Parts that sit *in series on a path* rather than being a node of their own: all of them
@@ -168,7 +220,14 @@ SIGNAL_MEDIUM_WORDS = ("measured", "command", "signal", "boolean", "real", "bund
 
 
 def infer_domains(*texts: str | None) -> list[str]:
-    blob = " ".join(t.lower() for t in texts if t)
+    """Physical domains any of these texts put a part in.
+
+    CamelCase is split first. `ExcitingCoil` and `MagneticGround` carry their domain in words a
+    word-boundary search cannot see while they are glued together, so a packet that names its
+    components that way inferred 'unknown' for all of them -- and an unknown domain is what
+    disqualified them from being parts.
+    """
+    blob = " ".join(humanise(t).lower() for t in texts if t)
     hits = [d for d, words in DOMAIN_WORDS.items() if any(re.search(rf"\b{re.escape(w)}", blob) for w in words)]
     return hits or ["unknown"]
 

@@ -46,9 +46,12 @@ from .behaviour import (
     build_interlocks,
     build_scenario,
     build_state_machine,
+    dropped_transitions,
+    is_transition,
     interlock_evidence,
     negate_comparison,
     step_rows,
+    transition_rows,
 )
 from .entities import (
     MANUAL_WORDS,
@@ -57,8 +60,10 @@ from .entities import (
     Entity,
     build_entities,
     find_tags,
+    humanise,
     ident,
     infer_domains,
+    looks_like_part_id,
     looks_like_tag,
     measurement_var,
     norm,
@@ -72,6 +77,17 @@ from .topology import GROUP_REF, Path as Route, TopologyBuilder, collect_edges, 
 
 #: Relations where one subject legitimately has many values at once.
 MULTI_VALUED = {"connectsto", "connectedto", "feeds", "flowsto", "label"}
+
+#: A "type" that is a language construct, not an equipment type. The legacy-code adapter
+#: reports every declaration in a `.mo` file as a typed subject, which is exactly right as
+#: evidence -- `Boolean valve1` tells us a command signal exists -- and exactly wrong as a
+#: part. Promoting them produced thirteen unbindable blocks named after local variables,
+#: including one called `end`.
+NON_PART_KINDS = {
+    "real", "boolean", "integer", "string", "enumeration",
+    "model", "package", "class", "block", "connector", "record", "function", "type",
+    "parameter", "constant", "input", "output", "within", "end", "import", "extends",
+}
 
 
 def group_claims(claims: list[EvidenceClaim]) -> dict[tuple[str, str], list[EvidenceClaim]]:
@@ -176,6 +192,7 @@ class Assembler:
         self.build_behaviour()       # B4
         self.build_scenario()        # B5
         self.link_requirements()
+        self.describe_from_interfaces()
         self.m.domains = sorted({d for b in self.m.blocks for d in b.domains if d != "unknown"}
                                 | ({"control"} if self.m.state_machines else set())) or ["unknown"]  # type: ignore[assignment]
         self.m.decisions.extend(self.decisions + self.topo.decisions)
@@ -185,21 +202,41 @@ class Assembler:
     def classify(self) -> None:
         ents = self.entities.values()
         self.requirement_keys = {e.key for e in ents if e.has("requirement")}
-        self.parameter_keys = {e.key for e in ents if e.get("value") is not None
-                               and isinstance(e.get("value").value, (int, float))}
-        self.edge_keys = {e.key for e in ents if e.has("from") and e.has("to")}
+        # A row with From, To *and* a guard or an action is a state transition, not a pipe.
+        # Both conventions use the same two column names, and reading a controller's state
+        # graph as plumbing produced a dozen connections between states -- endpoints with no
+        # equipment behind them, each of which then got invented as a boundary block.
+        self.transition_keys = {e.key for e in ents if is_transition(e)}
+        self.edge_keys = {e.key for e in ents
+                          if e.has("from") and e.has("to")} - self.transition_keys
+        # Who the connection records talk about. Needed before the parameter/part split
+        # below, because being an endpoint is itself evidence of being a part.
+        endpoints: set[str] = set()
+        for e in ents:
+            if e.key in self.edge_keys:
+                endpoints |= {norm(e.text("from")), norm(e.text("to"))}
+        # A numeric `value` makes a row a parameter -- unless the row is a component schedule
+        # entry that merely carries its headline parameter in the same line. Those rows have a
+        # type as well, and something else in the packet connects to them. Claiming them as
+        # parameters took every component in the IAQ schedule out of the running before the
+        # part rule below ever saw it ('ZON-201 | Well-mixed room volume | Volume | 100 m^3'),
+        # which is why that packet's plant came out empty.
+        self.parameter_keys = {
+            e.key for e in ents
+            if e.get("value") is not None and isinstance(e.get("value").value, (int, float))
+            and not (e.has("type", "kind", "modelclass", "role") and e.key in endpoints)
+        }
         self.step_keys = {e.key for e in ents if e.has("next")}
         self.instrument_keys = {
             e.key for e in ents
             if e.has("location") and (e.has("measurement") or e.has("unit"))
             and e.key not in self.parameter_keys and looks_like_tag(e.subject)
         }
-        taken = self.requirement_keys | self.parameter_keys | self.edge_keys | self.step_keys | self.instrument_keys
+        taken = (self.requirement_keys | self.parameter_keys | self.edge_keys | self.step_keys
+                 | self.instrument_keys | self.transition_keys)
 
-        referenced: set[str] = set()
+        referenced: set[str] = set(endpoints)
         for e in ents:
-            if e.key in self.edge_keys:
-                referenced |= {norm(e.text("from")), norm(e.text("to"))}
             if e.key in self.instrument_keys:
                 referenced |= {norm(m.group(0)) for m in TAG_RE.finditer(e.text("location"))}
         registered_mentions = {
@@ -209,20 +246,56 @@ class Assembler:
         }
         self.part_keys: list[str] = []
         for e in sorted(ents, key=lambda e: e.order()):
-            if e.key in taken or not looks_like_tag(e.subject):
+            # What makes a subject a part is the *shape of its facts* -- it has a type, or
+            # another record connects something to it -- not whether its identifier follows
+            # the process-industry tag convention. Gating on `looks_like_tag` here meant a
+            # packet that names its parts CORE-L and ExcitingCoil produced no parts at all,
+            # and every one of them was re-invented downstream as an inert boundary. The
+            # identifier check that remains only rules out prose, dates and values.
+            if e.key in taken or not looks_like_part_id(e.subject):
                 continue
-            has_kind = e.has("type", "kind", "ownership")
-            physical = infer_domains(self._kind_text(e), e.text("name"), e.text("kind")) != ["unknown"]
+            if norm(self._kind_text(e)) in NON_PART_KINDS:
+                continue
+            has_kind = e.has("type", "kind", "modelclass", "role", "ownership")
+            physical = infer_domains(
+                self._kind_text(e), e.text("name"), e.text("kind"), e.subject
+            ) != ["unknown"]
             if has_kind and (physical or e.key in referenced):
                 self.part_keys.append(e.key)
             elif e.key in referenced:
                 self.part_keys.append(e.key)
-            elif not e.registered and e.key not in registered_mentions:
+            elif looks_like_tag(e.subject) and not e.registered and e.key not in registered_mentions:
                 # A tag only a model read (e.g. off a drawing) and no register confirms.
                 self._gap("unextracted", e.subject,
                           f"tag '{e.subject}' appears only in model-read evidence "
                           f"({', '.join(sorted({c.source_id for c in e.facts.values()}))}) and in no register; "
                           f"it is not added to the model", "info")
+
+    def describe_from_interfaces(self) -> None:
+        """Fold what a part's own connections say about it into its description.
+
+        Much of what a packet knows about a part is written on its edges, not on its row: an
+        interface matrix says `ExcitingCoil -> CORE-L | Phi / Vm | Electromagnetic conversion
+        N = 500`, and that sentence is the single best description of the coil anywhere in
+        the packet. It was reaching the connection and nothing else, so the part arrived at
+        the binding cascade described only by its own name -- and a coil described as "a
+        coil" retrieves a coil-shaped nothing.
+
+        Only added where the part has no description of its own or a purely structural one,
+        so a register's words always come first.
+        """
+        incident: dict[str, list[str]] = defaultdict(list)
+        for c in self.m.connections:
+            for ref in (c.source, c.target):
+                bid = ref.split(".", 1)[0]
+                for text in (c.medium, c.description):
+                    if text and text not in incident[bid]:
+                        incident[bid].append(text)
+        for block in self.m.blocks:
+            extra = "; ".join(incident.get(block.id, []))[:240]
+            if not extra:
+                continue
+            block.description = f"{block.description}; {extra}" if block.description else extra
 
     # ------------------------------------------------------------------ B1 blocks
     def _kind_text(self, e: Entity) -> str:
@@ -231,7 +304,11 @@ class Assembler:
             return explicit
         owner = e.text("ownership").lower()
         cls = "manual" if any(w in owner for w in MANUAL_WORDS) else ("automated" if owner else "")
-        noun = singular(e.sheet or "element").lower()
+        # With no type column and no sheet to name it after, the subject itself is the only
+        # thing the packet ever said about this part -- and `ExcitingCoil` is a far better
+        # description of an exciting coil than the word "element". Binding queries and domain
+        # inference both read this string, and both got nothing from the placeholder.
+        noun = singular(e.sheet).lower() if e.sheet else humanise(e.subject).lower()
         return f"{cls} {noun}".strip()
 
     def build_blocks(self) -> None:
@@ -260,8 +337,9 @@ class Assembler:
                         self.initials[bid].append((m.group("var"), float(m.group("num")), c))
             block = Block(
                 id=bid, name=name, kind=kind,
-                domains=infer_domains(kind, name),  # type: ignore[arg-type]
+                domains=infer_domains(kind, name, e.subject),  # type: ignore[arg-type]
                 parameters=params, description=description, physical_only=physical_only,
+                declared_class=_declared_class(e),
                 provenance=Provenance(
                     claim_ids=e.claim_ids,
                     note="manual/local device: architecture only, never a controller output" if manual else None,
@@ -366,14 +444,38 @@ class Assembler:
         self._corroborate_edges()
 
     def _boundary(self, name: str, route: Route) -> None:
+        """A connection endpoint no register lists as equipment.
+
+        Calling it an inert boundary and stopping there is right only when we genuinely know
+        nothing about it. An interface matrix that says `ExcitingCoil -> CORE-L: Phi / Vm` has
+        told us the part's name and its domain, and those are exactly the two things the
+        binding cascade needs -- so the part is offered to the cascade under its own name
+        instead. If nothing binds, `emit_modelica` idealises it away as before; the difference
+        is that a magnetic circuit whose coil, cores and grounds live only in the interface
+        matrix now has components in it rather than twelve commented-out connections.
+        """
         bid = ident(name)
+        label = humanise(name)
+        domains = infer_domains(route.medium, name)
+        recognised = domains != ["unknown"]
         self.m.blocks.append(Block(
-            id=bid, name=name, kind="external boundary",
-            domains=infer_domains(route.medium, name),  # type: ignore[arg-type]
-            description=f"named as a connection endpoint ({', '.join(e.id for e in route.edges)}) but "
-                        f"not listed as equipment: treated as a supply/sink at the system boundary",
-            physical_only=True,
-            provenance=Provenance(claim_ids=route.claim_ids, note="boundary inferred from a connection record"),
+            id=bid, name=label, kind=label.lower() if recognised else "external boundary",
+            domains=domains,  # type: ignore[arg-type]
+            # No description. This part's provenance belongs in `provenance.note`, where the
+            # report reads it; `description` is what the binding cascade retrieves against,
+            # and filling it with "named as a connection endpoint but not listed as
+            # equipment" retrieved on the words 'endpoint', 'equipment' and 'bound' -- an
+            # exciting coil came back as `Electrical.Digital.Delay.InertialDelaySensitive`.
+            # What this part carries is folded in later by `describe_from_interfaces`.
+            physical_only=not recognised,
+            inferred_boundary=True,
+            provenance=Provenance(
+                claim_ids=route.claim_ids,
+                note=f"named as a connection endpoint ({', '.join(e.id for e in route.edges)}) "
+                     f"but not listed as equipment; "
+                     + ("bound from its own name and the item it carries" if recognised
+                        else "treated as a supply/sink at the system boundary"),
+            ),
         ))
 
     def _medium_domain(self, medium: str | None, fallback_block: str) -> str:
@@ -574,7 +676,20 @@ class Assembler:
             interlock_evidence(self.claims, active), self.parser, actuators, self.known)
         self.gaps += il_gaps
 
-        res = build_state_machine(step_rows(self.entities), self.parser, self.actions_for, name="Controller")
+        rows = step_rows(self.entities)
+        if not rows:
+            # No `Next` column anywhere. The packet may still have tabulated its controller
+            # as a transition table, which is the other half of how these documents are
+            # written -- and reading that is the difference between a plant that runs its
+            # sequence and one that compiles and does nothing.
+            rows = transition_rows(self.entities)
+            for src, dst, guard in dropped_transitions(self.entities, rows):
+                self._gap("unextracted", src,
+                          f"transition {src} -> {dst}"
+                          + (f" on '{guard}'" if guard else "")
+                          + " is a second way out of that state; the model keeps the first "
+                            "transition listed and does not implement this one", "warn")
+        res = build_state_machine(rows, self.parser, self.actions_for, name="Controller")
         self.gaps += res.gaps
         self.comparisons = res.comparisons
         if res.machine is not None:
@@ -887,6 +1002,72 @@ def _procedure_title(docs: list[Document]) -> str | None:
     return None
 
 
+#: Nouns a document title uses when it is naming the system rather than naming itself.
+#: 'Owner IAQ Requirements' is the title of a document; 'Room CO2 Feedback-Control System' is
+#: the name of a thing. Without this distinction the IAQ packet produced a model called
+#: `Owner`, and a model named after the person who signed the requirements is not traceable
+#: to anything.
+_SYSTEM_NOUNS = (
+    "system", "plant", "circuit", "controller", "control", "assembly", "rig", "loop",
+    "drivetrain", "machine", "unit", "converter", "network",
+)
+#: Words that mark a title as being about the paperwork, not about the plant.
+_DOCUMENT_NOUNS = (
+    "requirement", "specification", "register", "procedure", "minutes", "notes", "note",
+    "datasheet", "data sheet", "thread", "index", "log", "runbook", "report", "review",
+    "dataset", "workbook", "matrix", "schedule", "export", "record", "template",
+)
+
+
+def _title_candidates(docs: list[Document]) -> Counter[str]:
+    """Title-ish lines from every document, scored by how much they sound like a system name."""
+    votes: Counter[str] = Counter()
+    for d in docs:
+        lines: list[str] = []
+        for b in d.blocks[:6]:
+            text = (b.text or "").strip()
+            if not text:
+                continue
+            lines.append(text.splitlines()[0])
+            # A spreadsheet puts its title in the first cell of the first row, which reaches
+            # us as a table, not as a heading.
+            if b.rows and b.rows[0]:
+                lines.append(str(b.rows[0][0] or "").strip())
+        for raw in lines:
+            for part in ([raw.split(" - ", 1)[1]] if " - " in raw else [raw]):
+                cand = re.split(r",?\s*\bRev(?:ision)?\b", part)[0]
+                cand = re.sub(r"\s*\([^)]*\)\s*$", "", cand).strip(" ,-–—:")
+                if not (3 <= len(cand) <= 60) or re.fullmatch(r"[A-Z]?\d*", cand):
+                    continue
+                low = cand.lower()
+                score = 2 if any(n in low for n in _SYSTEM_NOUNS) else 0
+                if any(n in low for n in _DOCUMENT_NOUNS):
+                    score -= 2
+                if score > 0:
+                    votes[cand] += score
+    return votes
+
+
+#: A Modelica class path, as an engineer writes one in a register cell: dotted or CamelCase,
+#: one token, no prose. `Modelica.Electrical.Analog.Basic.Ground`, `FixedShape.GenericFluxTube`.
+_CLASS_PATH = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+")
+
+
+def _declared_class(e: Entity) -> str | None:
+    """A Modelica class the evidence names for this part, if it names one.
+
+    Read from whichever column the packet used -- 'Model Class', 'Modelica Class', or the
+    type column when its value is plainly a class path rather than a description. This is
+    the strongest binding evidence there is and the cheapest to act on; the binder still
+    verifies it against the harvested catalog before using it.
+    """
+    for pred in ("modelicaclass", "modelclass", "class", "type", "kind"):
+        text = e.text(pred).strip()
+        if text and _CLASS_PATH.fullmatch(text):
+            return text
+    return None
+
+
 def _infer_name(docs: list[Document]) -> str:
     """The system name most document titles agree on: 'Spec - NaCl Evaporation Plant, Rev A'."""
     votes: Counter[str] = Counter()
@@ -898,6 +1079,11 @@ def _infer_name(docs: list[Document]) -> str:
         tail = re.split(r",?\s*\bRev(?:ision)?\b", tail)[0].strip(" ,")
         if 3 <= len(tail) <= 60 and not re.fullmatch(r"[A-Z]?\d*", tail):
             votes[tail] += 1
+    # The ' - ' convention is the strongest signal when a packet follows it, but most do not.
+    # Falling straight through to "the first heading over eight characters" is what named a
+    # ventilation model `Owner`; ask instead which candidate line sounds like a system.
+    if not votes:
+        votes = _title_candidates(docs)
     if votes:
         best = votes.most_common(1)[0][0]
         return "".join(w[:1].upper() + w[1:] for w in re.findall(r"[A-Za-z0-9]+", best))

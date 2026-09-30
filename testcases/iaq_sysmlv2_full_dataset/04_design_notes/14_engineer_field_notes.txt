@@ -1,0 +1,11 @@
+RM-201 synthetic trend check - 2026-03-04
+
+- Don't mix up freshAir.m_flow sign with physical air into room. Source command is negative because of port convention.
+- Outside trace = 0.0004557 kg/kg = 300 ppm under project rounding.
+- "100 kg/kg" at peopleSource looks crazy but is intentional. carrier m_flow * 100 gives actual CO2 kg/s.
+- New schedule peaks at 15 people after lunch. Old .mo file only peaks at 12.
+- New tuning Kp 6, bias 3.5 ACH. Integral off in reference run.
+- Trend maximum I see: about 996.52 ppm at around 14:59.
+- Controller bottoms at 0.2 ACH for long unoccupied periods.
+- Room is treated perfectly mixed; no local sensor stratification modeled.
+- Sensor-fault fallback is a requirement but not injected in the baseline trend.

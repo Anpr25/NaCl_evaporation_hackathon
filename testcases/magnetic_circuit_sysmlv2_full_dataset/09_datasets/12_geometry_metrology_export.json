@@ -1,0 +1,26 @@
+{
+  "drawing_id": "MC-101 Rev B",
+  "units": "m",
+  "nominal": {
+    "a": 0.025,
+    "l": 0.15,
+    "delta": 0.0015,
+    "cross_section": {
+      "shape": "square",
+      "side": 0.025,
+      "area": 0.0006250000000000001
+    },
+    "mean_flux_line": {
+      "left_leg": 0.125,
+      "upper_yoke": 0.125,
+      "right_leg_iron": 0.1235,
+      "lower_yoke": 0.125
+    }
+  },
+  "as_built_prototype_MCB_02": {
+    "air_gap_measured": 0.00158,
+    "measurement_method": "shim stack + feeler gauge cross-check",
+    "uncertainty_m": 2e-05
+  },
+  "configuration_note": "AV-11 uses nominal geometry. As-built data is retained for a separate prototype validation configuration."
+}

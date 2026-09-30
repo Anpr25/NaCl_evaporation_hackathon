@@ -1,0 +1,29 @@
+@startuml
+' Existing architecture draft - intentionally incomplete
+skinparam componentStyle rectangle
+component "RoomVolume\nV=100 m3" as Room
+component "FreshAirSource" as OA
+component "ExhaustBoundary" as EXH
+component "CO2 Sensor\noutput: ppm ?" as S
+component "PID" as PID
+component "People CO2" as P
+
+OA --> Room : supply air
+Room --> EXH : exhaust air
+Room --> S : concentration
+S --> PID : CO2
+PID --> OA : airflow request
+P --> Room : CO2
+
+note right of S
+Legacy draft assumes sensor output is ppm.
+ICD-IAQ-03 later freezes the internal
+feedback interface in kg/kg and adds a
+normalization gain.
+end note
+
+note bottom of P
+Occupancy schedule block not shown.
+Source carrier-flow scaling not shown.
+end note
+@enduml

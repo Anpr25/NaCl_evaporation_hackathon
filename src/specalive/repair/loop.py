@@ -206,7 +206,35 @@ def fix_missing_semicolon(src: str, diag: Diagnostic) -> tuple[str, str] | None:
     return "\n".join(lines) + "\n", f"added the missing semicolon on line {i + 1}"
 
 
+def fix_final_modifier(src: str, diag: Diagnostic) -> tuple[str, str] | None:
+    """`Trying to override final element d_start with modifier '= 0.05'.`
+
+    A `final` parameter is the library author saying "this is not yours to set". The
+    modifier came from a register column that matched the name, and the value it carries is
+    usually right but has to reach the model another way (an initial equation, a different
+    parameter). Dropping the modifier is the only local edit that can work, and it is a safe
+    one: the class keeps its own value, which is what `final` means.
+
+    The diagnostic points into the *library*, not into the generated file, so the line
+    number is useless here -- the modifier is found by name instead.
+    """
+    m = re.search(r"override final element (\w+) with modifier", diag.message + diag.raw)
+    if not m:
+        return None
+    name = m.group(1)
+    # `(a = 1, d_start = 0.05, b = 2)` -> drop just this one, leaving the list well formed.
+    patched, n = re.subn(rf",\s*{re.escape(name)}\s*=\s*[^,()]+", "", src)
+    if not n:
+        patched, n = re.subn(rf"\b{re.escape(name)}\s*=\s*[^,()]+,\s*", "", src)
+    if not n:
+        patched, n = re.subn(rf"\(\s*{re.escape(name)}\s*=\s*[^,()]+\)", "", src)
+    if not n:
+        return None
+    return patched, f"dropped the modifier on '{name}': the class declares it final"
+
+
 DETERMINISTIC_FIXERS: tuple[Fixer, ...] = (
+    fix_final_modifier,
     fix_discrete_loop,
     fix_missing_inner,
     fix_undeclared_typo,
@@ -390,6 +418,17 @@ def fix_unknown_connector(src: str, diag: Diagnostic, index: Any) -> tuple[str, 
                 best = viable[0]
 
     if best is None:
+        # A causal block declares `u` and `y` and nothing else, and no edit distance will
+        # ever get you from `port_in` to `u`. Causality will: the IR's own port names carry
+        # the direction, and the connector's type states it outright. This is the case that
+        # made every signal-domain binding unrepairable.
+        wanted = ("input" if re.search(r"(^|_)(in|inlet|u)(_|$|\d)", port, re.I)
+                  else "output" if re.search(r"(^|_)(out|outlet|y)(_|$|\d)", port, re.I) else None)
+        if wanted:
+            causal = [p.name for p in entry.ports if p.type.rsplit(".", 1)[-1].lower().endswith(wanted)]
+            if len(causal) == 1:
+                best = causal[0]
+    if best is None:
         best = _closest(port, names, cutoff=0.6)
     if not best or best == port:
         return None
@@ -400,10 +439,89 @@ def fix_unknown_connector(src: str, diag: Diagnostic, index: Any) -> tuple[str, 
     )
 
 
+def _connector_package(type_name: str) -> str:
+    return type_name.rsplit(".", 1)[0] if "." in type_name else type_name
+
+
+def fix_connector_library_mismatch(src: str, diag: Diagnostic, index: Any) -> tuple[str, str, IREdit] | None:
+    """`The connectors in connect(CORE_D.port_n, MagneticGround.port_p) are not type compatible.`
+
+    Almost always one component bound into a different library than its neighbours: the
+    standard library offers a `Ground` in `Magnetic.FluxTubes.Basic`, in
+    `Magnetic.FundamentalWave.Components` and in `Magnetic.QuasiStatic.*`, and retrieval will
+    happily pick whichever scores best on the words in a register row. The parts are right;
+    only the package is wrong.
+
+    The catalog settles it without guessing. Take the peer's connector package as ground
+    truth, then look for a class with the SAME leaf name that declares a connector from that
+    same package. Nothing is invented -- the replacement is a harvested class that is
+    connector-compatible by construction -- and the component moved is the one fewer
+    components in the file agree with, so a lone outlier follows the majority rather than the
+    other way round.
+    """
+    if index is None:
+        return None
+    m = re.search(
+        r"connect\(\s*(\w+)\.(\w+)(?:\[\d+\])?\s*,\s*(\w+)\.(\w+)(?:\[\d+\])?\s*\)",
+        diag.message + diag.raw,
+    )
+    if not m:
+        return None
+    pairs = [(m.group(1), m.group(2)), (m.group(3), m.group(4))]
+    types = [_connector_type(src, index, comp, port) for comp, port in pairs]
+    if not all(types) or _connector_package(types[0]) == _connector_package(types[1]):
+        return None
+
+    # Move the outlier: whichever component's class is used by fewer components here.
+    classes = [_declared_class_of(src, comp) for comp, _ in pairs]
+    if not all(classes):
+        return None
+    usage = [len(re.findall(rf"^\s*{re.escape(c)}\s+\w+", src, re.M)) for c in classes]
+    move = 0 if usage[0] <= usage[1] else 1
+    keep = 1 - move
+    want_pkg = _connector_package(types[keep])
+    leaf = classes[move].rsplit(".", 1)[-1]
+
+    candidates = [
+        e for e in getattr(index, "entries", [])
+        if e.key.rsplit(".", 1)[-1] == leaf
+        and any(_connector_package(p.type) == want_pkg for p in e.ports)
+    ]
+    if not candidates:
+        return None
+    # Prefer the candidate sharing the longest package prefix with the peer's own class:
+    # the neighbour's library is the one this component belongs in.
+    peer_parts = classes[keep].split(".")
+
+    def affinity(key: str) -> tuple[int, int]:
+        parts = key.split(".")
+        common = sum(1 for a, b in zip(parts, peer_parts) if a == b)
+        return (common, -len(parts))
+
+    best = max(sorted(c.key for c in candidates), key=affinity)
+    if best == classes[move]:
+        return None
+    comp = pairs[move][0]
+    patched, n = re.subn(
+        rf"^(\s*){re.escape(classes[move])}(\s+{re.escape(comp)}\b)",
+        rf"\g<1>{best}\g<2>", src, count=1, flags=re.M,
+    )
+    if not n:
+        return None
+    return (
+        patched,
+        f"rebound '{comp}' from {classes[move]} to {best}: its connectors must come from "
+        f"{want_pkg} to mate with {pairs[keep][0]}",
+        IREdit("class", classes[move], best, block=comp,
+               detail=f"connector package {want_pkg} required by {pairs[keep][0]}"),
+    )
+
+
 CATALOG_FIXERS: tuple[CatalogFixer, ...] = (
     fix_unknown_class,
     fix_wrong_modifier,
     fix_unknown_connector,
+    fix_connector_library_mismatch,
 )
 
 
@@ -605,11 +723,21 @@ class RepairLoop:
         #: C-AI-2 memory. What was tried, and what the compiler said about it. Fed back to
         #: the agent so the next pass is a refinement rather than another first guess.
         history: list[str] = []
-        #: (diagnostic, patch) pairs already rejected. A deterministic fixer is a pure
-        #: function of the two, so re-deriving one is guaranteed to produce the same patch
-        #: and the same rejection -- pure waste of the iteration budget, and for the model
-        #: tier, of the minute's tokens.
+        #: Exact patches already measured and rejected, keyed by what produced them. A
+        #: deterministic fixer is a pure function of (source, diagnostic), so re-deriving one
+        #: from an unchanged source gives the identical patch and the identical rejection --
+        #: pure waste of the iteration budget, and of the minute's tokens at the model tier.
+        #: Keyed on the patch itself, not on the fixer's prose: two different edits for one
+        #: diagnostic are two different things to try.
         tried: set[str] = set()
+        #: Diagnostics that produced nothing usable against the CURRENT source. Cleared the
+        #: moment the source changes, because an edit elsewhere in the file routinely makes a
+        #: previously inert fixer apply.
+        exhausted: set[str] = set()
+        #: The loop's own refusal, if it ever issues one. The pipeline reads this to decide
+        #: whether to attempt structural repair of the IR, and it must survive the loop going
+        #: on to try other diagnostics afterwards.
+        declared: RepairStep | None = None
 
         def gate(files: list[Any]) -> OmcResult:
             """The bar a candidate has to clear.
@@ -630,71 +758,114 @@ class RepairLoop:
             last = gate(files)
             n_errors = 0 if last.ok else max(len(last.diagnostics), 1)
 
-            if best_errors is None or n_errors < best_errors:
+            # `<=`, not `<`. `source` only ever changes to a patch the gate already accepted,
+            # and a grounded fix is accepted when it does not make things worse -- which is
+            # usually an unchanged count, because omc stops at the first error and fixing it
+            # reveals the next. With a strict `<`, none of those ever became "best", so a run
+            # that ended unrepaired wrote back the ORIGINAL file and silently discarded every
+            # fix it had made. That is why a model repaired on iteration one came out of the
+            # loop with the same error it went in with, and the summary said "1 deterministic
+            # fix" over a file that contained none of it.
+            if best_errors is None or n_errors <= best_errors:
                 best_source, best_errors = source, n_errors
             if last.ok:
                 return RepairOutcome(True, source, it, steps, last)
             if it == self.max_iterations:
                 break
 
-            diag = _most_actionable(last.diagnostics)
-            if diag is None:
-                break
+            # Every diagnostic is a candidate, most-actionable first -- not only the top one.
+            # omc reports several independent faults at once, and the loop used to give up
+            # the instant its single chosen diagnostic had no fixer, leaving four other
+            # errors it could have fixed untouched and reporting "unrepaired, 0 fixes".
+            progressed = False
+            probes = 0
+            for diag in _in_priority_order(last.diagnostics):
+                if probes >= _MAX_PROBES_PER_ITERATION:
+                    break
+                key = _diag_key(diag)
+                if key in exhausted:
+                    continue
 
-            patched, method, desc, edit = self._attempt(
-                source, diag, target, catalog_note, history
-            )
-            if patched is None or patched == source:
-                steps.append(RepairStep(it, diag.kind, method, desc or "no fix found",
-                                        n_errors, n_errors, False, edit))
-                break
+                patched, method, desc, edit = self._attempt(
+                    source, diag, target, catalog_note, history
+                )
+                if method == "declared":
+                    declared = RepairStep(it, diag.kind, method, desc or "", n_errors,
+                                          n_errors, False, None)
+                    steps.append(declared)
+                    exhausted.add(key)
+                    continue
+                if patched is None or patched == source:
+                    steps.append(RepairStep(it, diag.kind, method, desc or "no fix found",
+                                            n_errors, n_errors, False, edit))
+                    exhausted.add(key)
+                    continue
 
-            signature = f"{diag.kind}|{diag.message}|{desc or method}"
-            if signature in tried:
-                steps.append(RepairStep(
-                    it, diag.kind, method,
-                    f"{desc or method} -- already rejected once, not retried",
-                    n_errors, n_errors, False, None,
-                ))
-                break
-
-            # Evaluate the candidate against the same bar the loop exits on -- otherwise a
-            # patch that fixes `check` while breaking the build would be accepted, and the
-            # loop would congratulate itself on a model that does not run.
-            target.write_text(patched, encoding="utf-8")
-            probe = gate([target, *support_files])
-            after = 0 if probe.ok else max(len(probe.diagnostics), 1)
-            # Error COUNT is the wrong bar for a grounded fix. omc reports the first failure
-            # and stops, so correcting a class that provably does not exist routinely
-            # uncovers the next latent error and leaves the count unchanged -- at which point
-            # keep-best discards a correct fix, the source never changes, and the next
-            # iteration derives the identical patch from the identical diagnostic. That is
-            # how a repairable model burned six iterations and reported "0 fixes".
-            #
-            # A deterministic or catalog fix is grounded in something checkable: the
-            # language's own grammar, or a harvested signature. It cannot invent a class or a
-            # parameter, so the honest bar for it is "does not make things worse". A
-            # model-authored patch is a guess and keeps the stricter bar -- that asymmetry is
-            # the whole reason for the tiering.
-            grounded = method in ("deterministic", "catalog")
-            accepted = probe.ok or after < n_errors or (grounded and after <= n_errors)
-            steps.append(RepairStep(it, diag.kind, method, desc or "", n_errors, after,
-                                    accepted, edit))
-            if accepted:
-                source = patched
-                history.append(f"[accepted] {desc or method}: errors {n_errors} -> {after}")
-            else:
-                # Keep-best: never apply a patch that made things worse. But record WHY it
-                # was rejected and let the agent try a different approach, rather than
-                # stopping at the first bad guess -- that is the difference between a loop
-                # that refines and a loop that gives up.
-                target.write_text(source, encoding="utf-8")
+                signature = f"{key}|{hash(patched)}"
+                if signature in tried:
+                    # This exact edit has already been measured and rejected. Another
+                    # diagnostic may still be fixable, so move on rather than stop -- but
+                    # record the dead end, because "it stopped here and why" is the one
+                    # thing a reader of the repair trace needs.
+                    steps.append(RepairStep(
+                        it, diag.kind, method,
+                        f"{desc or method} -- already rejected once, not retried",
+                        n_errors, n_errors, False, None,
+                    ))
+                    exhausted.add(key)
+                    continue
                 tried.add(signature)
+
+                # Evaluate the candidate against the same bar the loop exits on -- otherwise a
+                # patch that fixes `check` while breaking the build would be accepted, and the
+                # loop would congratulate itself on a model that does not run.
+                target.write_text(patched, encoding="utf-8")
+                probe = gate([target, *support_files])
+                probes += 1
+                after = 0 if probe.ok else max(len(probe.diagnostics), 1)
+                # Error COUNT is the wrong bar for a grounded fix. omc reports the first
+                # failure and stops, so correcting a class that provably does not exist
+                # routinely uncovers the next latent error and leaves the count unchanged --
+                # at which point keep-best discards a correct fix, the source never changes,
+                # and the next iteration derives the identical patch from the identical
+                # diagnostic. That is how a repairable model burned six iterations and
+                # reported "0 fixes".
+                #
+                # A deterministic or catalog fix is grounded in something checkable: the
+                # language's own grammar, or a harvested signature. It cannot invent a class
+                # or a parameter, so the honest bar for it is "does not make things worse". A
+                # model-authored patch is a guess and keeps the stricter bar -- that asymmetry
+                # is the whole reason for the tiering.
+                grounded = method in ("deterministic", "catalog")
+                accepted = probe.ok or after < n_errors or (grounded and after <= n_errors)
+                steps.append(RepairStep(it, diag.kind, method, desc or "", n_errors, after,
+                                        accepted, edit))
+                if accepted:
+                    source = patched
+                    history.append(f"[accepted] {desc or method}: errors {n_errors} -> {after}")
+                    progressed = True
+                    break
+                # Keep-best: never apply a patch that made things worse. Record WHY it was
+                # rejected, put the file back, and try the next fault -- that is the
+                # difference between a loop that refines and a loop that gives up.
+                target.write_text(source, encoding="utf-8")
                 history.append(
                     f"[rejected] {desc or method}: errors {n_errors} -> {after}, discarded"
                 )
 
+            if progressed:
+                # The file moved, so a fixer that found nothing to do a moment ago may now
+                # apply. Everything gets another chance against the new source.
+                exhausted.clear()
+            else:
+                break
+
         target.write_text(best_source, encoding="utf-8")
+        # Surface the refusal last if one was issued: `RepairOutcome.summary()` and the
+        # pipeline's structural-repair trigger both read the final step, and a refusal that
+        # the loop went on to look past is still the most informative thing it learned.
+        if declared is not None and steps and steps[-1] is not declared:
+            steps.append(declared)
         return RepairOutcome(False, best_source, len(steps), steps, last)
 
     # ------------------------------------------------------------------ one repair attempt
@@ -763,8 +934,17 @@ class RepairLoop:
 
         lines = source.splitlines()
         centre = (diag.line or len(lines) // 2) - 1
-        start = max(0, centre - self.window)
-        end = min(len(lines), centre + self.window)
+        # A window of +-15 lines is right for a syntax error and wrong for everything else.
+        # The faults that actually reach a model here -- an over-determined system, a
+        # connector that mates with nothing -- are relationships between a declaration at the
+        # top of the file and a connect two hundred lines down, and a keyhole view of the
+        # second one guarantees the model patches the symptom. A generated plant is small
+        # enough to show whole.
+        if len(lines) <= _WHOLE_FILE_LINES:
+            start, end = 0, len(lines)
+        else:
+            start = max(0, centre - self.window)
+            end = min(len(lines), centre + self.window)
         window = "\n".join(f"{i + 1:5d}| {lines[i]}" for i in range(start, end))
         window_text = "\n".join(lines[start:end])
         hist = (
@@ -839,6 +1019,32 @@ _PRIORITY = (
     "runtime",
     "other",
 )
+
+
+#: Show the model the whole file up to this many lines. A generated plant is ~40-200 lines,
+#: and the errors worth a model call are non-local.
+_WHOLE_FILE_LINES = 400
+
+#: How many candidate patches one iteration may measure. Each costs an omc round trip, which
+#: is the loop's whole wall-clock budget; three is enough to get past a fault with no fixer
+#: without turning one iteration into a full sweep of a long diagnostic list.
+_MAX_PROBES_PER_ITERATION = 3
+
+
+def _in_priority_order(diags: list[Diagnostic]) -> list[Diagnostic]:
+    """Every distinct fault, the ones most likely to be causing the others first."""
+    seen: set[str] = set()
+    out: list[Diagnostic] = []
+    for d in sorted(diags, key=lambda d: _PRIORITY.index(d.kind) if d.kind in _PRIORITY else 99):
+        key = _diag_key(d)
+        if key not in seen:
+            seen.add(key)
+            out.append(d)
+    return out
+
+
+def _diag_key(diag: Diagnostic) -> str:
+    return f"{diag.kind}|{diag.message}"
 
 
 def _most_actionable(diags: list[Diagnostic]) -> Diagnostic | None:

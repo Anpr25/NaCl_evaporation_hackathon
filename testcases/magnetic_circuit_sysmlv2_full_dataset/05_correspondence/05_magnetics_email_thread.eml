@@ -1,0 +1,27 @@
+From: priya.nair@synthetic-magnetics.example
+To: magnetics-model@synthetic-magnetics.example
+Date: Wed, 25 Feb 2026 09:12:00 +0100
+Subject: RE: MCB-02 leakage fit / which gap value goes into the reference model
+
+The v1.0 file still has sigma=0.05. That was the early idealized estimate.
+
+The calibration fit using the nominal geometry is closer to sigma=0.08. I have CR-MAG-006 in approval now.
+
+Also: the technician measured 1.58 mm at the physical shim stack. Please do NOT silently replace the 1.50 mm nominal gap in the analytic benchmark. We need both:
+- nominal model: delta=1.50 mm
+- prototype/as-built validation configuration: delta=1.58 mm
+
+---- reply ----
+From: daniel.cho@synthetic-magnetics.example
+Date: Wed, 25 Feb 2026 10:01:00 +0100
+
+Understood. One more mismatch: CoreCatalog_A says mu_r=1000, but the batch characterization sheet used 1200. CR-MAG-004 already approved 1200 for the linear reference benchmark.
+
+The old measurement-coil sketch also says 40 turns. Coil Data B says 50 and has the polarity dots.
+
+---- approval ----
+From: a.mehta@synthetic-magnetics.example
+Date: Thu, 26 Feb 2026 16:20:00 +0100
+Subject: CR-MAG-006 approved
+
+Approved sigma=0.08 for the released nominal benchmark. Archive the 0.05 model for traceability.

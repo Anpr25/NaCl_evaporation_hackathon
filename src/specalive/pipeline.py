@@ -22,6 +22,7 @@ from typing import Any, Callable, Iterator, Literal
 from .catalog.retrieve import CatalogIndex
 from .emit.modelica import emit_modelica
 from .emit.sysml import emit_sysml, round_trip_check
+from .ingest.base import Document
 from .ingest.registry import load_packet, packet_summary
 from .ir.system import SystemModel
 from .ir.validate import validate
@@ -165,6 +166,7 @@ class Pipeline:
             from .extract.claims import extract_claims
 
             claims = extract_claims(docs, router=self.router)
+            claims.extend((yield from self._extract_skeleton(docs, claims)))
             det = sum(1 for c in claims if c.extracted_by == "t0_deterministic")
             yield self._emit(
                 "extract", "ok",
@@ -221,6 +223,46 @@ class Pipeline:
                 break
 
         yield from self._finish(t0, runner)
+
+    # ------------------------------------------------------------------ extraction
+    def _extract_skeleton(
+        self, docs: list[Document], claims: list[Any]
+    ) -> Iterator[PipelineEvent]:
+        """One long-context read of the whole packet, to catch what no single span states.
+
+        Runs after the deterministic and per-span passes, never instead of them, and is
+        told which tags they already found so it spends its attention on the gaps. With no
+        router (`--provider none`) there is nothing to run and the pipeline is unchanged.
+
+        Yields events and *returns* the extra claims, so the caller writes
+        `claims.extend((yield from ...))`.
+        """
+        if self.router is None:
+            return []
+        from .extract.skeleton import extract_skeleton
+
+        det = [c for c in claims if c.extracted_by == "t0_deterministic"]
+        known = sorted({str(c.subject).strip() for c in det})[:400]
+        # Subjects a register already types. The whole-packet read is told not to restate
+        # what these are -- only to supply the Modelica class they lack, and to name the
+        # parts no table mentions at all.
+        described = sorted({
+            str(c.subject).strip() for c in det
+            if str(c.predicate).lower().replace(" ", "") in
+            ("type", "kind", "class", "modelclass", "role", "name")
+        })
+        index = None
+        if self.cfg.catalog.exists():
+            try:
+                index = CatalogIndex.from_file(self.cfg.catalog)
+            except Exception:
+                index = None
+        extra, notes = extract_skeleton(
+            docs, self.router, known_tags=known, described=described, index=index
+        )
+        for note in notes:
+            yield self._emit("extract", "ok" if extra else "warn", note)
+        return extra
 
     # ------------------------------------------------------------------ SysML
     def _emit_sysml(self, model: SystemModel, note: str) -> Iterator[PipelineEvent]:

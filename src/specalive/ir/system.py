@@ -116,6 +116,16 @@ class Block(BaseModel):
         default=None, description="L2 only: model body authored under a fixed port skeleton"
     )
     binding_rationale: str | None = None
+    #: How much the binding is worth. "declared" = the evidence named the class;
+    #: "strong" = a decisive catalog match or a hand-built template; "weak" = a model chose
+    #: from a shortlist, or we took the best available hit. Weak bindings are the ones worth
+    #: withdrawing when they turn out to contradict the rest of the model.
+    binding_strength: Literal["declared", "strong", "weak"] = "strong"
+    #: A Modelica class the *evidence* names for this part -- a register's 'Model Class'
+    #: column, or a whole-packet read's suggestion that the catalog confirmed exists. The
+    #: binder prefers it over retrieval, because an engineer who wrote the class down has
+    #: already made the choice retrieval is only approximating.
+    declared_class: str | None = None
 
     #: True when the source merges this part into another for simulation but the part exists
     #: physically. Keeps architecture honest without distorting the executable model.
@@ -124,6 +134,12 @@ class Block(BaseModel):
     physical_only: bool = Field(
         default=False, description="Present in the architecture, not in the executable model"
     )
+    #: True when this part exists only because another record named it as a connection
+    #: endpoint -- no register row of its own. Such a part is still offered to the binding
+    #: cascade (a coil named only in an interface matrix is still a coil), but if nothing
+    #: binds it there is nothing to simulate either, and the emitter idealises it away rather
+    #: than leaving the system under-determined. See `emit_modelica`.
+    inferred_boundary: bool = False
     provenance: Provenance = Field(default_factory=Provenance)
 
 

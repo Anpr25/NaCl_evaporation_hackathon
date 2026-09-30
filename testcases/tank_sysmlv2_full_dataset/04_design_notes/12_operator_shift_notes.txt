@@ -1,0 +1,17 @@
+TEST ENGINEER SCRATCH NOTES - 04 APR 2026
+
+09:02 - Initial both tank displays ~0.05 m, all three output lamps off.
+09:03 - Start event at 20 s looks good. T1 fill is slow/linear.
+09:06 - V1 drops out at the high target. Observed target is 0.80, not the 0.78 number in Jin's old model.
+09:07 - Stop at 220 kills all valve lamps. Tank levels hold steady through pause.
+09:08 - Start at 280 picks transfer back up; it does NOT go back to fill.
+09:11 - After T1 low there is a noticeably longer dead time than the first wait. Controls says 12 s.
+09:15 - T2 drains, then new fill comes back fairly quickly (~8 s after low).
+09:16 - Stop at 650 interrupts second fill.
+09:17 - Shut at 700: transfer + drain lamps are on together. This is intentional for SHUT, not an interlock failure.
+09:18 - Shutdown finishes quickly because there was not much inventory left after the 650 stop. System stays idle to 900 s.
+
+Terminology reminders from the screen:
+  tank1 = TK-101, tank2 = TK-102
+  valve1 = XV-101, valve2 = XV-102, valve3 = XV-103
+  'shut' is controlled drain; E-stop is outside this demo scope.

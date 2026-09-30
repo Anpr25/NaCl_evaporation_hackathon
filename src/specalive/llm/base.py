@@ -30,6 +30,17 @@ class ProviderUnavailable(LLMError):
     """No network, no daemon, no key. Router skips the tier silently."""
 
 
+class ModelOverloaded(LLMError):
+    """This model is fine and busy right now. Wait a moment and ask it again.
+
+    A distinct type, not a message we pattern-match: a free Gemini or Groq endpoint answers
+    HTTP 503 several times an hour and clears in seconds. Treated as "model unavailable" it
+    costs the tier its whole fallback list and the router escalates away from a backend that
+    was about to work -- and on the extraction path that means quietly losing the packet
+    read. Only the provider knows which failures are transient, so only the provider says so.
+    """
+
+
 class ModelUnavailable(LLMError):
     """This model id is not served to this key. Try the next model in the tier.
 

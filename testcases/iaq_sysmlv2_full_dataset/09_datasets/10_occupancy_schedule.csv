@@ -1,0 +1,10 @@
+schedule_id,revision,start_time,end_time,occupants,interpretation,note
+OCC-SCH-04,C,00:00,07:00,0,piecewise_constant,Unoccupied
+OCC-SCH-04,C,07:00,08:00,2,piecewise_constant,Early arrivals / setup
+OCC-SCH-04,C,08:00,10:00,8,piecewise_constant,Morning occupancy
+OCC-SCH-04,C,10:00,12:00,12,piecewise_constant,High morning occupancy
+OCC-SCH-04,C,12:00,13:00,4,piecewise_constant,Lunch-period partial occupancy
+OCC-SCH-04,C,13:00,15:00,15,piecewise_constant,Design peak occupancy
+OCC-SCH-04,C,15:00,17:00,10,piecewise_constant,Afternoon occupancy
+OCC-SCH-04,C,17:00,18:00,3,piecewise_constant,Late occupants
+OCC-SCH-04,C,18:00,24:00,0,piecewise_constant,Unoccupied

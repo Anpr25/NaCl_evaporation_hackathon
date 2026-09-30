@@ -49,8 +49,13 @@ HEADER_SYNONYMS: dict[str, tuple[str, ...]] = {
     "requirement": ("requirement", "statement", "shall", "text"),
     "priority": ("priority", "criticality", "must/should"),
     "verification": ("verification", "verify", "test method", "acceptance"),
-    "from": ("from", "source", "upstream", "start", "inlet"),
-    "to": ("to", "target", "destination", "downstream", "end", "outlet"),
+    # 'start' and 'end' are deliberately absent. They read as endpoints exactly once per
+    # packet and as a time span everywhere else: an occupancy schedule's 'Start Time' /
+    # 'End Time' columns turned twelve schedule rows into twelve connection records between
+    # times of day, which then assembled into twelve phantom components (e_00_00, e_07_00...)
+    # and twenty-one connections in a model that had no real parts in it at all.
+    "from": ("from", "source", "upstream", "inlet", "source tag"),
+    "to": ("to", "target", "destination", "downstream", "outlet", "target tag"),
     "port": ("port", "connection", "terminal", "nozzle", "pin", "flange"),
     "medium": ("medium", "fluid", "item", "service", "material", "signal"),
     "guard": ("guard", "transition", "condition", "trigger", "completion condition"),
@@ -82,6 +87,11 @@ def normalise_header(cell: str) -> str | None:
     for predicate, synonyms in HEADER_SYNONYMS.items():
         if any(c.startswith(s + " ") for s in synonyms):
             return predicate
+    # 'Element ID', 'Interface ID', 'Component ID': every register invents its own noun for
+    # the key column, and listing them one by one is a losing game. A header whose last word
+    # is 'id' identifies the row -- that is what the word means.
+    if c.endswith(" id") or c.endswith(" no"):
+        return "id"
     return None
 
 

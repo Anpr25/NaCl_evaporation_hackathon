@@ -371,6 +371,95 @@ def step_rows(entities: dict[str, Entity]) -> list[StepRow]:
     ]
 
 
+def transition_rows(entities: dict[str, Entity]) -> list[StepRow]:
+    """Sequence rows recovered from a *state transition table*: From | Guard | To | Actions.
+
+    Two conventions describe the same controller. A sequence table lists one row per step
+    with a `Next` column, which `step_rows` reads. A transition table lists one row per
+    *edge*, keyed by neither endpoint, with From and To columns -- and those two column
+    names are also how an interface matrix describes a pipe. Read as pipes, a controller's
+    state graph becomes twelve phantom connections between states with no equipment behind
+    them, and the packet's control logic never reaches the model at all: the two-tank
+    packet's fill/transfer/drain cycle was fully tabulated and produced a plant with no
+    controller in it.
+
+    The rows are folded back into one entry per source state. Where a state has several
+    outgoing edges the first in document order is kept as its successor and the rest are
+    reported by the caller: this recovers the main cycle, which is what makes the model do
+    anything, and says plainly what it left out.
+    """
+    edges = [e for e in entities.values() if is_transition(e)]
+    edges.sort(key=lambda e: e.order())
+    # Two layouts, and which one a packet used shows in whether it has a From column. With
+    # one, the row is keyed by an edge id and names both endpoints; without, the table is
+    # keyed by the source state itself and only names the destination.
+    triples = [(e.text("from").strip() or e.subject.strip(), e.text("to").strip(), e)
+               for e in edges]
+    triples = [(s, d, e) for s, d, e in triples if s and d]
+
+    out_edge: dict[str, tuple[str, Entity]] = {}
+    # The Actions column of a transition table says what changes *when the edge is taken* --
+    # 'IDLE | START edge | FILL_T1 | V1=1' opens V1 in FILL_T1, not in IDLE. Attaching it to
+    # the source state, as a Next-column sequence table would mean, commands every valve one
+    # state too early: the two-tank model opened its feed valve while still idle and closed
+    # it on entering FILL.
+    in_action: dict[str, tuple[str, Entity]] = {}
+    order: list[str] = []
+    for src, dst, e in triples:
+        for state in (src, dst):
+            if norm(state) not in {norm(s) for s in order}:
+                order.append(state)
+        out_edge.setdefault(norm(src), (dst, e))
+        in_action.setdefault(norm(dst), (_action_of(e), e))
+
+    rows: list[StepRow] = []
+    for state in order:
+        key = norm(state)
+        nxt, edge = out_edge.get(key, ("", None))
+        action, action_edge = in_action.get(key, ("", None))
+        owner = edge or action_edge
+        if owner is None:
+            continue
+        rows.append(StepRow(
+            entity=owner,
+            id=ident(state),
+            name=state,
+            region=region_of(owner.text("region")),
+            action=action,
+            guard=edge.text("guard", "trigger", "condition") if edge is not None else "",
+            next=nxt,
+        ))
+    return rows
+
+
+def is_transition(e: Entity) -> bool:
+    """A row that names a successor state and the condition for reaching it.
+
+    Requiring a guard or an action is what keeps an interface matrix out: a pipe from B6 to
+    B1 has a medium and a port, never a trigger.
+    """
+    return bool(e.has("to") and (e.has("guard", "trigger", "condition") or _action_of(e)))
+
+
+def _action_of(e: Entity) -> str:
+    """The row's action text, under whichever heading the packet used ('Actions', 'Effect')."""
+    c = e.get("action") or e.find("action") or e.find("effect") or e.find("command")
+    return "" if c is None or c.value is None else str(c.value).strip()
+
+
+def dropped_transitions(entities: dict[str, Entity], kept: list[StepRow]) -> list[tuple[str, str, str]]:
+    """(from, to, guard) for every transition-table edge `transition_rows` could not keep."""
+    used = {(norm(r.id), norm(r.next)) for r in kept}
+    out: list[tuple[str, str, str]] = []
+    for e in entities.values():
+        if not is_transition(e):
+            continue
+        src, dst = e.text("from").strip() or e.subject.strip(), e.text("to").strip()
+        if src and dst and (norm(ident(src)), norm(dst)) not in used:
+            out.append((src, dst, e.text("guard", "trigger", "condition")))
+    return out
+
+
 @dataclass
 class FsmResult:
     machine: StateMachine | None

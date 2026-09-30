@@ -1,0 +1,38 @@
+@startuml
+' Synthetic legacy architecture draft - intentionally incomplete
+skinparam componentStyle rectangle
+component "tankController
+(PLC-101)" as PLC
+component "tank1
+(TK-101)" as T1
+component "tank2
+(TK-102)" as T2
+component "valve1
+(XV-101)" as V1
+component "valve2
+(XV-102)" as V2
+component "valve3
+(XV-103)" as V3
+component "source
+(SRC-101)" as SRC
+component "ambient1
+(DRN-101)" as DRN
+
+SRC --> V1 : liquid
+V1 --> T1 : liquid
+T1 --> V2 : liquid
+V2 --> T2 : liquid
+T2 --> V3 : liquid
+V3 --> DRN : liquid
+PLC ..> V1 : valve1
+PLC ..> V2 : valve2
+PLC ..> V3 : valve3
+
+note right of PLC
+Legacy draft does not show:
+- LT-101 / LT-102
+- START / STOP / SHUT inputs
+- pause state
+- controlled shutdown concurrency
+end note
+@enduml

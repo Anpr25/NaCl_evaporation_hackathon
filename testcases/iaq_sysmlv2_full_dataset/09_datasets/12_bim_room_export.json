@@ -1,0 +1,53 @@
+{
+  "export_info": {
+    "source": "Synthetic IFC/BIM room-property export",
+    "revision": "BIM-2026-01-20",
+    "units": "SI"
+  },
+  "space": {
+    "guid": "2f8a7c55-ROOM-201-SYNTH",
+    "space_tag": "RM-201",
+    "name": "Seminar / Project Room 201",
+    "zone_tag": "ZON-201",
+    "level": "Level 02",
+    "gross_floor_area_m2": 40.0,
+    "net_floor_area_m2": 38.6,
+    "clear_height_m": 2.59,
+    "reported_volume_m3": 100.0,
+    "occupancy_classification": "Assembly - meeting/project room",
+    "design_people": 15
+  },
+  "air_connections": [
+    {
+      "connector_id": "SUP-201-A",
+      "system": "OA-VENT-2",
+      "role": "supply",
+      "x_m": 2.2,
+      "y_m": 1.1,
+      "z_m": 2.45,
+      "nominal_duct_mm": "250x150"
+    },
+    {
+      "connector_id": "EXH-201-A",
+      "system": "EA-VENT-2",
+      "role": "exhaust",
+      "x_m": 8.4,
+      "y_m": 3.6,
+      "z_m": 2.45,
+      "nominal_duct_mm": "250x150"
+    }
+  ],
+  "controls_placeholders": [
+    {
+      "name": "CO2 sensor",
+      "location": "north wall, 1.5 m AFF",
+      "tag_status": "not_assigned_in_BIM"
+    },
+    {
+      "name": "occupancy source",
+      "location": "logical schedule",
+      "tag_status": "not_physical"
+    }
+  ],
+  "caveat": "BIM export is authoritative for spatial identity and room volume only. It is not a controls design source."
+}

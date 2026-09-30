@@ -36,6 +36,7 @@ from .entities import (
     claims_text,
     find_tags,
     ident,
+    looks_like_part_id,
     norm,
 )
 
@@ -110,6 +111,23 @@ def is_signal_medium(medium: str | None) -> bool:
     return bool(low) and any(w in low for w in SIGNAL_MEDIUM_WORDS)
 
 
+def _loose(ent: Entity, *tokens: str) -> str | None:
+    """First fact whose predicate merely *contains* one of these tokens.
+
+    Interface matrices name their columns freely: 'Item/Quantity' for the medium, 'From
+    Port/Quantity' for the source connector. Both slug to compound predicates no exact
+    vocabulary lookup finds -- and 'Item/Quantity' is worse than a miss, because 'item' is
+    also a synonym for an id column, so it loses the tie and ends up under its own name.
+    Every hop in the magnetic packet came through with `medium = None` because of it, which
+    cost the binder the one sentence in the packet that describes what a part carries.
+    """
+    for token in tokens:
+        c = ent.find(token)
+        if c is not None and c.value is not None and str(c.value).strip():
+            return str(c.value).strip()
+    return None
+
+
 def collect_edges(entities: dict[str, Entity], resolve) -> list[Edge]:
     """Every entity that has both a `from` and a `to` fact is one hop."""
     edges: list[Edge] = []
@@ -123,17 +141,40 @@ def collect_edges(entities: dict[str, Entity], resolve) -> list[Edge]:
                 id=ent.subject,
                 src=resolve(src_raw) or src_raw,
                 dst=resolve(dst_raw) or dst_raw,
-                src_port=ent.text("fromport", "sourceport") or None,
-                dst_port=ent.text("toport", "targetport") or None,
-                medium=ent.text("medium", "itemmedium", "item") or None,
-                note=" ".join(
+                src_port=ent.text("fromport", "sourceport") or _loose(ent, "fromport"),
+                dst_port=ent.text("toport", "targetport") or _loose(ent, "toport"),
+                medium=ent.text("medium", "itemmedium", "item") or _loose(ent, "item", "medium"),
+                # 'Rule', 'Constraint / Semantics', 'Operational Note' -- every packet names
+                # this column differently, and it is where the physics of the interface
+                # actually gets written down ("Electromagnetic conversion N = 500"). A fixed
+                # list of four spellings missed it in three packets out of four.
+                note=(" ".join(
                     ent.text(p) for p in ("constraintnote", "note", "notes", "constraint", "comments")
-                ).strip(),
+                ).strip() or _loose(ent, "rule", "note", "constraint", "semantic", "comment") or ""),
                 claim_ids=ent.claim_ids,
                 order=ent.order(),
             )
         )
-    return sorted(edges, key=lambda e: e.order)
+    edges.sort(key=lambda e: e.order)
+    # One hop per ordered pair of endpoints. Two records describing the same hop is
+    # corroboration, not two pipes -- and emitting it twice gives the pair two Connections
+    # with the same derived id, an IR that fails its own uniqueness check, and a Modelica
+    # model over-determined by one equation per duplicated hop. Order() puts the
+    # best-located record first (a table cell beats a whole-packet read), so the first
+    # occurrence is the one to keep; the loser's claim ids are folded into the winner so
+    # nothing loses its provenance.
+    seen: dict[tuple[str, str], Edge] = {}
+    for e in edges:
+        key = (norm(e.src), norm(e.dst))
+        if (winner := seen.get(key)) is None:
+            seen[key] = e
+            continue
+        winner.claim_ids.extend(c for c in e.claim_ids if c not in winner.claim_ids)
+        winner.medium = winner.medium or e.medium
+        winner.src_port = winner.src_port or e.src_port
+        winner.dst_port = winner.dst_port or e.dst_port
+        winner.note = winner.note or e.note
+    return list(seen.values())
 
 
 class TopologyBuilder:
@@ -142,7 +183,36 @@ class TopologyBuilder:
     def __init__(self, entities: dict[str, Entity], claims: list[EvidenceClaim]) -> None:
         self.entities = entities
         self.claims = claims
-        self.known: dict[str, str] = {k: e.subject for k, e in entities.items() if TAG_RE.fullmatch(e.subject)}
+        self.known: dict[str, str] = {k: e.subject for k, e in entities.items()
+                                      if TAG_RE.fullmatch(e.subject)}
+        # An 'Alias' or 'Legacy Name' column is the packet telling us two names denote the
+        # same part -- 'XV-101 | valve1 / V1'. Everything downstream that has to recognise a
+        # tag in prose reads this map, so without the aliases a control sequence written in
+        # the operator's vocabulary ('V1=1') resolves to nothing and the valve it commands is
+        # never driven: the two-tank model ran its whole state sequence with every valve
+        # pinned shut. Registered tags win any collision; an alias only ever adds a name.
+        for e in entities.values():
+            if not TAG_RE.fullmatch(e.subject) and not looks_like_part_id(e.subject):
+                continue
+            for c in (e.get("alias"), e.find("alias"), e.find("legacyname")):
+                if c is None or not isinstance(c.value, str):
+                    continue
+                for name in re.split(r"\s*[/,;]\s*", c.value):
+                    name = name.strip()
+                    if not name:
+                        continue
+                    held = self.known.get(norm(name))
+                    # An alias may take a name that already resolves to something, and
+                    # usually should: 'V1' looks like a tag, so a stray mention of it in a
+                    # legacy model or a note created an entity of its own, and that entity
+                    # won -- which is how a valve command resolved to a nameless nothing
+                    # while the register said plainly that V1 is XV-101. A declared alias
+                    # only yields to a name that some register actually types as equipment.
+                    if held is not None:
+                        other = entities.get(norm(held))
+                        if other is not None and other.has("type", "kind", "modelclass", "role"):
+                            continue
+                    self.known[norm(name)] = e.subject
         self.decisions: list[DecisionRecord] = []
         self.gaps: list[Gap] = []
         self._seq = 0
