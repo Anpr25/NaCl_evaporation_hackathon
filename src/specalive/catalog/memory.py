@@ -75,6 +75,9 @@ class BindingMemory:
     bindings: dict[str, dict[str, dict[str, Any]]] = field(default_factory=dict)
     #: domain -> connector package -> {"ok": n, "bad": n}
     families: dict[str, dict[str, dict[str, int]]] = field(default_factory=dict)
+    #: criterion hash -> {"expression", "tolerance", "by", "criterion"}: acceptance criteria
+    #: an earlier run formalised and verified against a real result. See verify/criteria.py.
+    criteria: dict[str, dict] = field(default_factory=dict)
     #: Counters for this run only, for the report.
     used: int = 0
     learned: int = 0
@@ -89,6 +92,7 @@ class BindingMemory:
                 blob = json.loads(p.read_text(encoding="utf-8"))
                 mem.bindings = blob.get("bindings", {})
                 mem.families = blob.get("families", {})
+                mem.criteria = blob.get("criteria", {})
             except (OSError, ValueError):
                 # A corrupt memory is an empty memory, never a failed run.
                 pass
@@ -101,6 +105,7 @@ class BindingMemory:
             "note": "SpecAlive binding memory. Safe to delete; it is rebuilt from runs.",
             "bindings": self.bindings,
             "families": self.families,
+            "criteria": self.criteria,
         }
         tmp = self.path.with_suffix(".tmp")
         tmp.write_text(json.dumps(blob, indent=1, sort_keys=True), encoding="utf-8")

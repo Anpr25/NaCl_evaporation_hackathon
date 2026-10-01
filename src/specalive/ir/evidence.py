@@ -139,6 +139,12 @@ class EvidenceClaim(BaseModel):
     #: claims should dominate; a high LLM share is a smell worth showing in the report.
     extracted_by: str = "t0_deterministic"
 
+    #: What the claim's own table ROW says about its validity: "effective" (Approved, Current,
+    #: Effective? = Yes), "superseded" (Superseded, Obsolete, Effective? = No), or None when the
+    #: row says nothing. Source-level precedence cannot see this -- two rows of one register
+    #: come from one source -- so it is carried on the claim and read in `resolve_all`.
+    row_status: Literal["effective", "superseded"] | None = None
+
     def ref(self) -> str:
         return f"{self.source_id}!{self.locator.render()}"
 

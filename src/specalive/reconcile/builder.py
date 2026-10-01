@@ -31,6 +31,8 @@ from typing import Any
 from ..ingest.base import Document
 from ..ir.evidence import AuthorityClass, DecisionRecord, EvidenceClaim, Gap, Source
 from ..ir.system import (
+    RESUME,
+    AcceptanceCheck,
     Block,
     Connection,
     Parameter,
@@ -39,6 +41,7 @@ from ..ir.system import (
     Quantity,
     Requirement,
     Signal,
+    Stimulus,
     SystemModel,
 )
 from .behaviour import (
@@ -71,6 +74,7 @@ from .entities import (
     singular,
     to_si,
 )
+from .procedure import acceptance_criteria, command_schedule, profiles, run_settings
 from .roles import RoleDecision, classify_roles
 from .precedence import PrecedenceEngine, build_supersession_map, resolve_source_supersession
 from .topology import GROUP_REF, Path as Route, TopologyBuilder, collect_edges, connects_to_claims, is_signal_medium
@@ -117,7 +121,10 @@ def resolve_all(
 
     winners: dict[tuple[str, str], EvidenceClaim] = {}
     decisions: list[DecisionRecord] = []
-    for key, group in group_claims(claims).items():
+    row_decided: set[str] = set()
+    groups = group_claims(claims)
+    # Resolve each subject's `value` first so its row decision is the one recorded.
+    for key, group in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1] != "value")):
         # Distinct values only: five sources agreeing is not a conflict, it is corroboration.
         # A many-valued relation (B5 feeds K1 *and* B7) is not a conflict either; topology reads
         # those claims directly, so they never need a single winner.
@@ -125,6 +132,34 @@ def resolve_all(
         if len(distinct) == 1 or key[1] in MULTI_VALUED:
             winners[key] = max(group, key=lambda c: c.confidence)
             continue
+        # A row that says of itself "Superseded" / "Effective? No" loses to one that says
+        # "Approved" / "Effective? Yes", before any source-level rule is consulted. Both rows
+        # usually come from the SAME register, so the source-level rules (supersession,
+        # authority, revision, date) had nothing to tell them apart -- and the tank's high
+        # limit resolved to the superseded 0.78 m that CR-004 had replaced with 0.80 m.
+        alive = [c for c in group if c.row_status == "effective"]
+        dead = [c for c in group if c.row_status == "superseded"]
+        if alive and dead:
+            if len({repr(c.value) for c in alive}) == 1:
+                winner = max(alive, key=lambda c: c.confidence)
+                winners[key] = winner
+                # One record per row decision, not one per column of the row: the value
+                # carries the meaning, the status and comment cells only follow it.
+                if key[0] in row_decided:
+                    continue
+                row_decided.add(key[0])
+                decisions.append(DecisionRecord(
+                    id=f"DEC-ROW-{len(decisions) + 1:03d}",
+                    subject=str(group[0].subject), predicate=str(group[0].predicate),
+                    winner_claim_id=winner.id,
+                    loser_claim_ids=[c.id for c in group if c is not winner and repr(c.value) != repr(winner.value)],
+                    rule_id="P1b-row-status",
+                    rationale=f"{winner.ref()} is the row its own register marks effective; "
+                              f"{', '.join(c.ref() for c in dead[:3])} "
+                              f"{'is' if len(dead) == 1 else 'are'} marked superseded in the same table",
+                ))
+                continue
+            group = alive
         winner, decision = engine.resolve(
             group[0].subject, group[0].predicate, group, sources, supersession=source_sup
         )
@@ -811,6 +846,7 @@ class Assembler:
         self.gaps += il_gaps
 
         rows = step_rows(self.entities)
+        from_transition_table = not rows
         if not rows:
             # No `Next` column anywhere. The packet may still have tabulated its controller
             # as a transition table, which is the other half of how these documents are
@@ -824,10 +860,175 @@ class Assembler:
                           + " is a second way out of that state; the model keeps the first "
                             "transition listed and does not implement this one", "warn")
         res = build_state_machine(rows, self.parser, self.actions_for, name="Controller")
+        if res.machine is not None:
+            # Group shorthand ("normal/wait", "any non-shutdown") is a transition-table
+            # convention. In a Next-column sequence table a state's name is its purpose text
+            # -- "Charge water to B3 / mix", "all valves closed" -- and reading that as a
+            # group deleted three of the NaCl sequence's steps.
+            if from_transition_table:
+                self._expand_groups(res.machine, res)
+            self._resolve_timers(res.machine, rows, res)
         self.gaps += res.gaps
         self.comparisons = res.comparisons
         if res.machine is not None:
             self.m.state_machines = [res.machine]
+
+    def _expand_groups(self, machine: Any, res: Any) -> None:
+        """Turn a transition table's shorthand rows into real transitions.
+
+        Sequence tables write the cross-cutting commands once, for a group of states:
+
+            normal/wait      | STOP edge | PAUSED
+            any non-shutdown | SHUT edge | SHUTDOWN
+            PAUSED           | START     | stored state
+
+        Read literally those are states called "normal/wait" and "stored state" that nothing
+        ever enters, so STOP and SHUT did nothing at all. Groups are resolved from the
+        machine's own structure, not from a vocabulary list:
+
+          * "non-X"                 -- every real state except those named X;
+          * "any" / "all"           -- every real state except the row's own target;
+          * running/normal/cycle/wait words -- the states of the automatic cycle: those
+            reachable from the initial state by ordinary transitions, initial excluded
+            ("wait" alone narrows that to the cycle's wait states).
+
+        "stored state" / "previous state" / "resume" is a history target: the source state
+        records which state it interrupted, and the transition returns there.
+
+        A group transition is checked BEFORE a state's own transitions, broadest group
+        first: a command that can interrupt everything (SHUT) outranks one that interrupts
+        only the cycle (STOP), and both outrank the state's own exit.
+        """
+        group_word = re.compile(r"/|\bany\b|\ball\b|\bnon[-\s]", re.I)
+        resume_word = re.compile(r"\b(stored|previous|prior|last|interrupted)\s+state\b|\bresume\b|\bhistory\b", re.I)
+        pseudo = {s.id for s in machine.states if group_word.search(s.name) or resume_word.search(s.name)}
+        if not pseudo:
+            return
+        real = [s for s in machine.states if s.id not in pseudo]
+        initial = next((s for s in real if s.initial), real[0] if real else None)
+        group_targets = {t.target_state for t in machine.transitions if t.source_state in pseudo}
+
+        # The automatic cycle: reachable from the initial state through real states only,
+        # not counting the targets of group commands (PAUSED, SHUTDOWN are not the cycle).
+        cycle: set[str] = set()
+        frontier = [initial.id] if initial else []
+        while frontier:
+            cur = frontier.pop()
+            for t in machine.transitions:
+                if t.source_state == cur and t.target_state not in pseudo | group_targets \
+                        and t.target_state not in cycle:
+                    cycle.add(t.target_state)
+                    frontier.append(t.target_state)
+        if initial:
+            cycle.discard(initial.id)
+
+        def members(phrase: str, target: str) -> list[str]:
+            low = phrase.lower()
+            if m := re.search(r"\bnon[-\s]+([a-z_ ]+)", low):
+                excluded = norm(m.group(1))
+                return [s.id for s in real if excluded not in norm(s.id) and s.id != target]
+            words = set(re.findall(r"[a-z]+", low)) - {"any", "all", "state", "states", "or", "and"}
+            if words & {"normal", "running", "cycle", "automatic", "auto", "operating"}:
+                return [s for s in cycle if s != target]
+            if words == {"wait"} or words == {"waiting"}:
+                return [s for s in cycle if "wait" in s.lower()]
+            if not words:
+                return [s.id for s in real if s.id != target]
+            return [s for s in cycle if any(w in s.lower() for w in words) and s != target]
+
+        group_rows = [t for t in machine.transitions if t.source_state in pseudo]
+        expanded: list[Any] = []
+        for t in group_rows:
+            src = machine.state(t.source_state)
+            for sid in members(src.name if src else t.source_state, t.target_state):
+                expanded.append((len(members(src.name, t.target_state)) if src else 0,
+                                 t.model_copy(update={"id": f"T_{sid}_{t.target_state}", "source_state": sid})))
+        # History: rows whose TARGET is "stored state" return to the interrupted state.
+        for t in machine.transitions:
+            if t.target_state in pseudo and resume_word.search((machine.state(t.target_state) or t).name if machine.state(t.target_state) else ""):
+                t.target_state = RESUME
+                if t.source_state not in machine.history_states:
+                    machine.history_states.append(t.source_state)
+
+        kept = [t for t in machine.transitions if t.source_state not in pseudo and t.target_state not in pseudo]
+        # Broadest group first, then the state's own transitions.
+        expanded.sort(key=lambda kv: -kv[0])
+        by_source: dict[str, list[Any]] = defaultdict(list)
+        for _, t in expanded:
+            by_source[t.source_state].append(t)
+        ordered: list[Any] = []
+        for s in real:
+            ordered += by_source.get(s.id, []) + [t for t in kept if t.source_state == s.id]
+        machine.transitions = ordered
+        machine.states = real
+        if group_rows:
+            res.gaps.append(Gap(
+                id=f"GAP-FSM-GRP-{len(res.gaps) + 1:02d}", kind="deviation", subject=machine.id,
+                detail=f"{len(group_rows)} group row(s) of the transition table expanded into "
+                       f"{len(expanded)} transition(s); a resumed hold restarts its timer rather "
+                       f"than keeping its remaining time", severity="info"))
+
+    def _resolve_timers(self, machine: Any, rows: list[Any], res: Any) -> None:
+        """'timer expired' -> dwell(<state>) >= <the wait parameter that belongs to it>.
+
+        A sequence table writes a hold as "start timer" on the way in and "timer expired" on
+        the way out, and never says which timer. The register says which waits exist --
+        'Wait after Tank 1 high = 10 s', 'Wait after Tank 1 low = 12 s' -- and the state
+        machine says what happened just before each hold: WAIT_AFTER_FILL is entered when
+        LT-101 reaches the HIGH limit of the part LT-101 reads. Matching the wait whose name
+        carries that part (by tag or alias) and that direction ties each hold to its own
+        parameter. Left as an immediate exit, every hold in the two-tank cycle took zero
+        seconds and the 8 s inter-cycle delay its acceptance test checks did not exist.
+        """
+        waits = [p for p in self.m.parameters
+                 if p.status == "effective" and re.search(r"wait|delay|hold|dwell|timer", p.id, re.I)
+                 and (p.quantity.unit in (None, "s"))]
+        if not waits:
+            return
+        text_of = {r.id: (r.guard or "") for r in rows}
+        incoming: dict[str, list[Any]] = defaultdict(list)
+        for t in machine.transitions:
+            incoming[t.target_state].append(t)
+        timer = re.compile(r"\b(timer|delay|hold time|wait time)\b.*\b(expired|elapsed|done|complete)", re.I)
+
+        for t in machine.transitions:
+            if t.guard not in ("", "true") or not timer.search(text_of.get(t.source_state, "")):
+                continue
+            # What the hold follows: the comparison on the transition into it.
+            clues: set[str] = set(re.findall(r"[a-z]+", t.source_state.lower()))
+            for into in incoming.get(t.source_state, []):
+                for sig_name, op, _value, _unit in res.comparisons.get(into.id, []):
+                    clues.add("high" if op in (">", ">=") else "low")
+                    host = self.signal_block.get(sig_name)
+                    if host:
+                        clues.add(norm(host))
+                        ent = next((e for e in self.entities.values() if ident(e.subject) == host), None)
+                        if ent is not None:
+                            for c in (ent.get("alias"), ent.find("alias")):
+                                if c is not None and isinstance(c.value, str):
+                                    clues |= {norm(a) for a in re.split(r"[/,;]", c.value) if a.strip()}
+
+            def score(p: Any) -> int:
+                text = f"{p.id} {p.description or ''}"
+                words, packed = set(re.findall(r"[a-z]+", text.lower())), norm(text)
+                hit = sum(2 if len(c) > 4 else 1 for c in clues if c in words or (len(c) > 3 and c in packed))
+                # A register row outranks a value a model read from prose.
+                return hit + (1 if hit and p.evidence == "register" else 0)
+
+            ranked = sorted(waits, key=score, reverse=True)
+            if not ranked or score(ranked[0]) < 3 or (len(ranked) > 1 and score(ranked[1]) == score(ranked[0])):
+                res.gaps.append(Gap(
+                    id=f"GAP-FSM-TMR-{len(res.gaps) + 1:02d}", kind="unextracted", subject=t.source_state,
+                    detail=f"{t.source_state} exits on a timer but no single wait parameter in the "
+                           f"evidence matches it; it exits on the next scan", severity="warn"))
+                continue
+            wait = ranked[0]
+            t.guard = f"dwell({t.source_state}) >= {wait.name}"
+            t.provenance.claim_ids.extend(wait.provenance.claim_ids)
+            t.provenance.note = "; ".join(x for x in (
+                t.provenance.note,
+                f"'timer expired' resolved to {wait.id} = {wait.quantity.value} s, the wait that "
+                f"follows what this state was entered on") if x)
 
     def _completion(self, who: str) -> tuple[str, str] | None:
         """'B6 return complete' -> the transfer out of B6 has drained it to where its own interlock
@@ -861,8 +1062,112 @@ class Assembler:
             self.claims, title, self.m.state_machines[0] if self.m.state_machines else None,
             self.comparisons, {s.name: s for s in self.m.signals}, self.initials,
         )
+        self._apply_procedure(scenario)
         self.m.scenarios = [scenario]
         self.gaps += gaps
+
+    def _apply_procedure(self, scenario: Any) -> None:
+        """What the test procedure says the run must be. See reconcile/procedure.py.
+
+        Overrides the phrase-guessed stop time and interval when the procedure states them,
+        adds the procedure's stimuli, and adds its acceptance criteria as checks to be
+        formalised at verify time.
+        """
+        settings = run_settings(self.docs)
+        stims = profiles(self.docs)
+        commands = command_schedule(self.docs)
+
+        why: list[str] = []
+        if settings.stop_time:
+            scenario.stop_time = settings.stop_time
+            why.append(f"stop time from the procedure: {settings.basis[0]}")
+            self.gaps = [g for g in self.gaps if g.subject != "scenario.stop_time"]
+        elif stims and any(p.hold or p.end for p in stims):
+            scenario.stop_time = max((p.hold or p.end or 0.0) for p in stims)
+            why.append(f"stop time is the end of the procedure's source profile ('{stims[0].text[:60]}')")
+            self.gaps = [g for g in self.gaps if g.subject != "scenario.stop_time"]
+        if settings.interval:
+            scenario.interval = settings.interval
+        if why:
+            scenario.provenance.note = "; ".join(why)
+
+        # Commands -> pulses on the operator input each one names.
+        machine = self.m.state_machines[0] if self.m.state_machines else None
+        width = max(1.0, 2.0 * (machine.scan_period if machine else 0.5))
+        operators = {}
+        for s in self.m.signals:
+            if s.owner == "manual" and s.datatype == "boolean":
+                for alias in (s.name, re.sub(r"^[A-Za-z]{1,3}_", "", s.name)):
+                    operators.setdefault(norm(alias), s)
+        by_signal: dict[str, list[float]] = defaultdict(list)
+        for c in commands:
+            sig = operators.get(norm(c.command))
+            if sig is None:
+                self._gap("unextracted", c.command,
+                          f"the procedure commands {c.command} at {c.time:g} s, and no operator "
+                          f"input in the evidence answers to that name", "warn")
+                continue
+            by_signal[sig.name].append(c.time)
+        for name, times in by_signal.items():
+            scenario.stimuli.append(Stimulus(
+                id=f"STIM-{name}", kind="pulses", target=name, times=sorted(times), width=width,
+                description=f"{name} pressed at {', '.join(f'{t:g}' for t in sorted(times))} s "
+                            f"for {width:g} s each, per the procedure's command schedule",
+            ))
+
+        # Source profiles -> parameters on the source they describe.
+        for p in stims[:1]:
+            target = self._profile_target(p.unit)
+            if target is None:
+                self._gap("unextracted", "scenario.stimulus",
+                          f"the procedure describes a ramp ('{p.text[:80]}') and no source part "
+                          f"in the model matches it", "warn")
+                continue
+            values = {"amplitude": p.amplitude - p.offset, "offset": p.offset, "startTime": p.start}
+            if p.end is not None:
+                values["duration"] = max(p.end - p.start, 1e-6)
+            scenario.stimuli.append(Stimulus(
+                id=f"STIM-{target}", kind="parameters", target=target, values=values,
+                description=f"{target}: {p.text[:160]}",
+            ))
+
+        # Acceptance criteria -> checks, formalised at verify time against the real result.
+        covered = [chk for chk in scenario.checks if chk.kind == "threshold"]
+        for c in acceptance_criteria(self.docs):
+            if self._restates(c.text, covered):
+                continue
+            scenario.checks.append(AcceptanceCheck(
+                id=c.id, description=c.text, kind="procedure", expression="",
+                criterion=c.text if not c.context else f"{c.text} [context: {c.context}]",
+                provenance=Provenance(note=f"stated in {c.source}"),
+            ))
+
+    def _profile_target(self, unit: str) -> str | None:
+        """The source a ramp profile describes: a part called a ramp or source in the
+        domain the profile's unit belongs to."""
+        domain = {"A": "electrical", "mA": "electrical", "kA": "electrical", "V": "electrical",
+                  "kV": "electrical", "mV": "electrical", "N": "translational",
+                  "Nm": "rotational", "rpm": "rotational"}.get(unit)
+        cands = [b for b in self.m.blocks
+                 if re.search(r"ramp|source|supply|excitation|generator|stimul", f"{b.name} {b.kind}", re.I)
+                 and not b.physical_only and (domain is None or domain in b.domains)]
+        ramps = [b for b in cands if re.search(r"ramp", f"{b.name} {b.kind}", re.I)]
+        pick = ramps or cands
+        return pick[0].id if len(pick) == 1 else None
+
+    @staticmethod
+    def _restates(text: str, checks: list[Any]) -> bool:
+        """Does this criterion only restate a threshold the sequence already checks?
+        'Step1 exits at LIS-301 >= 0.13 m' is the same check as crosses(B3.level, 0.13)."""
+        numbers = {float(n) for n in re.findall(r"(?<![\w.])\d+(?:\.\d+)?(?![\w.])", text)}
+        for chk in checks:
+            m = re.search(r",\s*([-\d.eE+]+)\s*,", chk.expression)
+            # "exits at" only: "reach 0.80 m BEFORE the first transfer" is an ordering
+            # criterion that merely mentions the threshold, and must be checked as such.
+            if m and float(m.group(1)) in numbers and re.search(r"\bexits?\b", text, re.I) \
+                    and not re.search(r"\b(before|after|until)\b", text, re.I):
+                return True
+        return False
 
     # ------------------------------------------------------------------ traceability
     def link_requirements(self) -> None:
@@ -1063,6 +1368,7 @@ def _build_parameters(
                 scope="global",
                 description="; ".join(x for x in (text, f"applies to {scope}" if scope else None) if x) or None,
                 status="superseded" if "supersed" in status_raw else "effective",
+                evidence="register" if value_claim.extracted_by == "t0_deterministic" else "model",
                 provenance=Provenance(claim_ids=[c.id for c in facts.values()], note=note),
             )
         )

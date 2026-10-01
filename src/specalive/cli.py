@@ -19,6 +19,15 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.markup import escape as _markup_escape
+
+
+def escape(text: str) -> str:
+    """Console-safe document text: no markup, and nothing the console's codepage cannot
+    show. A criterion with a non-breaking hyphen crashed the run summary on a Windows
+    console (cp1252) after the run itself had finished."""
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    return _markup_escape(str(text).encode(enc, errors="replace").decode(enc, errors="replace"))
 from rich.table import Table
 
 from .pipeline import Pipeline, PipelineConfig, PipelineEvent
@@ -37,10 +46,10 @@ _STATUS_STYLE = {"ok": "green", "warn": "yellow", "fail": "red", "skip": "dim", 
 
 def _print(ev: PipelineEvent) -> None:
     if ev.status == "start":
-        con.print(f"[dim]{ev.stage:<9}[/] {ev.message}")
+        con.print(f"[dim]{ev.stage:<9}[/] {escape(ev.message)}")
         return
     mark = {"ok": "ok  ", "warn": "warn", "fail": "FAIL", "skip": "skip"}[ev.status]
-    con.print(f"[{_STATUS_STYLE[ev.status]}]{mark}[/] [bold]{ev.stage:<9}[/] {ev.message}")
+    con.print(f"[{_STATUS_STYLE[ev.status]}]{mark}[/] [bold]{ev.stage:<9}[/] {escape(ev.message)}")
 
 
 def _router(mode: str):
@@ -232,8 +241,12 @@ def run(
             f"\nacceptance: [{'green' if card.ok else 'yellow'}]{card.summary()}[/]"
         )
         for r in card.results:
-            if not r.passed:
-                con.print(f"  [red]FAIL[/] {r.check_id}: {r.detail}")
+            # Criterion text is document prose and may contain [brackets]; never let it be
+            # read as console markup.
+            if not r.checkable:
+                con.print(f"  [dim]N/A [/] {escape(r.check_id)}: {escape(r.detail)}")
+            elif not r.passed:
+                con.print(f"  [red]FAIL[/] {escape(r.check_id)}: {escape(r.detail)}")
 
     if not result.ok:
         con.print("\n[red]HARD GATE NOT MET[/] - the Modelica does not compile and run.")
@@ -393,7 +406,7 @@ def _check_expectations(name, expect, res, card) -> list[str]:
     # A known failure that starts passing is also news: either we fixed something real, or
     # the check stopped testing what it used to.
     known = set(expect.get("known_failures") or [])
-    actually_failed = {r.check_id for r in card.results if not r.passed}
+    actually_failed = {r.check_id for r in card.results if not r.passed and r.checkable}
     for unexpected in sorted(actually_failed - known):
         out.append(f"{name}: unexpected acceptance failure {unexpected}")
     for fixed in sorted(known - actually_failed):

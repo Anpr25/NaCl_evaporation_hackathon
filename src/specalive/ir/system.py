@@ -80,6 +80,11 @@ class Parameter(BaseModel):
     scope: str | None = Field(default=None, description="Block id or 'global'")
     description: str | None = None
     status: Literal["effective", "superseded", "provisional"] = "effective"
+    #: "register" when the value comes from a structured table row, "model" when a model
+    #: read it out of prose. Two spellings of one setpoint -- a register's 'High level limit'
+    #: and an email's 'T1_high' -- never meet in a precedence contest, so whatever has to
+    #: choose between them needs to know which one a table actually states.
+    evidence: Literal["register", "model"] = "register"
     provenance: Provenance = Field(default_factory=Provenance)
 
 
@@ -224,6 +229,11 @@ class State(BaseModel):
     provenance: Provenance = Field(default_factory=Provenance)
 
 
+#: Transition target meaning "the state the source state interrupted" -- see
+#: StateMachine.history_states.
+RESUME = "RESUME"
+
+
 class StateMachine(BaseModel):
     id: str
     name: str
@@ -231,6 +241,9 @@ class StateMachine(BaseModel):
     states: list[State] = Field(default_factory=list)
     transitions: list[Transition] = Field(default_factory=list)
     scan_period: float = Field(default=0.1, description="Seconds; the emitter lowers to sample()")
+    #: States that remember which state they interrupted -- a PAUSED entered by STOP from
+    #: the middle of a transfer. A transition whose target is RESUME returns there.
+    history_states: list[str] = Field(default_factory=list)
     provenance: Provenance = Field(default_factory=Provenance)
 
     def state(self, sid: str) -> State | None:
@@ -255,10 +268,33 @@ class AcceptanceCheck(BaseModel):
 
     id: str
     description: str
-    kind: Literal["threshold", "ordering", "final_value", "invariant", "routing"] = "threshold"
+    kind: Literal["threshold", "ordering", "final_value", "invariant", "routing", "procedure"] = "threshold"
     expression: str = Field(description="Evaluated against the simulation result frame")
+    #: For kind "procedure": the criterion exactly as the test procedure states it. Its
+    #: expression is written at verify time, against the columns the simulation actually
+    #: produced, so it can only ever reference a variable that exists. Empty until then.
+    criterion: str | None = None
     tolerance: float | None = None
     requirement_ids: list[str] = Field(default_factory=list)
+    provenance: Provenance = Field(default_factory=Provenance)
+
+
+class Stimulus(BaseModel):
+    """Something the test procedure does to the system while it runs.
+
+    `pulses`: an operator input pressed at each of `times` for `width` seconds -- a test
+    procedure's command schedule. `parameters`: values set on a source component -- a ramp
+    "0 A until 0.1 s, to 2 A by 0.5 s" becomes {startTime, duration, I} on the ramp source.
+    """
+
+    id: str
+    kind: Literal["pulses", "parameters"]
+    #: A signal name for `pulses`; a block id for `parameters`.
+    target: str
+    times: list[float] = Field(default_factory=list)
+    width: float = 1.0
+    values: dict[str, float] = Field(default_factory=dict)
+    description: str = ""
     provenance: Provenance = Field(default_factory=Provenance)
 
 
@@ -271,6 +307,7 @@ class Scenario(BaseModel):
     solver: str = "dassl"
     initial_conditions: dict[str, Quantity] = Field(default_factory=dict)
     inputs: dict[str, str] = Field(default_factory=dict)
+    stimuli: list[Stimulus] = Field(default_factory=list)
     checks: list[AcceptanceCheck] = Field(default_factory=list)
     provenance: Provenance = Field(default_factory=Provenance)
 

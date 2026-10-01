@@ -36,7 +36,7 @@ from ..ir.complete import (
     recover_stated_initial_values,
 )
 from ..ir.evidence import Gap
-from ..ir.system import Block, StateMachine, SystemModel
+from ..ir.system import RESUME, Block, StateMachine, SystemModel
 from ..reconcile.entities import humanise, ident as _ident, norm
 
 IND = "  "
@@ -704,14 +704,7 @@ class Binder:
         and the class declares `levelMax`. An exact-match-only rule dropped that bound
         silently, and every assumption scaled from it became impossible to found.
         """
-        valid = {p.name for p in entry.params}
-        out: dict[str, str] = {}
-        for p in block.parameters:
-            wanted = (explicit or {}).get(p.name, p.name)
-            target = match_parameter(wanted, valid)
-            if target and p.quantity.value is not None:
-                out[target] = _literal(p.quantity.value)
-        return out
+        return map_block_parameters(block, entry, explicit)[0]
 
     @staticmethod
     def _l1_head_match(block: Block) -> bool:
@@ -737,16 +730,21 @@ class Binder:
         if best is None:
             return None
         _, key, tpl = best
-        if self._require and self.index is not None:
-            entry = self.index.get(tpl["class"])
-            if entry is not None and not (_connector_packages(entry) & self._require):
-                return None
-        allowed = set(tpl["params"])
-        mods = {
-            p.name: _literal(p.quantity.value)
-            for p in block.parameters
-            if p.name in allowed and p.quantity.value is not None
-        }
+        entry = self.index.get(tpl["class"]) if self.index is not None else None
+        if self._require and entry is not None and not (_connector_packages(entry) & self._require):
+            return None
+        if entry is not None:
+            # The same mapper as every other route: a template bound through here used to
+            # take only parameters spelled exactly like the template's, so a register's
+            # 'Cross-section Area (m^2)' never became the vessel's `area`.
+            mods = map_block_parameters(block, entry)[0]
+        else:
+            allowed = set(tpl["params"])
+            mods = {
+                p.name: _literal(p.quantity.value)
+                for p in block.parameters
+                if p.name in allowed and p.quantity.value is not None
+            }
         return BindingResult("L1", tpl["class"], mods, f"matched L1 template '{key}'")
 
     # ------------------------------------------------- L0 again, best effort
@@ -1312,13 +1310,21 @@ class ModelicaEmitter:
         # A declared fallback (SA-05) fires on time spent in a step, so those regions need a
         # clock stamped at every entry. Only emit it where one is used -- an unused discrete
         # variable is noise in a model a judge is going to read.
+        # Every region with a guard that reads its entry clock -- a declared fallback, or a
+        # hold resolved from "timer expired". Keying this on fallbacks alone left a timed
+        # hold referencing a clock nobody declared.
         dwell_regions = sorted({
             (sm.state(t.source_state).region if sm.state(t.source_state) else "main")
-            for t in sm.transitions if t.declared_fallback
+            for t in sm.transitions if t.declared_fallback or "dwell(" in (t.guard or "")
         })
         for region in dwell_regions:
             self._w(2, f'discrete Real tEnter_{_mid(region)}(start = 0, fixed = true) '
                        f'"Time the active step in region {region} was entered";')
+        history_regions = sorted({(sm.state(h).region if sm.state(h) else "main")
+                                  for h in sm.history_states})
+        for region in history_regions:
+            self._w(2, f'Integer h_{_mid(region)}(start = 0, fixed = true) '
+                       f'"State interrupted on entering a pausing state in region {region}";')
         self._w(0)
 
         self._w(1, "algorithm")
@@ -1336,14 +1342,27 @@ class ModelicaEmitter:
                 self._w(3, f"{kw} pre({var}) == {order[region][st.id]} then")
                 # Specified transitions first, declared fallbacks last, so a guard the
                 # customer wrote always wins when both are true in the same scan.
-                for t in sorted(outgoing, key=lambda x: x.declared_fallback):
+                #
+                # One if/elseif chain, so the FIRST true guard wins. These were separate
+                # `if ... end if` blocks all reading the same pre() state, which made the
+                # LAST true guard win -- the opposite of the comment above, and of every
+                # command priority a sequence table states (SHUT beats STOP beats the
+                # state's own exit).
+                for k, t in enumerate(sorted(outgoing, key=lambda x: x.declared_fallback)):
                     if t.declared_fallback:
                         self._w(4, f"// FALLBACK (SA-05): {t.fallback_for} is unreachable; "
                                    f"the specified guard above is unchanged and still wins")
                     guard = self._guard_to_modelica(t.guard, sm, order)
-                    self._w(4, f"if {guard} then")
-                    tgt_region = (sm.state(t.target_state) or st).region
-                    self._w(5, f"s_{_mid(tgt_region)} := {order[tgt_region][t.target_state]};")
+                    self._w(4, f"{'if' if k == 0 else 'elseif'} {guard} then")
+                    if t.target_state == RESUME:
+                        tgt_region = st.region
+                        self._w(5, f"// resume the state {st.name} interrupted")
+                        self._w(5, f"s_{_mid(tgt_region)} := pre(h_{_mid(tgt_region)});")
+                    else:
+                        tgt_region = (sm.state(t.target_state) or st).region
+                        if t.target_state in sm.history_states:
+                            self._w(5, f"h_{_mid(tgt_region)} := {order[st.region][st.id]};")
+                        self._w(5, f"s_{_mid(tgt_region)} := {order[tgt_region][t.target_state]};")
                     if _mid(tgt_region) in [_mid(r) for r in dwell_regions]:
                         self._w(5, f"tEnter_{_mid(tgt_region)} := time;")
                     for fork in t.forks:
@@ -1352,6 +1371,7 @@ class ModelicaEmitter:
                             self._w(5, f"s_{_mid(fs.region)} := {order[fs.region][fork]};")
                             if _mid(fs.region) in [_mid(r) for r in dwell_regions]:
                                 self._w(5, f"tEnter_{_mid(fs.region)} := time;")
+                if outgoing:
                     self._w(4, "end if;")
             if not first:
                 self._w(3, "end if;")
@@ -1665,6 +1685,20 @@ class ModelicaEmitter:
         for sm in self.m.state_machines:
             anno = placement.get(sm.id, "")
             self._w(2, f"{_mid(sm.name)} {_mid(sm.id)}{anno};")
+        # The procedure's command schedule: one Boolean source per operator input, toggling
+        # at each press and each release. A push-button with no schedule stays held false
+        # by the unbound-input pass below, as before.
+        self._pulsed = {}
+        for sc in self.m.scenarios[:1]:
+            for st in sc.stimuli:
+                if st.kind != "pulses" or not st.times:
+                    continue
+                edges = sorted({round(x, 6) for t in st.times for x in (t, t + st.width)})
+                src = f"{_mid(st.target)}_cmd"
+                self._pulsed[st.target] = f"{src}.y"
+                table = ", ".join(f"{x:g}" for x in edges)
+                self._w(2, f'Modelica.Blocks.Sources.BooleanTable {src}(table = {{{table}}}) '
+                           f'"{st.description[:120]}";')
         self._w(0)
         self._w(1, "equation")
         for c in self.m.connections:
@@ -1731,6 +1765,10 @@ class ModelicaEmitter:
 
             # Sensor inputs the IR could not bind to anything in the plant.
             for sig in self.m.signals:
+                if sig.role == "sensor" and not sig.binding and sig.name in getattr(self, "_pulsed", {}):
+                    self._w(2, f"// operator input {sig.name}: driven by the procedure's command schedule")
+                    self._w(2, f"{ctrl}.{_mid(sig.name)} = {self._pulsed[sig.name]};")
+                    continue
                 if sig.role == "sensor" and not sig.binding:
                     # A Boolean input pinned to `0.0` is a type error, and operator
                     # push-buttons are exactly that: Boolean, and bound to nothing in the
@@ -2167,6 +2205,266 @@ def enforce_connectable(
     return notes
 
 
+def _unit_key(unit: str | None) -> str | None:
+    """'m^2' == 'm2' == 'm²'; 'm^3/s' == 'm3/s'. None for a missing unit."""
+    if not unit:
+        return None
+    u = str(unit).strip().replace("^", "").replace("²", "2").replace("³", "3").replace(" ", "")
+    return {"sec": "s", "kg/m^3": "kg/m3"}.get(u, u)
+
+
+#: Density used to turn a stated volume flow into the mass flow a class wants, when the
+#: stream is a liquid and the evidence characterises it no further. Declared, never silent:
+#: see SA-07 in config/assumptions.yaml.
+_LIQUID_DENSITY = 1000.0
+
+#: (block parameter, class parameter, conversion note) for every volume->mass conversion
+#: made while binding, so `emit_modelica` can file each one as an assumption once the
+#: assumption log exists.
+_CONVERSIONS: list[tuple[str, str, str]] = []
+
+
+def map_block_parameters(
+    block: Block, entry: Any, explicit: dict[str, str] | None = None
+) -> tuple[dict[str, str], list[str]]:
+    """The class modifiers the block's evidenced parameters justify, and notes on how.
+
+    Three ways a register parameter reaches a class parameter, strictest first:
+      * the same name, tolerating case and word order (`max_level` == `levelMax`);
+      * the class name's words all occur in the register's name AND the units agree --
+        'Cross-section Area (m^2)' -> `area` (m2); 'Max Working Level (m)' -> `levelMax`;
+      * the same, with a stated volume flow converted to the mass flow the class declares,
+        for a liquid stream (declared as an assumption).
+    A candidate is used only when it is the unique one. Only modifiers the class actually
+    declares are ever produced.
+    """
+    params = list(getattr(entry, "params", []))
+    valid = {p.name for p in params}
+    unit_of = {p.name: _unit_key(getattr(p, "unit", None)) for p in params}
+    out: dict[str, str] = {}
+    notes: list[str] = []
+    for p in block.parameters:
+        if p.quantity.value is None or isinstance(p.quantity.value, bool):
+            continue
+        wanted = (explicit or {}).get(p.name, p.name)
+        target = match_parameter(wanted, valid)
+        value = p.quantity.value
+        if target is None:
+            mine = set(_param_words(wanted))
+            have = _unit_key(p.quantity.unit)
+            same_unit = [c for c in valid
+                         if set(_param_words(c)) and set(_param_words(c)) <= mine
+                         and have is not None and unit_of.get(c) == have]
+            if len(same_unit) == 1:
+                target = same_unit[0]
+            elif have == "m3/s" and "fluid" in block.domains and isinstance(value, (int, float)):
+                mass = [c for c in valid if unit_of.get(c) == "kg/s"
+                        and set(_param_words(c)) & (mine | {"flow"})]
+                if len(mass) == 1:
+                    target = mass[0]
+                    value = round(float(value) * _LIQUID_DENSITY, 10)
+                    note = (f"{block.id}.{p.name} = {p.quantity.value} m3/s -> {target} = {value} kg/s "
+                            f"at {_LIQUID_DENSITY:g} kg/m3")
+                    notes.append(note)
+                    _CONVERSIONS.append((f"{block.id}.{p.name}", target, note))
+        if target is None:
+            target = _by_symbol(wanted, p.quantity.unit, valid, unit_of)
+        if target and target not in out:
+            out[target] = _literal(value)
+    # A constant the evidence states only takes effect if the class is told to use it.
+    for given, (switch, setting) in _ENABLERS.items():
+        if given in out and switch in valid and switch not in out:
+            out[switch] = setting
+            notes.append(f"{block.id}: {switch} = {setting}, so the stated {given} is used")
+    return out, notes
+
+
+#: Class parameters that only take effect when a mode switch says so. A flux tube's
+#: `mu_rConst` is ignored while `nonLinearPermeability` is true (its default), and the
+#: magnetic circuit ran on the library's material curve -- effectively mu_r = 1 -- with
+#: every core reluctance 1200 times what the register states.
+_ENABLERS: dict[str, tuple[str, str]] = {
+    "mu_rConst": ("nonLinearPermeability", "false"),
+}
+
+
+#: Conventional symbol -> the words engineering documents use for it. Library classes name
+#: parameters by symbol (`l`, `N`, `mu_rConst`); registers name them in words ('Length (m)',
+#: 'Exciting turns', 'mu_r'). No word match can bridge a one-letter name, so the bridge is
+#: written down -- and used only when the units do not contradict it.
+_SYMBOLS: dict[str, tuple[str, ...]] = {
+    "l": ("length",), "L": ("inductance",), "A": ("area",), "area": ("area",),
+    "N": ("turns", "turn", "windings"), "mu_rConst": ("mu r", "relative permeability", "permeability"),
+    "mu_r": ("mu r", "relative permeability"), "R": ("resistance",), "C": ("capacitance",),
+    "J": ("inertia",), "m": ("mass",), "c": ("stiffness", "spring constant"), "d": ("damping",),
+    "k": ("gain",), "Ti": ("integral time", "reset time"), "Td": ("derivative time",),
+    "yMax": ("upper limit", "maximum output", "max output"),
+    "yMin": ("lower limit", "minimum output", "min output"),
+    "V": ("volume",), "T_start": ("initial temperature",), "p_start": ("initial pressure",),
+}
+
+
+def _by_symbol(wanted: str, unit: str | None, valid: set[str], unit_of: dict[str, str | None]) -> str | None:
+    # Keep one-letter words here: 'mu_r' is "mu r", and dropping the 'r' made it "mu".
+    words = " ".join(re.findall(r"[a-z]+", humanise(wanted).lower()))
+    have = _unit_key(unit)
+    hits = []
+    for sym, phrases in _SYMBOLS.items():
+        if sym not in valid:
+            continue
+        if not any(re.search(rf"\b{re.escape(ph)}\b", words) for ph in phrases):
+            continue
+        theirs = unit_of.get(sym)
+        if have and theirs and theirs not in ("1", have):
+            continue
+        hits.append(sym)
+    return hits[0] if len(hits) == 1 else None
+
+
+#: Words too common in part names to tie a packet-wide parameter to one part.
+_GENERIC_PART_WORDS = {"core", "coil", "tank", "valve", "pipe", "line", "path", "source", "sink",
+                       "ground", "sensor", "block", "unit", "part", "element", "main", "total"}
+
+
+def apply_global_parameters(model: SystemModel, index: CatalogIndex | None) -> None:
+    """'Exciting turns = 600 turn' -> ExcitingCoil(N = 600).
+
+    Registers often state a part's parameters as packet-wide rows rather than on the part's
+    own row: the coil's turn count sat in the parameter register under 'Exciting turns'
+    (and 'N_exc', and 'PAR-NEXC'), while the coil itself had no row at all. Left there, the
+    converter ran with the library's N = 1 and every flux in the circuit came out 600 times
+    too small. A packet-wide parameter is applied to a part when its name carries a word
+    distinctive of that part and the rest of its name is a parameter of the part's class --
+    by symbol, units permitting. Never over a value the part already has.
+    """
+    if index is None:
+        return
+    params = [p for p in model.parameters
+              if p.status == "effective" and isinstance(p.quantity.value, (int, float))
+              and not isinstance(p.quantity.value, bool)]
+    for blk in model.simulatable_blocks():
+        entry = index.get(blk.modelica_class) if blk.modelica_class else None
+        if entry is None:
+            continue
+        own = {w for w in _param_words(f"{blk.name} {blk.id}") if len(w) > 3} - _GENERIC_PART_WORDS
+        if not own:
+            continue
+        valid = {c.name for c in entry.params}
+        unit_of = {c.name: _unit_key(getattr(c, "unit", None)) for c in entry.params}
+        for p in params:
+            words = set(_param_words(p.id))
+            if not (words & own):
+                continue
+            rest = " ".join(w for w in _param_words(p.id) if w not in own)
+            target = match_parameter(rest, valid) if rest else None
+            target = target or (_by_symbol(rest, p.quantity.unit, valid, unit_of) if rest else None)
+            if target and target not in blk.modelica_modifiers:
+                blk.modelica_modifiers[target] = _literal(p.quantity.value)
+
+
+def _param_words(name: str) -> list[str]:
+    """Content words of a parameter name. 'Max Working Level' -> [level, max, working]."""
+    return [w for w in re.findall(r"[a-z]+", humanise(name).lower()) if len(w) > 1]
+
+
+def carry_series_parameters(model: SystemModel) -> None:
+    """Give a lowered transfer path the parameters of the elements lowered into it.
+
+    A valve's rated flow is written against the valve, and the valve disappears into its
+    path when series elements are lowered -- so the path bound with the library default
+    (0.04 kg/s where the valve is rated 6 kg/s) and the tank it fed took a quarter of an
+    hour to fill instead of three minutes. Several elements in series: the most limiting
+    value wins, because a series path conducts no more than its narrowest element.
+    """
+    for path in model.blocks:
+        members = [b for b in model.blocks if b.abstracted_into == path.id]
+        if not members:
+            continue
+        have = {p.name for p in path.parameters}
+        best: dict[str, Any] = {}
+        for m in members:
+            for p in m.parameters:
+                if p.name in have or not isinstance(p.quantity.value, (int, float)):
+                    continue
+                if p.name not in best or p.quantity.value < best[p.name].quantity.value:
+                    best[p.name] = p
+        for name, p in best.items():
+            path.parameters.append(p.model_copy(update={"id": f"{path.id}.{name}", "scope": path.id}))
+
+
+def apply_scoped_initials(model: SystemModel, index: CatalogIndex | None) -> None:
+    """'Initial level [TK-101] = 0.05 m' -> TK_101(level_start = 0.05).
+
+    A register states initial values as setpoints scoped to a part. They were extracted,
+    resolved and then left in the parameter list, so both tanks started from the class
+    default instead of the 0.05 m the test procedure initialises them to. Applied only where
+    the bound class declares `<variable>_start` and nothing has set it already.
+    """
+    if index is None:
+        return
+    for p in model.parameters:
+        if p.status != "effective" or not isinstance(p.quantity.value, (int, float)):
+            continue
+        m = re.match(r"\s*initial\s+(?P<var>[A-Za-z ]+?)\s*(?:\[(?P<scope>[^\]]+)\])?\s*$", p.id, re.I)
+        if not m:
+            continue
+        scope = m.group("scope") or (re.search(r"applies to (\S+)", p.description or "") or [None, None])[1]
+        blk = model.block(_ident(scope)) if scope else None
+        entry = index.get(blk.modelica_class) if (blk and blk.modelica_class) else None
+        if entry is None:
+            continue
+        var = m.group("var").strip().split()[-1].lower()
+        target = next((c.name for c in entry.params if c.name.lower() == f"{var}_start"), None)
+        if target and target not in blk.modelica_modifiers:
+            blk.modelica_modifiers[target] = _literal(p.quantity.value)
+
+
+#: Generic stimulus key -> the parameter names classes use for it, in preference order.
+_STIMULUS_PARAMS = {
+    "amplitude": ("I", "V", "height", "k", "f", "tau", "w", "Q_flow", "m_flow", "T", "p"),
+    "offset": ("offset",),
+    "startTime": ("startTime",),
+    "duration": ("duration",),
+}
+
+
+def apply_parameter_stimuli(model: SystemModel, index: CatalogIndex | None) -> None:
+    """Set the procedure's source profile on the source it describes.
+
+    A ramp source left at its library defaults ramps nothing in particular: the magnetic
+    circuit compiled and simulated with a 1 A step at t = 0 where the verification procedure
+    specifies 0 A until 0.10 s, a ramp to 2.0 A by 0.50 s, and a hold. Whatever the class
+    calls its amplitude, start and duration is read from the harvested signature, so the
+    same stimulus lands on RampCurrent's `I` or RampVoltage's `V` without either name being
+    written down here; a key the class has no parameter for is declared, never invented.
+    """
+    for sc in model.scenarios[:1]:
+        for st in sc.stimuli:
+            if st.kind != "parameters":
+                continue
+            blk = model.block(st.target)
+            entry = index.get(blk.modelica_class) if (index and blk and blk.modelica_class) else None
+            if entry is None:
+                model.gaps.append(Gap(
+                    id=f"GAP-STIM-{len(model.gaps):02d}", kind="unextracted", subject=st.target,
+                    detail=f"the procedure's profile for {st.target} could not be applied: "
+                           f"the part has no bound class", severity="warn"))
+                continue
+            have = {p.name for p in entry.params}
+            missing = []
+            for key, value in st.values.items():
+                name = next((n for n in _STIMULUS_PARAMS.get(key, (key,)) if n in have), None)
+                if name is None:
+                    missing.append(key)
+                    continue
+                blk.modelica_modifiers[name] = _literal(value)
+            if missing:
+                model.gaps.append(Gap(
+                    id=f"GAP-STIM-{len(model.gaps):02d}", kind="unextracted", subject=st.target,
+                    detail=f"{blk.modelica_class} has no parameter for the profile's "
+                           f"{', '.join(missing)}; left at the library default", severity="info"))
+
+
 def unify_libraries(model: SystemModel, index: CatalogIndex | None) -> None:
     """Move an outlier onto the library its neighbours are already using.
 
@@ -2252,6 +2550,8 @@ def emit_modelica(
     # parts connect.
     from .families import plan_families
 
+    _CONVERSIONS.clear()
+    carry_series_parameters(model)
     required, family_notes = plan_families(model, index, binder, memory)
     report["families"] = family_notes
     for b in model.simulatable_blocks():
@@ -2283,6 +2583,10 @@ def emit_modelica(
     # between libraries by domain alone. The family plan above makes that decision properly
     # -- from what each part can actually connect to -- and the vote now only fought it,
     # moving an electrical ground into the magnetic library because more parts were magnetic.
+    apply_parameter_stimuli(model, index)
+    apply_scoped_initials(model, index)
+    apply_global_parameters(model, index)
+
     # Anything the safety nets had to move is a binding that did not work. That is the most
     # useful thing a run can teach the memory, because it is the guess most likely to be
     # made again.
@@ -2316,6 +2620,14 @@ def emit_modelica(
     # assume only what is genuinely absent. Order matters: a recovered fact must never
     # be overwritten by an assumption.
     log = AssumptionLog()
+    for ref, target, note in _CONVERSIONS:
+        log.assume(
+            subject=ref.split(".", 1)[0],
+            statement=note,
+            basis="SA-07-liquid-density",
+            what_was_missing=f"the density of the stream through {ref.split('.', 1)[0]}",
+            value=_LIQUID_DENSITY, unit="kg/m3",
+        )
     model.gaps.extend(recover_stated_initial_values(model, index))
     model.gaps.extend(fill_missing_initial_inventory(model, index, log))
     # Resolve dangling instrument tags before emission, so a permissive that depends on one

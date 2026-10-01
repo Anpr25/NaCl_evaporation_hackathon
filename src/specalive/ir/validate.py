@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Literal
 
 from .evidence import Gap
-from .system import SystemModel
+from .system import RESUME, SystemModel
 
 Severity = Literal["error", "warning", "info"]
 
@@ -153,7 +153,8 @@ def check_state_machine(m: SystemModel, r: ValidationReport) -> None:
         ids = {s.id for s in sm.states}
         for t in sm.transitions:
             for ref, what in ((t.source_state, "source"), (t.target_state, "target")):
-                if ref not in ids:
+                # RESUME is the history target: "return to the state that was interrupted".
+                if ref not in ids and not (what == "target" and ref == RESUME):
                     r.add("fsm-structure", "error", t.id, f"{what} state '{ref}' does not exist")
 
         for region in sm.regions:
@@ -197,6 +198,7 @@ def check_guard_symbols(m: SystemModel, r: ValidationReport) -> None:
     builtins = {
         "time", "true", "false", "and", "or", "not", "abs", "min", "max", "pre", "der",
         "in",  # in(<state>) is the guard language's state-membership predicate
+        "dwell",  # dwell(<state>): seconds spent in a state -- holds and declared fallbacks
     }
     known = builtins | {s.id for s in m.signals} | {s.name for s in m.signals}
     known |= {p.id for p in m.parameters} | {p.name for p in m.parameters}

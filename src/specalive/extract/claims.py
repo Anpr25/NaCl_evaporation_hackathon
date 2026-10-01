@@ -214,10 +214,31 @@ def claims_from_table(doc: Document, block: DocBlock, seq: Iterable[int]) -> lis
     out: list[EvidenceClaim] = []
     sheet = (block.data or {}).get("sheet") or block.locator.sheet
 
-    for r, row in enumerate(rows[best_idx + 1 :], start=best_idx + 2):
+    body = rows[best_idx + 1 :]
+    status_cols = [j for j, p in best_map.items() if _STATUS_PREDICATE.search(p)]
+    scope_col = next((j for j, p in best_map.items() if p == "scope"), None)
+    # A name that repeats with different scopes is several facts, not one fact stated
+    # several times: 'Low level limit | TK-101' and 'Low level limit | TK-102' are two
+    # setpoints. Keyed by name alone they competed in one precedence contest and one of the
+    # tanks lost its limit. Only repeated names are qualified, so a register whose names are
+    # already unique keeps exactly the subjects it had.
+    scopes_by_name: dict[str, set[str]] = {}
+    if scope_col is not None:
+        for row in body:
+            name = row[id_col].strip() if id_col < len(row) else ""
+            scope = row[scope_col].strip() if scope_col < len(row) else ""
+            if name and scope:
+                scopes_by_name.setdefault(name, set()).add(scope)
+
+    for r, row in enumerate(body, start=best_idx + 2):
         subject = (row[id_col].strip() if id_col < len(row) else "")
         if not subject:
             continue
+        if scope_col is not None and len(scopes_by_name.get(subject, ())) > 1:
+            scope = row[scope_col].strip() if scope_col < len(row) else ""
+            if scope:
+                subject = f"{subject} [{scope}]"
+        row_status = _row_status([row[j] for j in status_cols if j < len(row)])
         for j, predicate in best_map.items():
             if j == id_col or j >= len(row):
                 continue
@@ -243,9 +264,40 @@ def claims_from_table(doc: Document, block: DocBlock, seq: Iterable[int]) -> lis
                     quote=" | ".join(c for c in row if c)[:300],
                     confidence=0.95,
                     extracted_by="t0_deterministic",
+                    row_status=row_status,
                 )
             )
     return out
+
+
+#: Column predicates that speak to whether a row is current: 'Status', 'Revision Status',
+#: 'Effective?', 'Validity', 'Source Status'.
+_STATUS_PREDICATE = re.compile(r"status|effective|validity|valid|current", re.I)
+_SUPERSEDED_WORDS = re.compile(r"supersed|obsolete|invalid|withdrawn|replaced|void|archiv|retired|legacy|"
+                               r"deprecated|rejected|draft", re.I)
+_EFFECTIVE_WORDS = re.compile(r"approved|current|effective|released|active|in force|valid", re.I)
+
+
+def _row_status(cells: list[str]) -> str | None:
+    """What a row's own status cells say about it. Superseded wins over effective: a row
+    marked 'Approved' in one column and 'Effective? No' in another is not in force."""
+    verdicts: set[str] = set()
+    for cell in cells:
+        text = (cell or "").strip()
+        if not text:
+            continue
+        low = text.lower()
+        if low in ("no", "n", "false"):
+            verdicts.add("superseded")
+        elif low in ("yes", "y", "true"):
+            verdicts.add("effective")
+        elif _SUPERSEDED_WORDS.search(text):
+            verdicts.add("superseded")
+        elif _EFFECTIVE_WORDS.search(text):
+            verdicts.add("effective")
+    if "superseded" in verdicts:
+        return "superseded"
+    return "effective" if "effective" in verdicts else None
 
 
 def claims_from_keyvalues(doc: Document, seq: Iterable[int]) -> list[EvidenceClaim]:

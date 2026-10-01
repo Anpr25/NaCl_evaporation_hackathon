@@ -588,8 +588,17 @@ class Pipeline:
             model, cfg.out_dir / "results.csv",
             reference_csv=cfg.reference_trace,
             signal_map=None,
+            router=self.router,
+            memory=self.memory,
         )
         self.result.scorecard = card
+        for note in card.notes:
+            yield self._emit("verify", "ok", note)
+        if self.memory is not None:
+            try:
+                self.memory.save()
+            except OSError:
+                pass
         for r in card.results:
             for rid in r.requirement_ids:
                 req = model.requirement(rid)

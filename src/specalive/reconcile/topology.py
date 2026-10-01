@@ -262,9 +262,18 @@ class TopologyBuilder:
                             hops=list(elements)))
 
         # direct mentions first, for every path: the group resolver needs them all.
+        #
+        # An element that is itself a HOP of another path is physically on that path, and a
+        # note on this one that merely mentions it -- "Normal V3 closed; SHUT allows V3 open"
+        # on the tank-to-tank transfer -- is a remark about the other route, not a statement
+        # that it sits in series here. Adding it made the two-tank transfer require the
+        # drain valve open as well, so the transfer could never flow.
+        hop_of: dict[str, Path] = {h: p for p in out for h in p.hops}
         for p in out:
             for e in p.edges:
                 for tag in find_tags(_without_group_refs(e.note), self.known):
+                    if tag in hop_of and hop_of[tag] is not p:
+                        continue
                     if tag not in p.elements and tag not in (p.src, p.dst) and self.inline(tag):
                         p.elements.append(tag)
         for p in out:

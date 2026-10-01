@@ -266,10 +266,10 @@ def build_report(
                 ["Check", "Requirement", "Result", "Evidence"],
                 [
                     [_e(r.check_id), _e(", ".join(r.requirement_ids) or "-"),
-                     f'<b class="{"pass" if r.passed else "fail"}">{r.icon()}</b>', _e(r.detail)]
+                     f'<b class="{"pass" if r.passed else ("na" if not r.checkable else "fail")}">{r.icon()}</b>', _e(r.detail)]
                     for r in scorecard.results
                 ],
-                ["ok" if r.passed else "no" for r in scorecard.results],
+                ["ok" if r.passed else ("n/a" if not r.checkable else "no") for r in scorecard.results],
             )
         )
         if results_csv and Path(results_csv).exists():

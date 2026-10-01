@@ -40,7 +40,9 @@ from ..ir.system import (
 )
 from .entities import Entity, clean_unit, ident, is_temperature_unit, norm, to_si
 
-_TAG = r"[A-Z]{1,4}[-_]?\d{1,4}[A-Z]?"
+#: Same shape as entities.TAG_RE: discipline letters, up to two qualifier segments, number.
+#: The single-segment form missed SEN-CO2-201 and every other function-qualified tag.
+_TAG = r"[A-Z]{1,5}(?:[-_][A-Z]{1,5}){0,2}[-_]?\d{1,4}[A-Z]?"
 _NUMBER = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
 _UNIT = r"(?:degC|degF|°C|°F|[A-Za-z%][A-Za-z%/^0-9]*(?:\([a-z]\))?)"
 _CMP = re.compile(
@@ -57,6 +59,15 @@ _WORD_CMP = re.compile(
     rf"\s+(?P<num>{_NUMBER})\s*(?P<unit>{_UNIT})?"
 )
 _SYM_CMP = re.compile(rf"(?P<lhs>{_TAG}|time)\s*(?P<op><=|>=|<|>)\s*(?P<num>{_NUMBER})\s*(?P<unit>{_UNIT})?")
+#: 'LT-101 >= T1_High': a comparison against a NAMED setpoint rather than a number.
+_SYM_CMP_RHS = re.compile(
+    rf"^(?P<lhs>{_TAG})\s*(?P<op><=|>=|==|=<|=>|<|>)\s*(?P<sym>[A-Za-z_][A-Za-z0-9_]*)\s*$"
+)
+#: 'START edge', 'STOP pressed', 'SHUT command': an operator input asserted.
+_OPERATOR = re.compile(
+    r"^(?P<word>[A-Za-z][\w-]*?)(?:\s+(?:edge|pressed|press|command|commanded|received|"
+    r"request|requested|signal|button|active))?$", re.I
+)
 _SPLIT = re.compile(r"\s+(AND|OR|and|or)\s+|\s*(&&|\|\|)\s*")
 _NOT = re.compile(r"^(?:NOT|not|!)\s*(?P<rest>.+)$")
 _COMPLETE = re.compile(
@@ -98,6 +109,13 @@ class GuardParser:
         self.signal_block = signal_block
         self.regions = regions or []
         self.complete = complete
+        #: Operator inputs by every name a sequence table uses for them. A push-button tagged
+        #: PB-START is "START" in the controller's own vocabulary.
+        self.operators: dict[str, Signal] = {}
+        for sig in signals:
+            if sig.owner == "manual" and sig.datatype == "boolean":
+                for alias in (sig.name, re.sub(r"^[A-Za-z]{1,3}_", "", sig.name)):
+                    self.operators.setdefault(norm(alias), sig)
 
     # ------------------------------------------------------------------ public
     def parse(self, text: str, *, prose: bool = False, join_regions: bool = False) -> Parsed:
@@ -135,6 +153,14 @@ class GuardParser:
             expr = self._comparison(m.group("lhs"), m.group("op"), m.group("num"), m.group("unit"), out)
             if expr:
                 return f"not ({expr})" if negate else expr
+        if m := _SYM_CMP_RHS.match(clause):
+            expr = self._setpoint_comparison(m.group("lhs"), m.group("op"), m.group("sym"), out)
+            if expr:
+                return f"not ({expr})" if negate else expr
+        if (m := _OPERATOR.match(clause)) and (sig := self.operators.get(norm(m.group("word")))):
+            # Level-sensitive by design: the scenario drives a push-button as a pulse longer
+            # than one scan, and each state reads its command once.
+            return f"not {sig.name}" if negate else sig.name
         if prose:
             m = _SYM_CMP.search(clause)
             if m:
@@ -193,6 +219,56 @@ class GuardParser:
             out.params.append(rhs)
         out.comparisons.append((symbol, op, float(value), si_unit))
         return f"{symbol} {op} {rhs}"
+
+    def _setpoint_comparison(self, lhs: str, op: str, sym: str, out: Parsed) -> str | None:
+        """'LT-101 >= T1_High' -> 'LT_101 >= High_level_limit'.
+
+        A sequence table names its thresholds the way the controller code does (`T1_High`);
+        the register names them the way an engineer does ('High level limit', scope TK-101).
+        They are the same fact, and the evidence links them through the instrument: LT-101
+        reads TK-101, so `T1_High` compared against LT-101 is the high limit scoped to TK-101.
+        Matching takes, in order: an exact name; a parameter whose name holds every word of
+        the symbol that is not a part reference, scoped to the instrument's host; and that
+        same word match unscoped when it is unique. Anything less is left unparsed rather
+        than guessed.
+        """
+        op = {"=<": "<=", "=>": ">="}.get(op, op)
+        sig = self.by_key.get(norm(lhs))
+        if sig is None or sig.role != "sensor":
+            return None
+        exact = [p for p in self.parameters if norm(p.id) == norm(sym) or norm(p.name) == norm(sym)]
+        pick: Parameter | None = exact[0] if len(exact) == 1 else None
+        # An exact spelling read by a model out of prose does not outrank what a register
+        # row states. An email's `T1_high = 0.78 m` matched the guard's symbol letter for
+        # letter and beat the register's effective 0.80 m, which CR-004 had set -- the very
+        # value the acceptance test checks. Look for the register's version too, and when
+        # the two disagree, the register wins and the overrule is noted.
+        if pick is None or pick.evidence == "model":
+            spelled = pick
+            tokens = [t for t in re.split(r"[_\W]+|(?<=[a-z])(?=[A-Z])", sym) if t]
+            words = [t.lower() for t in tokens if not re.fullmatch(r"[A-Za-z]{1,2}\d+", t)]
+            if words:
+                cands = [p for p in self.parameters
+                         if all(re.search(rf"\b{re.escape(w)}", f"{p.id} {p.description or ''}".lower())
+                                for w in words)]
+                host = self.signal_block.get(sig.id)
+                scoped = [p for p in cands if host and norm(host) in norm(f"{p.id} {p.description or ''}")]
+                register = [p for p in (scoped or cands) if p.evidence == "register"]
+                pool = register or scoped or cands
+                found = pool[0] if len(pool) == 1 else None
+                if found is not None:
+                    pick = found
+                    if spelled is not None and found is not spelled and                             float(found.quantity.value) != float(spelled.quantity.value):
+                        out.notes.append(
+                            f"'{sym}' = {spelled.quantity.value} was read from prose ({spelled.id}); "
+                            f"the register states {found.id} = {found.quantity.value}, which is used")
+        if pick is None:
+            return None
+        out.params.append(pick.name)
+        out.comparisons.append((sig.name, op, float(pick.quantity.value), pick.quantity.unit))
+        out.notes.append(f"'{sym}' resolved to {pick.id} = {pick.quantity.value}"
+                         f"{(' ' + pick.quantity.unit) if pick.quantity.unit else ''}")
+        return f"{sig.name} {op} {pick.name}"
 
     def symbol_for(self, value: float, unit: str | None, block: str | None) -> str | None:
         """The effective parameter that states this very number, if exactly one does."""

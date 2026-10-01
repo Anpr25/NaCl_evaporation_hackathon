@@ -77,7 +77,9 @@ def _stated_initial(base: str, text: str) -> float | None:
     pattern = (
         r"initial[^=\n]{0,40}"
         + re.escape(base)
-        + r"[A-Za-z_]*[^=\n]{0,12}=\s*([-+]?[0-9]*[.]?[0-9]+)"
+        # An assignment, not a comparison: "T1 >= 0.05 m" in an interface note is a guard,
+        # and reading its '=' as one set a tank's starting temperature to 0.05 K.
+        + r"[A-Za-z_]*[^=<>!\n]{0,12}(?<![<>!=])=(?!=)\s*([-+]?[0-9]*[.]?[0-9]+)"
     )
     m = re.search(pattern, text or "", re.I)
     if not m:

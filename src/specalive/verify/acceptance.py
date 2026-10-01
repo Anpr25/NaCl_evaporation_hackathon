@@ -32,8 +32,17 @@ class CheckResult:
     requirement_ids: list[str] = field(default_factory=list)
     observed: Any = None
     expected: Any = None
+    #: False when the criterion could not be turned into a check at all -- it is then
+    #: neither a pass nor a fail, and is reported separately rather than hidden.
+    checkable: bool = True
+    #: True when a MODEL wrote the check from the procedure's prose. Reported apart from
+    #: checks derived from the evidence's own numbers, because a wrong translation can fail
+    #: a model that behaved correctly, and the reader must be able to tell which is which.
+    formalised: bool = False
 
     def icon(self) -> str:
+        if not self.checkable:
+            return "N/A "
         return "PASS" if self.passed else "FAIL"
 
 
@@ -43,21 +52,35 @@ class Scorecard:
     reference_consistent: bool | None = None
     reference_notes: list[str] = field(default_factory=list)
     signal_errors: dict[str, float] = field(default_factory=dict)
+    #: What formalising the procedure's criteria did, for the report.
+    notes: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> int:
-        return sum(1 for r in self.results if r.passed)
+        return sum(1 for r in self.results if r.passed and r.checkable)
 
     @property
     def total(self) -> int:
-        return len(self.results)
+        return sum(1 for r in self.results if r.checkable)
+
+    @property
+    def unchecked(self) -> int:
+        return sum(1 for r in self.results if not r.checkable)
 
     @property
     def ok(self) -> bool:
         return self.total > 0 and self.passed == self.total
 
     def summary(self) -> str:
-        return f"{self.passed}/{self.total} acceptance checks passed"
+        own = [r for r in self.results if r.checkable and not r.formalised]
+        prose = [r for r in self.results if r.checkable and r.formalised]
+        parts = [f"{self.passed}/{self.total} acceptance checks passed"]
+        if prose:
+            parts.append(f"evidence checks {sum(r.passed for r in own)}/{len(own)}, "
+                         f"procedure criteria (model-formalised) {sum(r.passed for r in prose)}/{len(prose)}")
+        if self.unchecked:
+            parts.append(f"{self.unchecked} criteria not machine-checkable")
+        return "; ".join(parts)
 
 
 # --------------------------------------------------------------------- expression language
@@ -76,13 +99,91 @@ _BEFORE = re.compile(r"^before\((.*)\)$", re.S)
 _FINAL = re.compile(r"final\(\s*([\w.\[\]]+)\s*\)\s*(<=|>=|<|>|==|!=)\s*([-\d.eE+]+)")
 _AT = re.compile(r"at\(\s*([\w.\[\]]+)\s*,\s*([-\d.eE+]+)\s*\)\s*(<=|>=|<|>|==|!=)\s*([-\d.eE+]+)")
 _ALWAYS = re.compile(r"always\(\s*([\w.\[\]]+)\s*(<=|>=|<|>)\s*([-\d.eE+]+)\s*\)")
+#: The forms a test procedure's criteria need beyond events and end states:
+#:   during(signal op value, t0, t1)   -> an invariant over a window ("all valves closed
+#:                                        from 220 s until 280 s")
+#:   max(signal) op value / min(...)   -> an extreme over the run ("maximum CO2 <= 1000 ppm")
+#:   approx(final(signal), value, rel) -> agreement within a relative tolerance ("within 1%
+#:                                        of the analytic result"); also approx(at(s, t), ...)
+#:   ratio(sigA, sigB) op value        -> a final-value ratio ("useful/core flux = 0.92")
+_DURING = re.compile(r"during\(\s*([\w.\[\]]+)\s*(<=|>=|<|>|==)\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*\)")
+_EXTREME = re.compile(r"(max|min)\(\s*([\w.\[\]]+)\s*\)\s*(<=|>=|<|>)\s*([-\d.eE+]+)")
+_APPROX = re.compile(r"approx\(\s*(?:final\(\s*([\w.\[\]]+)\s*\)|at\(\s*([\w.\[\]]+)\s*,\s*([-\d.eE+]+)\s*\))"
+                     r"\s*,\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*\)")
+#:   approx(abs(final(COL)), VALUE, REL) -> magnitude agreement, for a procedure that says
+#:                                        "magnitudes shall agree" and so does not fix a sign
+_APPROX_ABS = re.compile(r"approx\(\s*abs\(\s*(?:final\(\s*([\w.\[\]]+)\s*\)|at\(\s*([\w.\[\]]+)\s*,\s*([-\d.eE+]+)\s*\))\s*\)"
+                         r"\s*,\s*([-\d.eE+]+)\s*,\s*([-\d.eE+]+)\s*\)")
+_RATIO = re.compile(r"ratio\(\s*([\w.\[\]]+)\s*,\s*([\w.\[\]]+)\s*\)\s*(<=|>=|<|>|==)\s*([-\d.eE+]+)")
+
+
+#:   state(COL, T) OP VALUE            -> a discrete value at T, held (no interpolation: an
+#:                                        integer state interpolated across a transition is
+#:                                        a fraction that matches no state)
+#:   exclusive(COL_A, COL_B)           -> two Boolean signals never true at the same time
+_STATE = re.compile(r"state\(\s*([\w.\[\]]+)\s*,\s*([-\d.eE+]+)\s*\)\s*(<=|>=|<|>|==|!=)\s*([-\d.eE+]+)")
+#:   enters(COL, K[, N])               -> event: the Nth time a discrete column becomes K.
+#:                                        A threshold crossing is ambiguous on state numbers:
+#:                                        pausing from state 3 into state 7 "crosses 5.5".
+#:   elapsed(EVENT_A, EVENT_B) OP VALUE -> seconds from A to B ("after the 8 s delay")
+_ENTERS = re.compile(r"enters\(\s*([\w.\[\]]+)\s*,\s*([-\d.eE+]+)\s*(?:,\s*(\d+)\s*)?\)")
+_ELAPSED = re.compile(r"elapsed\((.*)\)\s*(<=|>=|<|>|==)\s*([-\d.eE+]+)", re.S)
+_EXCLUSIVE = re.compile(r"exclusive\(\s*([\w.\[\]]+)\s*,\s*([\w.\[\]]+)\s*\)")
+_NAME, _NUM, _OP = r"[\w.\[\]]+", r"[-\d.eE+]+", r"(?:<=|>=|<|>|==|!=)"
+#: Every single (non-conjunctive) form, anchored. Used to refuse anything with trailing text.
+_FORMS = re.compile(
+    rf"\s*(?:"
+    rf"before\(.*\)"
+    rf"|crosses\(\s*{_NAME}\s*,\s*{_NUM}\s*(?:,\s*(?:rising|falling)\s*)?\)"
+    rf"|final\(\s*{_NAME}\s*\)\s*{_OP}\s*{_NUM}"
+    rf"|at\(\s*{_NAME}\s*,\s*{_NUM}\s*\)\s*{_OP}\s*{_NUM}"
+    rf"|always\(\s*{_NAME}\s*{_OP}\s*{_NUM}\s*\)"
+    rf"|during\(\s*{_NAME}\s*{_OP}\s*{_NUM}\s*,\s*{_NUM}\s*,\s*{_NUM}\s*\)"
+    rf"|(?:max|min)\(\s*{_NAME}\s*\)\s*{_OP}\s*{_NUM}"
+    rf"|approx\(\s*(?:final\(\s*{_NAME}\s*\)|at\(\s*{_NAME}\s*,\s*{_NUM}\s*\))\s*,\s*{_NUM}\s*,\s*{_NUM}\s*\)"
+    rf"|approx\(\s*abs\(\s*(?:final\(\s*{_NAME}\s*\)|at\(\s*{_NAME}\s*,\s*{_NUM}\s*\))\s*\)\s*,\s*{_NUM}\s*,\s*{_NUM}\s*\)"
+    rf"|ratio\(\s*{_NAME}\s*,\s*{_NAME}\s*\)\s*{_OP}\s*{_NUM}"
+    rf")\s*", re.S)
+
+
+def _split_conjunction(expr: str) -> list[str]:
+    """Split on `&&` or ` and ` at bracket depth zero."""
+    parts, depth, start, i = [], 0, 0, 0
+    while i < len(expr):
+        ch = expr[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+        elif depth == 0 and expr.startswith("&&", i):
+            parts.append(expr[start:i]); i += 2; start = i; continue
+        elif depth == 0 and expr[i:i + 5].lower() == " and ":
+            parts.append(expr[start:i]); i += 5; start = i; continue
+        i += 1
+    parts.append(expr[start:])
+    return [p.strip() for p in parts if p.strip()]
+
+
+def referenced_signals(expr: str) -> list[str]:
+    """Every result column an expression reads -- for checking a model-written expression
+    against the columns that actually exist before it is ever evaluated."""
+    out: list[str] = []
+    for pat, groups in ((_CROSSES, (1,)), (_FINAL, (1,)), (_AT, (1,)), (_ALWAYS, (1,)),
+                        (_DURING, (1,)), (_EXTREME, (2,)), (_APPROX, (1, 2)), (_RATIO, (1, 2)),
+                        (_STATE, (1,)), (_EXCLUSIVE, (1, 2)), (_ENTERS, (1,)),
+                        (_APPROX_ABS, (1, 2))):
+        for m in pat.finditer(expr):
+            out += [m.group(g) for g in groups if m.group(g)]
+    return out
 
 _OPS = {
     "<=": lambda a, b: a <= b,
     ">=": lambda a, b: a >= b,
     "<": lambda a, b: a < b,
     ">": lambda a, b: a > b,
-    "==": lambda a, b: abs(a - b) < 1e-9,
+    # Equal to six significant figures, not to 1e-9 absolute: a simulated 1.909859e6 never
+    # equals the stated 1909859 bit for bit, and an integer state (3.0 == 3) still does.
+    "==": lambda a, b: abs(a - b) <= max(1e-9, 1e-6 * max(abs(a), abs(b))),
     "!=": lambda a, b: abs(a - b) >= 1e-9,
 }
 
@@ -92,9 +193,69 @@ class ExpressionError(ValueError):
 
 
 def evaluate(expr: str, cols: dict[str, list[float]], tolerance: float | None = None) -> tuple[bool, str, Any]:
-    """Evaluate one acceptance expression. Returns (passed, human detail, observed value)."""
+    """Evaluate one acceptance expression. Returns (passed, human detail, observed value).
+
+    Every form must account for the WHOLE expression. The patterns used to be matched as a
+    prefix, so `during(a <= 0.5, 220, 280) && during(b <= 0.5, 220, 280)` evaluated the
+    first clause, ignored the second, and could pass a criterion that was half violated.
+    Conjunctions are now explicit -- `&&` / `and` at the top level, every part must pass --
+    and anything left unparsed is an error, not a pass.
+    """
     expr = expr.strip()
     times = cols.get("time") or []
+
+    parts = _split_conjunction(expr)
+    if len(parts) > 1:
+        details, observed = [], []
+        for part in parts:
+            ok, detail, obs = evaluate(part, cols, tolerance)
+            details.append(detail)
+            observed.append(obs)
+            if not ok:
+                return False, f"{detail} (one of {len(parts)} required conditions)", observed
+        return True, "; ".join(details), observed
+
+    if m := _ENTERS.fullmatch(expr):
+        sig, k, nth = m.group(1), float(m.group(2)), int(m.group(3) or 1)
+        series = _series(cols, sig)
+        entries = [times[i] for i in range(1, len(series))
+                   if abs(series[i] - k) < 1e-9 and abs(series[i - 1] - k) >= 1e-9]
+        if series and abs(series[0] - k) < 1e-9:
+            entries.insert(0, times[0])
+        if len(entries) < nth:
+            return False, f"{sig} entered {k:g} only {len(entries)} time(s), needed {nth}", None
+        return True, f"{sig} entered {k:g} (occurrence {nth}) at t={entries[nth - 1]:.1f}s", entries[nth - 1]
+
+    if m := _ELAPSED.fullmatch(expr):
+        try:
+            first, second = _split_top_level(m.group(1))
+        except ValueError as exc:
+            raise ExpressionError(f"elapsed() needs exactly two events: {exc}") from exc
+        op, val = m.group(2), float(m.group(3))
+        t1, t2 = _event_time(first, cols), _event_time(second, cols)
+        if t1 is None or t2 is None:
+            return False, f"an event of elapsed() never occurred: {first if t1 is None else second}", None
+        gap, tol = t2 - t1, (tolerance or 0.0)
+        ok = abs(gap - val) <= max(tol, 1e-9) if op == "==" else _OPS[op](gap, val)
+        return ok, f"elapsed {gap:.2f} s between the events, required {op} {val:g}" + (f" ±{tol:g}" if tol else ""), gap
+
+    if m := _STATE.fullmatch(expr):
+        sig, t, op, val = m.group(1), float(m.group(2)), m.group(3), float(m.group(4))
+        series = _series(cols, sig)
+        idx = max((i for i, tt in enumerate(times) if tt <= t + 1e-9), default=0)
+        got = series[idx] if series else float("nan")
+        return _OPS[op](got, val), f"{sig} at t={t:g}s (held) = {got:.4g}, required {op} {val}", got
+
+    if m := _EXCLUSIVE.fullmatch(expr):
+        a, b = m.group(1), m.group(2)
+        sa, sb = _series(cols, a), _series(cols, b)
+        both = [times[i] for i in range(min(len(sa), len(sb))) if sa[i] > 0.5 and sb[i] > 0.5]
+        if both:
+            return False, f"{a} and {b} both true at t={both[0]:.1f}s ({len(both)} samples)", both[0]
+        return True, f"{a} and {b} never true together", None
+
+    if not _FORMS.fullmatch(expr):
+        raise ExpressionError(f"unsupported acceptance expression: {expr!r}")
 
     if m := _BEFORE.match(expr):
         try:
@@ -130,6 +291,53 @@ def evaluate(expr: str, cols: dict[str, list[float]], tolerance: float | None = 
         got = sample_at(times, _series(cols, sig), t)
         return _OPS[op](got, val), f"{sig}(t={t})={got:.4g}, required {op} {val}", got
 
+    if m := _DURING.match(expr):
+        sig, op, val, t0, t1 = m.group(1), m.group(2), float(m.group(3)), float(m.group(4)), float(m.group(5))
+        series = _series(cols, sig)
+        window = [(times[i], v) for i, v in enumerate(series) if t0 <= times[i] <= t1]
+        if not window:
+            return False, f"no samples of {sig} between {t0:g} s and {t1:g} s", None
+        bad = [(t, v) for t, v in window if not _OPS[op](v, val)]
+        if bad:
+            return False, (f"{sig} {op} {val} violated at t={bad[0][0]:.1f}s (value {bad[0][1]:.4g}) "
+                           f"within {t0:g}-{t1:g} s"), bad[0][1]
+        return True, f"{sig} {op} {val} held from {t0:g} s to {t1:g} s", None
+
+    if m := _EXTREME.match(expr):
+        fn, sig, op, val = m.group(1), m.group(2), m.group(3), float(m.group(4))
+        series = _series(cols, sig)
+        if not series:
+            return False, f"no samples of {sig}", None
+        got = max(series) if fn == "max" else min(series)
+        at_t = times[series.index(got)] if times else float("nan")
+        return _OPS[op](got, val), f"{fn}({sig}) = {got:.6g} at t={at_t:.1f}s, required {op} {val}", got
+
+    if m := _APPROX_ABS.fullmatch(expr):
+        sig = m.group(1) or m.group(2)
+        series = _series(cols, sig)
+        got = sample_at(times, series, float(m.group(3))) if m.group(2) else (series[-1] if series else float("nan"))
+        want, rel = float(m.group(4)), float(m.group(5))
+        err = abs(abs(got) - abs(want)) / max(abs(want), 1e-30)
+        return err <= rel, f"|{sig}| = {abs(got):.6g}, expected {abs(want):.6g} within {rel:.2%} (off by {err:.2%})", got
+
+    if m := _APPROX.match(expr):
+        sig = m.group(1) or m.group(2)
+        series = _series(cols, sig)
+        got = sample_at(times, series, float(m.group(3))) if m.group(2) else (series[-1] if series else float("nan"))
+        want, rel = float(m.group(4)), float(m.group(5))
+        err = abs(got - want) / max(abs(want), 1e-30)
+        return err <= rel, f"{sig} = {got:.6g}, expected {want:.6g} within {rel:.2%} (off by {err:.2%})", got
+
+    if m := _RATIO.match(expr):
+        a, b, op, val = m.group(1), m.group(2), m.group(3), float(m.group(4))
+        sa, sb = _series(cols, a), _series(cols, b)
+        if not sa or not sb or abs(sb[-1]) < 1e-30:
+            return False, f"ratio {a}/{b} undefined at the end of the run", None
+        got = sa[-1] / sb[-1]
+        tol = tolerance or 0.0
+        ok = abs(got - val) <= tol if op == "==" else _OPS[op](got, val)
+        return ok, f"final {a}/{b} = {got:.6g}, required {op} {val}" + (f" ±{tol:g}" if tol else ""), got
+
     if m := _ALWAYS.match(expr):
         sig, op, val = m.group(1), m.group(2), float(m.group(3))
         series = _series(cols, sig)
@@ -155,6 +363,12 @@ def _split_top_level(args: str) -> tuple[str, str]:
 
 
 def _event_time(expr: str, cols: dict[str, list[float]]) -> float | None:
+    # An event is a crossing or an entry -- something that HAPPENS at a time. A conjunction
+    # or an invariant has no time, and accepting one here made `before(A && B, C)` fail as
+    # "the first event never occurred" instead of being rejected as malformed, which is a
+    # false failure of a model that behaved correctly.
+    if not (_CROSSES.fullmatch(expr.strip()) or _ENTERS.fullmatch(expr.strip())):
+        raise ExpressionError(f"not an event (use crosses(...) or enters(...)): {expr!r}")
     ok, _, observed = evaluate(expr, cols)
     if not ok:
         return None
@@ -183,13 +397,29 @@ def score(
     *,
     reference_csv: str | Path | None = None,
     signal_map: dict[str, str] | None = None,
+    router: Any | None = None,
+    memory: Any | None = None,
 ) -> Scorecard:
-    """Run every acceptance check, then optionally compare against a supplied reference trace."""
+    """Run every acceptance check, then optionally compare against a supplied reference trace.
+
+    Procedure criteria with no expression yet are formalised first, against these columns
+    (see verify/criteria.py); one that cannot be is reported as not machine-checkable.
+    """
     cols = read_result(result_csv)
     card = Scorecard()
+    from .criteria import formalise
+
+    card.notes = formalise(model, cols, router=router, memory=memory)
 
     for scenario in model.scenarios:
         for chk in scenario.checks:
+            if chk.kind == "procedure" and not chk.expression:
+                card.results.append(CheckResult(
+                    check_id=chk.id, description=chk.description, passed=False,
+                    detail=chk.provenance.note or "not machine-checkable",
+                    requirement_ids=chk.requirement_ids, checkable=False,
+                ))
+                continue
             try:
                 ok, detail, observed = evaluate(chk.expression, cols, chk.tolerance)
             except ExpressionError as exc:
@@ -202,6 +432,7 @@ def score(
                     detail=detail,
                     requirement_ids=chk.requirement_ids,
                     observed=observed,
+                    formalised=(chk.kind == "procedure"),
                 )
             )
 

@@ -114,3 +114,17 @@ assumptions:
       structurally singular and the model cannot be built at all.
     challenge: 'Search the emitted .mo for "ASSUMPTION: ... return terminal".'
     risk: medium
+
+  - id: SA-07-liquid-density
+    title: A liquid stream the evidence does not characterise has the density of water
+    applies_when: >
+      The evidence states a volume flow (m3/s) for a liquid path and the bound class declares
+      a mass flow (kg/s), with no density or medium property stated for that stream.
+    rule: >
+      Convert at 1000 kg/m3 and record the conversion against the part.
+    basis: >
+      Water is the default liquid in process and test-rig documents that do not say otherwise;
+      leaving the class at its library default flow is wrong by orders of magnitude, which is
+      worse than a density assumption that is visible and easy to correct.
+    challenge: Check the medium named in the interface matrix; a brine or oil changes the figure.
+    risk: low
