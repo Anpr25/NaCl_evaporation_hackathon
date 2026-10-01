@@ -143,7 +143,7 @@ def _is_initially_charged(block: Any) -> bool:
     text = " ".join(str(x or "") for x in (block.name, block.kind, block.description)).lower()
     if any(w in text for w in _CHARGED_WORDS):
         return True
-    return bool(re.search(r"initial(ly)?.{0,24}(charge|charged|fill|filled|stock)", text))
+    return bool(re.search(r"\binitial(ly)?\b.{0,24}\b(charge|charged|fill|filled|stock)", text))
 
 
 def fill_missing_initial_inventory(

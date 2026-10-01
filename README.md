@@ -63,7 +63,21 @@ specalive gate <Model> <files...>            # just the hard gate, fast
 specalive bench                              # every benchmark packet, pass-rate matrix
 specalive ir-diff <extracted.json> <reference.json>
 specalive serve                              # web app on :8000
+specalive memory [--forget]                  # what binding has learned from earlier runs
 ```
+
+### The catalog learns from every run
+
+Every `run` ends with omc's verdict on its bindings, and that verdict is kept in
+`out/binding_memory.json` (machine-local, like the catalog). A class that was in a model that
+built and simulated earns credit for that *kind* of part — keyed by domain and the words the
+register uses (`electrical|coil exciting`), not by tag, so it carries across packets. A class
+that had to be withdrawn or repaired away is held against it. The next run binds a known kind
+of part straight from memory, ahead of retrieval and after anything the packet itself
+declares; a run with `--provider cloud` can therefore teach a later offline run what to bind.
+Only omc's verdict counts: a guessed binding earns credit only from a run that actually moved,
+and a part withdrawn because of its *neighbour* is not blamed. `--no-learn` runs without
+reading or writing the memory.
 
 ## How it works
 

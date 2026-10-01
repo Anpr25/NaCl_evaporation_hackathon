@@ -143,6 +143,8 @@ def stream_events(run_id: str) -> StreamingResponse:
             out_dir=info["out"],
             reference_ir=info["reference_ir"],
             reference_trace=info["reference_trace"],
+            # The web app learns like the CLI does; see catalog/memory.py.
+            memory_path=Path("out/binding_memory.json"),
         )
         pipeline = Pipeline(cfg, _router())
         try:

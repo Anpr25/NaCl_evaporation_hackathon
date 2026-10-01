@@ -25,7 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..catalog.retrieve import PICK_PROMPT, PICK_SCHEMA, CatalogIndex
+from ..catalog.memory import signature
+from ..catalog.retrieve import PICK_PROMPT, PICK_SCHEMA, CatalogIndex, Hit
 from ..ir.assumptions import AssumptionLog
 from ..ir.complete import (
     bind_sensors_to_resolved_setpoints,
@@ -286,9 +287,14 @@ class Binder:
     """Decides, per block, the cheapest tier that can realise it."""
 
     def __init__(self, index: CatalogIndex | None, router: Any | None = None,
-                 *, synthesise: bool = False) -> None:
+                 *, synthesise: bool = False, memory: Any | None = None) -> None:
         self.index = index
         self.router = router
+        #: BindingMemory, or None to bind from the catalog alone. See catalog/memory.py.
+        self.memory = memory
+        #: Library-vocabulary queries a model suggested for a part, by block id. See
+        #: `_expand_query`.
+        self._expansions: dict[str, list[str]] = {}
         #: Whether L2 equation synthesis may run at all. See `_try_l2`.
         self.synthesise = synthesise
         #: Shortlist retrieved for the block currently being bound, shared between the
@@ -313,8 +319,8 @@ class Binder:
         # packet declares beats retrieval; retrieval that is decisive on its own beats a
         # hand-built template; a template beats asking a model to choose; and asking beats
         # taking the top hit on faith. Synthesis is last and off by default.
-        for attempt in (self._try_declared, self._try_l0, self._try_l1,
-                        self._try_l0_pick, self._try_l0_best, self._try_l2):
+        for attempt in (self._try_declared, self._try_learned, self._try_l0, self._try_l1,
+                        self._try_suggested, self._try_l0_pick, self._try_l0_best, self._try_l2):
             result = attempt(block)
             if result is not None:
                 return result
@@ -379,10 +385,90 @@ class Binder:
             strength="declared",
         )
 
-    # ------------------------------------------------------------------ L0
-    def _try_l0(self, block: Block) -> BindingResult | None:
-        if self.index is None:
+    # ------------------------------------------------------------- learned
+    def _try_learned(self, block: Block) -> BindingResult | None:
+        """A class this kind of part has compiled and simulated with in earlier runs.
+
+        Ranked after a class the evidence declares -- the packet in hand always outranks what
+        we remember from other packets -- and before retrieval, which is only a guess from
+        words. Re-verified against the current catalog and the current family requirement,
+        so a remembered class can never smuggle in something the emitter cannot wire.
+        """
+        if self.memory is None or self.index is None:
             return None
+        keys = {e.key for e in getattr(self.index, "entries", [])}
+        hit = self.memory.suggest(block_signature(block), keys)
+        if hit is None:
+            return None
+        cls, stats = hit
+        entry = self.index.get(cls)
+        if entry is None or cls.startswith(_UNSUPPORTED_PACKAGES):
+            return None
+        if self._require and not (_connector_packages(entry) & self._require):
+            return None
+        if not _enough_ports(block, entry):
+            return None
+        self.memory.used += 1
+        packets = ", ".join(stats.get("packets", [])[-3:])
+        return BindingResult(
+            "L0", cls, self._map_params(block, entry),
+            f"learned: this kind of part built and simulated with {cls.rsplit('.', 1)[-1]} in "
+            f"{stats.get('ok', 0)} earlier run(s)" + (f" ({packets})" if packets else "")
+            + (f", failed in {stats['bad']}" if stats.get("bad") else ""),
+            strength="strong",
+        )
+
+    def _try_suggested(self, block: Block) -> BindingResult | None:
+        """The whole-packet read's suggestion, if it exists, can be wired, and fits."""
+        cls = block.suggested_class
+        if not cls or self.index is None or cls.startswith(_UNSUPPORTED_PACKAGES):
+            return None
+        entry = self.index.get(cls)
+        if entry is None or not _enough_ports(block, entry):
+            return None
+        if self._require and not (_connector_packages(entry) & self._require):
+            return None
+        return BindingResult("L0", cls, self._map_params(block, entry),
+                             f"suggested by the whole-packet read, verified in the catalog",
+                             strength="weak")
+
+    def candidates(self, block: Block) -> list[tuple[str, float, str]]:
+        """Every class this part could plausibly bind to, with a weight and where it came
+        from. The input to the connector-family vote; nothing here is a decision."""
+        out: dict[str, tuple[float, str]] = {}
+
+        def add(cls: str | None, weight: float, why: str) -> None:
+            if cls and weight > out.get(cls, (0.0, ""))[0]:
+                out[cls] = (weight, why)
+
+        if self.index is None:
+            return []
+        declared = self._try_declared(block)
+        add(declared.modelica_class if declared else None, 6.0, "declared")
+        if self.memory is not None:
+            keys = {e.key for e in getattr(self.index, "entries", [])}
+            hit = self.memory.suggest(block_signature(block), keys)
+            if hit:
+                add(hit[0], 3.0 + min(3.0, float(hit[1].get("ok", 0))), "learned")
+        l1 = self._try_l1(block)
+        add(l1.modelica_class if l1 else None, 4.0, "template")
+        sug = self._try_suggested(block)
+        add(sug.modelica_class if sug else None, 3.5, "suggested")
+        hits = self.retrieve(block)
+        top = hits[0].score if hits else 1.0
+        for h in hits[:8]:
+            add(h.entry.key, 3.0 * h.score / max(top, 1e-6), "retrieval")
+        return [(cls, w, why) for cls, (w, why) in out.items()]
+
+    # ------------------------------------------------------------------ L0
+    def retrieve(self, block: Block) -> list[Any]:
+        """The filtered catalog shortlist for this part, best first. No requirement applied.
+
+        Shared by the strict L0 rule, the best-effort rule and the connector-family vote in
+        `emit/families.py`, so all three reason about the same candidates.
+        """
+        if self.index is None:
+            return []
         # What the part IS carries more weight than what flows through it, so name and kind
         # go in twice. A one-line description made of media names ("Complex current phasor;
         # Electric potential") otherwise dominates a BM25 score and retrieves a phasor
@@ -402,13 +488,39 @@ class Binder:
         # that spans domains belongs to both, and the union is what the shortlist should
         # show whoever -- code or model -- has to choose from it.
         merged: dict[str, Any] = {}
-        for dom in (None, *[d for d in block.domains if d != "unknown"]):
-            for h in self.index.search(query, k=12, domain=dom):
-                if h.entry.key not in merged or h.score > merged[h.entry.key].score:
-                    merged[h.entry.key] = h
-        hits = sorted(merged.values(), key=lambda h: -h.score)[:12]
-        if self._require:
-            hits = [h for h in hits if _connector_packages(h.entry) & self._require]
+        queries = [query] + self._expansions.get(block.id, [])
+        for q in queries:
+            for dom in (None, *[d for d in block.domains if d != "unknown"]):
+                # 24, not 12: the port-count and domain filters below discard most of a
+                # shortlist for a multi-port part, and the answer was often thirteenth.
+                for h in self.index.search(q, k=24, domain=dom):
+                    if h.entry.key not in merged or h.score > merged[h.entry.key].score:
+                        merged[h.entry.key] = h
+        # A class from another physical domain's library is a worse answer than its score
+        # says. "Electric ground" and "magnetic ground" share every content word except
+        # the one that matters, and BM25 cannot weigh that one -- so an electrical ground
+        # bound to the magnetic flux-tube library and was wired to nothing. Halving the
+        # score keeps such a class available as a last resort without letting it win.
+        #
+        # And where the library offers anything at all in the part's own domain, the other
+        # domains' classes are dropped outright rather than down-weighted: halving still let
+        # a magnetic ground win "unambiguously" for an electric one, because the query's
+        # every other word matched it better.
+        mine = {d for d in block.domains if d != "unknown"}
+        if mine:
+            adjusted = []
+            for h in merged.values():
+                theirs = _library_domains(h.entry.key)
+                if theirs and not (theirs & mine):
+                    h = Hit(entry=h.entry, score=h.score * 0.5, why=f"{h.why}; other domain")
+                adjusted.append(h)
+            in_domain = [h for h in adjusted if not (_library_domains(h.entry.key)
+                                                     and not (_library_domains(h.entry.key) & mine))]
+            merged = {h.entry.key: h for h in (in_domain or adjusted)}
+        # Sorted but NOT truncated yet: the filters below discard most of a shortlist for a
+        # multi-port part, so cutting to twelve first left two survivors -- and threw away
+        # the class an expanded query had just found at thirteenth.
+        hits = sorted(merged.values(), key=lambda h: -h.score)
         # A class with fewer connectors than the part has wires is the wrong class, however
         # well it scores. `SpecAlive.Transport.Path` has two ports; a cooling-water header
         # that feeds three vessels needs three, and binding it to Path silently dropped all
@@ -417,8 +529,6 @@ class Binder:
         roomy = [h for h in hits if _enough_ports(block, h.entry)]
         if roomy:
             hits = roomy
-        #: Kept for `_try_l0_best`, so the shortlist is retrieved once per block.
-        self._hits = hits
         # Modelica.Fluid's own connectors (pressure/enthalpy stream ports, array-sized with a
         # PortsData record per port) are a different convention from the causal
         # SpecAlive.Interfaces ports every other fluid-domain part in this plant binds to
@@ -428,6 +538,10 @@ class Binder:
         # a hand-built SpecAlive template already covers should not be offered the mismatched
         # standard-library one at all.
         hits = [h for h in hits if not h.entry.key.startswith(_UNSUPPORTED_PACKAGES)]
+        # A plant part is never a connector definition, a base class or an example model.
+        # The harvest lists them as instantiable -- and they are, syntactically -- so an
+        # exciting coil came back as `FundamentalWave.Interfaces.PositivePortInterface`.
+        hits = [h for h in hits if not _NOT_A_PART.search(h.entry.key)]
         # A causal block library never realises a physical part. A packet that has signal
         # parts says so -- its gains and controllers carry the 'signal' domain -- so for a
         # part that does not, `Modelica.Blocks.*` is categorically the wrong shelf, however
@@ -436,11 +550,66 @@ class Binder:
         physical = [d for d in block.domains if d not in ("unknown", "signal", "control")]
         if physical and "signal" not in block.domains:
             hits = [h for h in hits if not h.entry.key.startswith(_CAUSAL_PACKAGES)]
+        # Classes this kind of part has failed with before, and never once worked with.
+        # Offering them again is how the same wrong binding came back every run.
+        if self.memory is not None:
+            bad = self.memory.discredited(block_signature(block))
+            if bad:
+                hits = [h for h in hits if h.entry.key not in bad]
+        return hits[:12]
+
+    def _expand_query(self, block: Block) -> bool:
+        """Ask a model to restate the part in the library's own vocabulary. Once per part.
+
+        Retrieval is lexical, and engineering packets and library doc comments do not share
+        a vocabulary: no class in the standard library mentions a "coil", so an exciting
+        coil retrieved nothing at all, although `ElectroMagneticConverter` is exactly it. A
+        model knows that translation; the catalog cannot. What comes back is only ever a
+        *search query* -- the answer still has to be a harvested class, found by retrieval
+        and chosen by the same rules as any other -- so this can widen the shortlist but
+        never put an invented class in it. When the binding it leads to compiles, the
+        memory keeps it, and the next run does not need to ask.
+        """
+        if self.router is None or block.id in self._expansions:
+            return False
+        self._expansions[block.id] = []
+        prompt = EXPAND_PROMPT.format(
+            name=block.name, kind=block.kind, domains=", ".join(block.domains),
+            description=(block.description or "(none)")[:500],
+            ports=", ".join(f"{p.name}:{p.domain}" for p in block.ports) or "(none)",
+        )
+        try:
+            resp = self.router.run("catalog_query", prompt, schema=EXPAND_SCHEMA)
+        except Exception:
+            return False
+        terms = [str(t).strip() for t in (resp.data or {}).get("queries", []) if str(t).strip()]
+        self._expansions[block.id] = terms[:6]
+        return bool(terms)
+
+    def _try_l0(self, block: Block) -> BindingResult | None:
+        if self.index is None:
+            return None
+        hits = self.retrieve(block)
+        # A weak shortlist -- nothing that fits the part's wiring scored well -- is the
+        # signature of a vocabulary gap, not of a part the library cannot model.
+        if (len(hits) < 3 or hits[0].score < self._BEST_EFFORT_SCORE) and self._expand_query(block):
+            hits = self.retrieve(block)
+        if self._require:
+            hits = [h for h in hits if _connector_packages(h.entry) & self._require]
+        #: Kept for `_try_l0_best`, so the shortlist is retrieved once per block.
+        self._hits = hits
         if not hits:
             return None
 
-        # A single dominant lexical hit is trusted without spending a token.
-        if len(hits) == 1 or (len(hits) > 1 and hits[0].score > 2.5 * max(hits[1].score, 1e-6)):
+        # A single dominant lexical hit is trusted without spending a token -- provided it
+        # dominates on what the part IS. A buffer tank whose note says it "decouples mixing
+        # from evaporator availability" retrieved `Evaporator` decisively from that one
+        # word, and bound a holding vessel to a heated one. When the hit shares no word with
+        # the part's name or kind and a hand-built template does, the template decides.
+        dominant = len(hits) == 1 or (len(hits) > 1 and hits[0].score > 2.5 * max(hits[1].score, 1e-6))
+        if dominant and not _names_overlap(block, hits[0].entry.key) and self._l1_head_match(block):
+            dominant = False
+        if dominant:
             chosen = hits[0].entry
             return BindingResult(
                 "L0",
@@ -457,7 +626,10 @@ class Binder:
         # into the model as an unbindable gap.
         head = norm(f"{humanise(block.name)} {humanise(block.kind)}")
         named = [h for h in hits if norm(humanise(h.entry.key.rsplit(".", 1)[-1])) in head]
-        if len(named) == 1 or (named and named[0].score >= hits[0].score):
+        # Within reach of the top score is enough: a part literally named after a class
+        # should not lose it to an EMF source that happened to share the words "electric
+        # potential" in its doc comment.
+        if len(named) == 1 or (named and named[0].score >= _NAMED_REACH * hits[0].score):
             chosen = named[0].entry
             return BindingResult(
                 "L0",
@@ -541,6 +713,12 @@ class Binder:
                 out[target] = _literal(p.quantity.value)
         return out
 
+    @staticmethod
+    def _l1_head_match(block: Block) -> bool:
+        """Does some template's keyword occur in what the part is called (name or kind)?"""
+        head = f"{block.name} {block.kind}".lower()
+        return any(kw in head for tpl in L1_TEMPLATES.values() for kw in tpl["keywords"])
+
     # ------------------------------------------------------------------ L1
     def _try_l1(self, block: Block) -> BindingResult | None:
         text = f"{block.name} {block.kind} {block.description or ''}".lower()
@@ -599,8 +777,9 @@ class Binder:
         # measuring coil on shared stop words, and a confidently wrong class is worse than
         # an honest gap -- it compiles, so nobody looks at it again. Require that the class
         # and the part actually share a content word.
-        words = {w for w in re.findall(r"[a-z]{4,}", humanise(f"{block.name} {block.kind}").lower())}
-        leaf_words = {w for w in re.findall(r"[a-z]{4,}", humanise(hit.entry.key.rsplit(".", 1)[-1]).lower())}
+        # Three letters, not four: 'PID', 'fan' and 'gas' are whole words.
+        words = {w for w in re.findall(r"[a-z]{3,}", humanise(f"{block.name} {block.kind}").lower())}
+        leaf_words = {w for w in re.findall(r"[a-z]{3,}", humanise(hit.entry.key.rsplit(".", 1)[-1]).lower())}
         if not (words & leaf_words):
             return None
         return BindingResult(
@@ -780,6 +959,34 @@ _SIGNAL_TYPES = ("booleaninput", "booleanoutput", "realinput", "realoutput",
 #: for the latter and produces a nPorts=0 array against the former.
 _UNSUPPORTED_PACKAGES = ("Modelica.Fluid.",)
 
+EXPAND_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["queries"],
+    "properties": {"queries": {"type": "array", "items": {"type": "string"}}},
+}
+
+EXPAND_PROMPT = """An engineering part has to be matched to a component in the Modelica Standard Library (or a
+library like it) by keyword search over class names and doc comments. The part's own words
+do not match the library's vocabulary. Give 3 to 6 short search queries in the LIBRARY's
+vocabulary: class names or the words its doc comments use for this kind of component.
+
+Part name:   {name}
+Part kind:   {kind}
+Domains:     {domains}
+Connections: {ports}
+Notes:       {description}
+
+Example: an "exciting coil" connecting an electric circuit to a magnetic core ->
+["ElectroMagneticConverter", "electro magnetic converter", "coil winding turns"].
+Return JSON only.
+"""
+
+#: How close to the top retrieval score a class the part is named after must come to win.
+_NAMED_REACH = 0.8
+
+#: Package segments whose classes are scaffolding for other classes, not parts of a plant.
+_NOT_A_PART = re.compile(r"\.(Interfaces|BaseClasses|Internal|Examples|Icons|Utilities|UsersGuide|Types)\.")
+
 #: Library packages that contain only causal signal blocks -- nothing in them is a physical
 #: component. Offered to a part with a physical domain, they are always the wrong answer.
 _CAUSAL_PACKAGES = (
@@ -946,7 +1153,22 @@ def resolve_ports(model: SystemModel, index: CatalogIndex | None) -> list[str]:
                 problems.append(f"{block.id}.{port.id}: {block.modelica_class} declares no connector")
                 continue
 
-            taken = used.get(side, 0)
+            # Domain before direction. A two-domain part -- an electro-magnetic converter
+            # has electrical pins AND magnetic ports -- offers both kinds on each side, and
+            # choosing by direction alone wired a current source into a magnetic port and a
+            # flux tube onto an electrical pin. The port's domain comes from the connection
+            # it carries; the connector's from the library it is declared in.
+            slot = side
+            if port.domain not in ("unknown", "signal", "control") and not side.startswith("signal"):
+                typed = {cp.name: cp.type for cp in entry.ports}
+                physical_all = available["in"] + available["out"] + available["other"]
+                same = [c for c in pool if port.domain in _library_domains(typed.get(c, ""))]
+                if not same:
+                    same = [c for c in physical_all if port.domain in _library_domains(typed.get(c, ""))]
+                if same and set(same) != set(pool):
+                    pool, slot = same, f"{side}:{port.domain}"
+
+            taken = used.get(slot, 0)
             connector = pool[min(taken, len(pool) - 1)] if len(pool) > 1 else pool[0]
             count_params = [c for c in _COUNT_PARAM.get(connector, ()) if c in params]
             if taken >= len(pool) and not count_params:
@@ -974,7 +1196,7 @@ def resolve_ports(model: SystemModel, index: CatalogIndex | None) -> list[str]:
             else:
                 port.name = connector
             port.connector_type = by_name.get(connector) or port.connector_type
-            used[side] = used.get(side, 0) + 1
+            used[slot] = used.get(slot, 0) + 1
 
         # Any connector array the class declares but which nothing wired to must be sized 0,
         # or its elements are undefined.
@@ -1510,8 +1732,17 @@ class ModelicaEmitter:
             # Sensor inputs the IR could not bind to anything in the plant.
             for sig in self.m.signals:
                 if sig.role == "sensor" and not sig.binding:
-                    self._w(2, f"// {self._declare_inert(sig.id, sig.name, '0.0')}")
-                    self._w(2, f"{ctrl}.{_mid(sig.name)} = 0.0;")
+                    # A Boolean input pinned to `0.0` is a type error, and operator
+                    # push-buttons are exactly that: Boolean, and bound to nothing in the
+                    # plant because their value comes from a person.
+                    inert = "false" if sig.datatype == "boolean" else "0.0"
+                    if sig.owner == "manual":
+                        self._w(2, f"// operator input {sig.name}: no stimulus in the scenario, "
+                                   f"held {inert} (see the declared gaps in the report)")
+                    self._w(2, f"// {self._declare_inert(sig.id, sig.name, inert)}")
+                    self._w(2, f"{ctrl}.{_mid(sig.name)} = {inert};")
+
+        self._close_return_paths(declared)
 
         # Physical connectors nothing connects to. A dropped connection is only one way for
         # a port to end up dangling -- the commoner way is that the evidence never wired it
@@ -1546,6 +1777,69 @@ class ModelicaEmitter:
         self._w(3, f"extent = {{{{-110,-110}},{{{max(110, -100 + ranks * 34 + 40)},110}}}})));")
         self._w(1, "end Plant;")
         self._w(0)
+
+    def _close_return_paths(self, declared: set[str]) -> None:
+        """Connect a two-terminal element's open return terminal to the circuit reference.
+
+        Packets describe circuits by their forward path -- "ramp -> coil", "coil -> left
+        leg" -- and leave the return implicit, as every engineer does. In an acausal model
+        that omission is fatal rather than cosmetic: a current source with one terminal open
+        forces its current into nowhere, and omc fails index reduction with "found empty set
+        of continuous equations", which names neither the part nor the missing wire.
+
+        The convention the drawing assumes is that the return goes to the reference. So
+        where a part has one terminal of a positive/negative pair connected and the other
+        open, and the model contains a ground speaking the same connector family, the open
+        terminal is tied to that ground -- and the assumption is written next to it. Only
+        potential-based domains (electrical, magnetic): a mechanical flange left free is a
+        legitimate free end, not an omission.
+        """
+        if self._index is None:
+            return
+        grounds: dict[str, str] = {}
+        for b in self.m.simulatable_blocks():
+            if b.id not in declared or b.id in self._omitted or not b.modelica_class:
+                continue
+            entry = self._index.get(b.modelica_class)
+            if entry is None or b.modelica_class.rsplit(".", 1)[-1] != "Ground" or len(entry.ports) != 1:
+                continue
+            port = entry.ports[0]
+            grounds.setdefault(port.type.rsplit(".", 1)[0], f"{_mid(b.id)}.{port.name}")
+        if not grounds:
+            return
+        for b in self.m.simulatable_blocks():
+            if b.id not in declared or b.id in self._omitted or not b.modelica_class:
+                continue
+            entry = self._index.get(b.modelica_class)
+            if entry is None or b.modelica_class.rsplit(".", 1)[-1] == "Ground":
+                continue
+            used = {p.name.split("[")[0] for p in b.ports
+                    if f"{b.id}.{p.id}" in self._connected and p.name}
+            for cp in entry.ports:
+                leaf = cp.type.rsplit(".", 1)[-1]
+                pkg = cp.type.rsplit(".", 1)[0]
+                if cp.name in used or pkg not in grounds:
+                    continue
+                if not (leaf.startswith(("Positive", "Negative"))
+                        and _library_domains(cp.type) & {"electrical", "magnetic"}):
+                    continue
+                partner = "Negative" if leaf.startswith("Positive") else "Positive"
+                if not any(o.name in used and o.type.rsplit(".", 1)[0] == pkg
+                           and o.type.rsplit(".", 1)[-1].startswith(partner)
+                           for o in entry.ports):
+                    continue
+                ref = f"{_mid(b.id)}.{cp.name}"
+                self._w(2, f"// ASSUMPTION: {ref} is the return terminal and the evidence names no "
+                           f"return path; tied to the reference {grounds[pkg]}")
+                self._w(2, f"connect({ref}, {grounds[pkg]});")
+                if self._log is not None:
+                    self._log.assume(
+                        subject=b.id,
+                        statement=f"{ref} returns through the reference {grounds[pkg]}",
+                        basis="SA-06-return-to-reference",
+                        what_was_missing=f"a connection for the return terminal {ref}",
+                        value=grounds[pkg],
+                    )
 
     def _idealize_dangling(self, endpoint: str, why: str) -> None:
         """Pin a connector whose peer never made it into the model, and say why.
@@ -1670,6 +1964,44 @@ def _mtype(datatype: str) -> str:
 #: How deep a Modelica package path has to agree before two classes count as "same library".
 #: `Modelica.Magnetic.FluxTubes` vs `Modelica.Magnetic.FundamentalWave`: three segments.
 _LIBRARY_DEPTH = 3
+
+
+#: Library prefix -> the physical domains its classes model. Longest prefix wins.
+_LIBRARY_DOMAINS: tuple[tuple[str, frozenset[str]], ...] = (
+    ("Modelica.Electrical.Machines", frozenset({"electrical", "rotational", "magnetic"})),
+    ("Modelica.Electrical", frozenset({"electrical"})),
+    ("Modelica.Magnetic", frozenset({"magnetic"})),
+    ("Modelica.Mechanics.Rotational", frozenset({"rotational"})),
+    ("Modelica.Mechanics.Translational", frozenset({"translational"})),
+    ("Modelica.Mechanics.MultiBody", frozenset({"rotational", "translational"})),
+    ("Modelica.Thermal.HeatTransfer", frozenset({"thermal"})),
+    ("Modelica.Thermal.FluidHeatFlow", frozenset({"fluid", "thermal"})),
+    ("Modelica.Fluid", frozenset({"fluid", "thermal"})),
+    ("Modelica.Blocks", frozenset({"signal", "control"})),
+    ("Modelica.ComplexBlocks", frozenset({"signal", "control"})),
+    ("Modelica.StateGraph", frozenset({"signal", "control"})),
+    ("SpecAlive.Controllers", frozenset({"signal", "control"})),
+    ("SpecAlive", frozenset({"fluid", "thermal"})),
+)
+
+
+def _names_overlap(block: Block, class_key: str) -> bool:
+    """Do the part's name/kind and the class's short name share a content word?"""
+    words = set(re.findall(r"[a-z]{3,}", humanise(f"{block.name} {block.kind}").lower()))
+    leaf = set(re.findall(r"[a-z]{3,}", humanise(class_key.rsplit(".", 1)[-1]).lower()))
+    return bool(words & leaf)
+
+
+def _library_domains(key: str) -> frozenset[str]:
+    for prefix, doms in _LIBRARY_DOMAINS:
+        if key == prefix or key.startswith(prefix + "."):
+            return doms
+    return frozenset()
+
+
+def block_signature(block: Block) -> str:
+    """The memory key for a part: role, domain, and the words of what it is."""
+    return signature(block.role, block.domains, block.kind, block.name)
 
 
 def _connector_packages(entry: Any) -> set[str]:
@@ -1800,13 +2132,19 @@ def enforce_connectable(
                 peer_packages |= _connector_packages(peer_entry)
         if peer_packages and not (peer_packages & mine):
             want |= peer_packages
-        for d in b.domains:
-            counts = packages.get(d)
-            if not counts:
-                continue
-            best, n = counts.most_common(1)[0]
-            if n >= 2 and best not in mine:
-                want.add(best)
+        # The domain-wide vote is only a fallback for a part with no bound neighbours to ask.
+        # Where the neighbours already speak this part's connectors, they are the evidence:
+        # an air gap wired flux-tube to flux-tube must not be "corrected" into the electrical
+        # library because it also touches a measuring coil. And a class the packet itself
+        # declares is never overruled by a vote.
+        if not peer_packages and not b.declared_class:
+            for d in b.domains:
+                counts = packages.get(d)
+                if not counts:
+                    continue
+                best, n = counts.most_common(1)[0]
+                if n >= 2 and best not in mine:
+                    want.add(best)
         if not want:
             continue
         retry = binder.bind(b, require_connector_packages=want)
@@ -1896,15 +2234,36 @@ def emit_modelica(
     router: Any | None = None,
     package: str = "GeneratedPlant",
     synthesise: bool = False,
+    memory: Any | None = None,
+    report: dict[str, Any] | None = None,
 ) -> tuple[Path, dict[str, int]]:
-    """Bind every block, then emit. Returns the path and a per-tier histogram for the report."""
-    binder = Binder(index, router, synthesise=synthesise)
+    """Bind every block, then emit. Returns the path and a per-tier histogram for the report.
+
+    `memory` (a BindingMemory) lets binding use what earlier runs learned; `report`, when
+    given, is filled with what this emission learned in turn -- the connector families
+    chosen, the bindings withdrawn as unwireable, and the parts that made it into the file
+    with something attached -- so the caller can write it back once omc has had its say.
+    """
+    report = report if report is not None else {}
+    binder = Binder(index, router, synthesise=synthesise, memory=memory)
     tiers: dict[str, int] = {"L0": 0, "L1": 0, "L2": 0, "unbound": 0}
+    # Decide the plant's connector families first, then bind every part inside them. See
+    # emit/families.py for why binding one part at a time could not produce a model whose
+    # parts connect.
+    from .families import plan_families
+
+    required, family_notes = plan_families(model, index, binder, memory)
+    report["families"] = family_notes
     for b in model.simulatable_blocks():
         if b.binding_tier != "unbound" and b.modelica_class:
             tiers[b.binding_tier] += 1  # already bound, e.g. loaded from a fixture IR
             continue
-        res = binder.bind(b)
+        res = binder.bind(b, require_connector_packages=required.get(b.id))
+        if res.tier == "unbound" and required.get(b.id):
+            # Nothing inside the chosen family fits this part. Binding it outside the family
+            # is still better than not binding it: `enforce_connectable` below withdraws it
+            # if it turns out not to mate with anything.
+            res = binder.bind(b)
         b.binding_tier = res.tier  # type: ignore[assignment]
         b.modelica_class = res.modelica_class
         b.modelica_modifiers = res.modifiers
@@ -1913,12 +2272,30 @@ def emit_modelica(
         b.synthesised_equations = res.synthesised
         tiers[res.tier] += 1
 
+    before = {b.id: (b.modelica_class, block_signature(b), b.binding_strength)
+              for b in model.simulatable_blocks() if b.modelica_class}
     for note in enforce_connectable(model, index, binder):
         model.gaps.append(Gap(
             id=f"GAP-WIRE-{len(model.gaps):02d}", kind="unmapped_component",
             subject=note.split(":", 1)[0], detail=note, severity="warn",
         ))
-    unify_libraries(model, index)
+    # `unify_libraries` used to run here: a per-domain majority vote that moved parts
+    # between libraries by domain alone. The family plan above makes that decision properly
+    # -- from what each part can actually connect to -- and the vote now only fought it,
+    # moving an electrical ground into the magnetic library because more parts were magnetic.
+    # Anything the safety nets had to move is a binding that did not work. That is the most
+    # useful thing a run can teach the memory, because it is the guess most likely to be
+    # made again.
+    #
+    # Only a *guess* is blamed. A decisive or declared binding that had to move was usually
+    # moved because of its neighbour -- a current ramp withdrawn because the coil beside it
+    # had not bound -- and recording that as the ramp's failure taught the memory to avoid
+    # the one class that was right.
+    report["withdrawn"] = [
+        (sig, cls) for bid, (cls, sig, strength) in before.items()
+        if strength == "weak"
+        and (blk := model.block(bid)) is not None and blk.modelica_class != cls
+    ]
 
     # A part that exists only because an interface record named it is worth offering to the
     # binding cascade -- most of them are real components the component schedule simply
@@ -1953,7 +2330,19 @@ def emit_modelica(
                 subject=problem.split(":")[0], detail=problem, severity="warn")
         )
 
-    text = ModelicaEmitter(model, package, index, log).emit()
+    emitter = ModelicaEmitter(model, package, index, log)
+    text = emitter.emit()
+    # Parts that are in the file with something attached -- the only bindings a successful
+    # compile says anything about.
+    attached = {ref.split(".", 1)[0] for ref in emitter._connected}
+    attached |= {s.binding.split(".", 1)[0] for s in model.signals if s.binding}
+    report["emitted"] = sorted(
+        b.id for b in model.simulatable_blocks()
+        if b.modelica_class and b.binding_tier != "unbound"
+        and b.id not in emitter._omitted and b.id in attached
+    )
+    report["strength"] = {b.id: b.binding_strength for b in model.simulatable_blocks()}
+    report["memory_used"] = getattr(memory, "used", 0)
     # Attach AFTER emission: the emitter is the last stage that can invent a value, so
     # anything it assumed has to be in the IR before the report reads it.
     log.attach(model)

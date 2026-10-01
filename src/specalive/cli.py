@@ -146,6 +146,37 @@ def harvest(
 
 # ------------------------------------------------------------------------------------- run
 
+#: Next to the harvested catalog, and machine-local like it: both describe what works with
+#: the libraries installed on this machine.
+DEFAULT_MEMORY = Path("out/binding_memory.json")
+
+
+@app.command("memory")
+def memory_cmd(
+    path: Path = typer.Option(DEFAULT_MEMORY, "--memory", help="Binding memory file"),
+    forget: bool = typer.Option(False, "--forget", help="Delete the memory and start over"),
+) -> None:
+    """Show what the catalog has learned from earlier runs."""
+    from .catalog.memory import BindingMemory
+
+    if forget:
+        path.unlink(missing_ok=True)
+        con.print(f"[green]ok[/] forgot {path}")
+        return
+    mem = BindingMemory.load(path)
+    table = Table(title=f"Binding memory: {mem.summary()}")
+    for col in ("part signature", "class", "ok", "bad", "packets"):
+        table.add_column(col)
+    for sig in sorted(mem.bindings):
+        for cls, st in sorted(mem.bindings[sig].items(), key=lambda kv: -kv[1].get("ok", 0)):
+            table.add_row(sig, cls, str(st.get("ok", 0)), str(st.get("bad", 0)),
+                          ", ".join(st.get("packets", [])[-3:]))
+    con.print(table)
+    for dom, fams in sorted(mem.families.items()):
+        con.print(f"  {dom}: " + ", ".join(f"{f} (ok {st['ok']}, bad {st['bad']})"
+                                           for f, st in sorted(fams.items())))
+
+
 
 @app.command()
 def run(
@@ -167,6 +198,11 @@ def run(
         False, "--from-sysml",
         help="C-08: build the Modelica by re-reading the emitted SysML, not from the IR",
     ),
+    learn: bool = typer.Option(
+        True, "--learn/--no-learn",
+        help="Use and update the binding memory (what earlier runs proved compiles)",
+    ),
+    memory: Path = typer.Option(DEFAULT_MEMORY, "--memory", help="Binding memory file"),
 ) -> None:
     """Run the whole pipeline: evidence in, SysML + Modelica + results + report out."""
     cfg = PipelineConfig(
@@ -180,6 +216,7 @@ def run(
         repair_iterations=repair,
         skip_simulation=no_sim,
         from_sysml=from_sysml,
+        memory_path=memory if learn else None,
     )
     result = Pipeline(cfg, _router(provider)).run(on_event=_print)
 
@@ -293,6 +330,7 @@ def bench(
             package_name=spec.get("package", "GeneratedPlant"),
             model_name=spec.get("model"),
             stop_time=spec.get("stop_time"),
+            memory_path=DEFAULT_MEMORY,
         )
         res = Pipeline(cfg, _router(provider)).run(on_event=_print)
         card = res.scorecard

@@ -99,3 +99,18 @@ assumptions:
       Search the emitted .mo for "FALLBACK". Each one names the guard it bypasses and the gap
       id that explains why.
     risk: high
+
+  - id: SA-06-return-to-reference
+    title: An open return terminal of an electrical or magnetic element goes to the reference
+    applies_when: >
+      A bound two-terminal element has one terminal of a positive/negative pair connected and
+      the other connected to nothing, and the model contains a ground of the same connector
+      family.
+    rule: >
+      Connect the open terminal to that ground, and mark it in the generated source.
+    basis: >
+      Drawings and interface matrices describe the forward path and leave the return
+      implicit; the implied return is the circuit reference. Left open, an acausal source is
+      structurally singular and the model cannot be built at all.
+    challenge: 'Search the emitted .mo for "ASSUMPTION: ... return terminal".'
+    risk: medium

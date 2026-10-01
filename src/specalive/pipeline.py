@@ -77,6 +77,10 @@ class PipelineConfig:
     #: argument about a shared source. Off by default until the bench is green on it:
     #: standing rule 6, the gate is sacred.
     from_sysml: bool = False
+    #: Where the binding memory lives (catalog/memory.py). None runs without it: nothing is
+    #: read from earlier runs and nothing this run learns is kept. The CLI turns it on by
+    #: default, next to the catalog; tests and library callers opt in.
+    memory_path: Path | None = None
 
 
 #: A pass is only repeated when it added a declared fallback, and each blocked transition is
@@ -113,6 +117,11 @@ class Pipeline:
         self._written_back: set[str] = set()
         self._pass = 1
         self.router = router
+        self.memory = None
+        if cfg.memory_path is not None:
+            from .catalog.memory import BindingMemory
+
+            self.memory = BindingMemory.load(cfg.memory_path)
         self.result = PipelineResult()
         cfg.out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -223,6 +232,58 @@ class Pipeline:
                 break
 
         yield from self._finish(t0, runner)
+
+    # ------------------------------------------------------------------ memory
+    def _learn(self, model: SystemModel, *, outcome: Any | None, simulated: bool,
+               live: bool = False) -> None:
+        """Write back what omc just proved about this pass's bindings.
+
+        Called twice per pass: once after the repair loop, to record the classes it had to
+        correct and the ones the safety nets withdrew, and once after a successful
+        simulation, to record every binding that made it into a running model with
+        something attached. Only omc's verdict counts as evidence -- a binding that was
+        merely chosen teaches nothing.
+        """
+        mem = self.memory
+        if mem is None:
+            return
+        from .emit.modelica import block_signature
+
+        packet = self.cfg.packet.name
+        emission = getattr(self, "_emission", {})
+        if not simulated:
+            for sig, cls in emission.get("withdrawn", []):
+                if cls:
+                    mem.record_failure(sig, cls, packet)
+            for edit in (outcome.ir_edits if outcome is not None else []):
+                blk = model.block(edit.block) if edit.kind == "class" and edit.block else None
+                # A connector-family correction is about the pairing, not the class on its
+                # own, so it is not held against the class. A class the catalog does not
+                # contain, or a mistyped one, is.
+                if (edit.detail or "").startswith("connector package"):
+                    continue
+                if blk is not None and edit.old:
+                    mem.record_failure(block_signature(blk), edit.old, packet)
+        else:
+            strength = emission.get("strength", {})
+            for bid in emission.get("emitted", []):
+                blk = model.block(bid)
+                if blk is None or not blk.modelica_class:
+                    continue
+                # A guess that merely compiled proves little -- a voltage ramp compiles in
+                # place of a current ramp. It earns credit only from a run that did
+                # something; declared and decisive bindings earn it from any clean build.
+                if strength.get(bid) == "weak" and not live:
+                    continue
+                mem.record_success(block_signature(blk), blk.modelica_class, packet)
+                if blk.connector_family:
+                    for d in blk.domains:
+                        if d != "unknown":
+                            mem.record_family(d, blk.connector_family, ok=True)
+        try:
+            mem.save()
+        except OSError:
+            pass  # a read-only checkout still runs; it just does not learn
 
     # ------------------------------------------------------------------ extraction
     def _extract_skeleton(
@@ -360,10 +421,19 @@ class Pipeline:
                 source = model
                 yield self._emit("modelica", "warn", f"SysML path unusable, using IR: {exc}")
 
+        emission: dict[str, Any] = {}
         mo_path, tiers = emit_modelica(
             source, cfg.out_dir / f"{cfg.package_name}.mo",
             index=index, router=self.router, package=cfg.package_name,
+            memory=self.memory, report=emission,
         )
+        self._emission = emission
+        for note in emission.get("families", []):
+            yield self._emit("modelica", "ok", note)
+        if self.memory is not None and emission.get("memory_used"):
+            yield self._emit("modelica", "ok",
+                             f"{emission['memory_used']} binding(s) from earlier runs "
+                             f"({self.memory.summary()})")
         self.result.artifacts["Modelica"] = str(mo_path)
         yield self._emit(
             "modelica", "warn" if tiers.get("unbound") else "ok",
@@ -406,6 +476,7 @@ class Pipeline:
         # and left the SysML describing the uncorrected plant. Fold it upstream, then rebuild
         # from there -- which is also the only way the fix reaches the code under
         # --from-sysml, since that path reads the SysML and never sees our .mo edits.
+        self._learn(model, outcome=outcome, simulated=False)
         fresh = [e for e in outcome.ir_edits if str(e) not in self._written_back]
         if fresh:
             landed = apply_ir_edits(model, fresh)
@@ -505,6 +576,7 @@ class Pipeline:
         # nothing happens -- and it would otherwise print HARD GATE MET above 0/10.
         live = liveness(cfg.out_dir / "results.csv", model)
         self.result.gate["live"] = live.ok
+        self._learn(model, outcome=None, simulated=True, live=live.ok)
         self.result.gate["liveness"] = live.summary()
         yield self._emit(
             "simulate", "ok" if live.ok else "warn", live.summary(), live=live.ok,

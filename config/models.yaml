@@ -172,6 +172,8 @@ routes:
   read_diagram:          [t4_cloud_vision, t4_openrouter_vision, t4_local_vision]
   catalog_retrieve:      [t0_deterministic, t1_local_embed]
   catalog_pick:          [t4_cloud_extract, t1_local_small, t3_cloud_reasoning]
+  #: Restate a part in library vocabulary when retrieval comes back weak. Emitter L0.
+  catalog_query:         [t4_cloud_extract, t3_cloud_reasoning, t1_local_small]
   adjudicate_conflict:   [t3_cloud_reasoning, t2_local_mid]
   equation_synthesis:    [t3_cloud_reasoning, t4_cloud_vision]
   repair_modelica:       [t0_deterministic, t5_cloud_deep, t3_cloud_reasoning, t4_cloud_vision]

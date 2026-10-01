@@ -126,6 +126,10 @@ class Block(BaseModel):
     #: binder prefers it over retrieval, because an engineer who wrote the class down has
     #: already made the choice retrieval is only approximating.
     declared_class: str | None = None
+    #: A class a MODEL suggested (the whole-packet read), verified to exist. Weaker than a
+    #: declared class by design: it is one candidate among others, bound only inside the
+    #: plant's connector family and only after the hand-built templates have had their turn.
+    suggested_class: str | None = None
 
     #: True when the source merges this part into another for simulation but the part exists
     #: physically. Keeps architecture honest without distorting the executable model.
@@ -134,6 +138,14 @@ class Block(BaseModel):
     physical_only: bool = Field(
         default=False, description="Present in the architecture, not in the executable model"
     )
+    #: What the part is in the executable model (see reconcile/roles.py). Instruments and
+    #: operator inputs never become blocks -- they become signals -- so a Block carries one of
+    #: the three roles that do: an ordinary component, a boundary, or the supervisory
+    #: controller whose behaviour is the state machine.
+    role: Literal["component", "boundary", "controller"] = "component"
+    #: The connector family chosen for this part before binding (see emit/families.py), so
+    #: the report can show why a part bound where it did.
+    connector_family: str | None = None
     #: True when this part exists only because another record named it as a connection
     #: endpoint -- no register row of its own. Such a part is still offered to the binding
     #: cascade (a coil named only in an interface matrix is still a coil), but if nothing

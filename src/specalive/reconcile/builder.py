@@ -71,6 +71,7 @@ from .entities import (
     singular,
     to_si,
 )
+from .roles import RoleDecision, classify_roles
 from .precedence import PrecedenceEngine, build_supersession_map, resolve_source_supersession
 from .topology import GROUP_REF, Path as Route, TopologyBuilder, collect_edges, connects_to_claims, is_signal_medium
 
@@ -270,6 +271,55 @@ class Assembler:
                           f"tag '{e.subject}' appears only in model-read evidence "
                           f"({', '.join(sorted({c.source_id for c in e.facts.values()}))}) and in no register; "
                           f"it is not added to the model", "info")
+        self.assign_roles()
+
+    # ------------------------------------------------------------------ roles
+    def _key_of(self, name: str) -> str:
+        """Entity key a connection endpoint refers to, through aliases."""
+        return norm(self.topo.resolve(name) or name)
+
+    def assign_roles(self) -> None:
+        """Decide what each part IS before anything is bound. See reconcile/roles.py.
+
+        Instruments and operator inputs leave `part_keys` here and become signals in
+        `build_signals`; they must never reach the binding cascade, where a level
+        transmitter can only ever come back as the wrong class or as nothing.
+        """
+        neighbours: dict[str, set[str]] = defaultdict(set)
+        for key in self.edge_keys:
+            e = self.entities[key]
+            a, z = self._key_of(e.text("from")), self._key_of(e.text("to"))
+            neighbours[a].add(z)
+            neighbours[z].add(a)
+        decisions = classify_roles(self.entities, self.part_keys, neighbours, self.known)
+
+        # The whole-packet read may classify a part the evidence left at the default. It
+        # never overrides a decision the register itself supports.
+        for key, d in decisions.items():
+            said = self.entities[key].text("partrole").lower()
+            if d.default and said in ("instrument", "operator", "controller", "boundary"):
+                host = self.entities[key].text("hostedby") or None
+                decisions[key] = RoleDecision(
+                    said, f"classified by the whole-packet read ({self.entities[key].get('partrole').extracted_by})",  # type: ignore[arg-type]
+                    host=self.topo.resolve(host) if host else None,
+                    variable=measurement_var(_humanised_kind(self.entities[key])),
+                    claim_ids=d.claim_ids,
+                )
+
+        self.roles = decisions
+        self.instrument_roles = [k for k in self.part_keys if decisions[k].role == "instrument"]
+        self.operator_roles = [k for k in self.part_keys if decisions[k].role == "operator"]
+        self.part_keys = [k for k in self.part_keys
+                          if decisions[k].role not in ("instrument", "operator")]
+        for key in self.instrument_roles + self.operator_roles:
+            d = decisions[key]
+            self.decisions.append(DecisionRecord(
+                id=f"DER-ROLE-{len([x for x in self.decisions if x.id.startswith('DER-ROLE')]) + 1:02d}",
+                subject=self.entities[key].subject, predicate="role",
+                winner_claim_id=(d.claim_ids or [""])[0],
+                rule_id="R-role-by-evidence-shape",
+                rationale=f"{self.entities[key].subject} is an {d.role}, not a component: {d.basis}",
+            ))
 
     def describe_from_interfaces(self) -> None:
         """Fold what a part's own connections say about it into its description.
@@ -284,6 +334,17 @@ class Assembler:
         Only added where the part has no description of its own or a purely structural one,
         so a register's words always come first.
         """
+        # A part is in every physical domain it has a connection in. An exciting coil named
+        # only in an interface matrix inferred 'electrical' from its name, yet two of its
+        # three connections run to magnetic flux tubes -- and a coil marked electrical-only
+        # had the electro-magnetic converter penalised as "another domain's class".
+        for c in self.m.connections:
+            if c.domain in ("unknown", "signal", "control"):
+                continue
+            for ref in (c.source, c.target):
+                blk = self.m.block(ref.split(".", 1)[0])
+                if blk is not None and c.domain not in blk.domains:
+                    blk.domains = [d for d in blk.domains if d != "unknown"] + [c.domain]  # type: ignore[list-item]
         incident: dict[str, list[str]] = defaultdict(list)
         for c in self.m.connections:
             for ref in (c.source, c.target):
@@ -292,7 +353,9 @@ class Assembler:
                     if text and text not in incident[bid]:
                         incident[bid].append(text)
         for block in self.m.blocks:
-            extra = "; ".join(incident.get(block.id, []))[:240]
+            # Generous: the sentence that identifies a coil ("Electromagnetic conversion
+            # N = 500") was the fourth note on it and a 240-character cap cut it off.
+            extra = "; ".join(incident.get(block.id, []))[:600]
             if not extra:
                 continue
             block.description = f"{block.description}; {extra}" if block.description else extra
@@ -328,7 +391,13 @@ class Assembler:
             # invent physics for something that has none of its own -- L2 duly synthesised a
             # controller out of two equations, one of them referencing a member no plain
             # RealInput has.
-            is_controller = "controller" in kind.lower()
+            #
+            # Which parts those are is the role classifier's call, not the word "controller"
+            # in the type column: a PID block in a ventilation block diagram is called a
+            # "PID/P controller" and is a component with an input and an output, and taking
+            # it out of the model left the whole CO2 loop open.
+            role = self.roles[key].role if key in getattr(self, "roles", {}) else "component"
+            is_controller = role == "controller"
             physical_only = manual or is_controller or any(w in everything for w in PHYSICAL_ONLY_WORDS)
             params = self._block_parameters(e, bid)
             for c in e.facts.values():
@@ -340,6 +409,8 @@ class Assembler:
                 domains=infer_domains(kind, name, e.subject),  # type: ignore[arg-type]
                 parameters=params, description=description, physical_only=physical_only,
                 declared_class=_declared_class(e),
+                suggested_class=_suggested_class(e),
+                role=role,  # type: ignore[arg-type]
                 provenance=Provenance(
                     claim_ids=e.claim_ids,
                     note="manual/local device: architecture only, never a controller output" if manual else None,
@@ -397,7 +468,23 @@ class Assembler:
         # open/close signal, not a structural connection, and routing it as one collided its
         # path id with the valve's real fluid path (same id, two Block instances) once the
         # controller itself was no longer mis-typed as architecture-only.
-        bus = [e for e in edges if is_signal_medium(e.medium)]
+        #
+        # But a signal between two *components* is a wire in a block diagram, not a
+        # controller interface: SEN-CO2-201 -> GAIN-NORM-201 carries "Measured CO2", and
+        # treating it as a bus dropped every connection of the IAQ control loop and left
+        # the gains with nothing attached. What decides it is the roles of the two ends.
+        comp_keys = {k for k in self.part_keys
+                     if self.roles.get(k) is None or self.roles[k].role in ("component", "boundary")}             if hasattr(self, "roles") else set(self.part_keys)
+        non_parts = {k for k, d in getattr(self, "roles", {}).items()
+                     if d.role in ("instrument", "operator", "controller")}
+
+        def is_bus(e) -> bool:
+            ends = {norm(e.src), norm(e.dst)}
+            if ends & non_parts:
+                return True
+            return is_signal_medium(e.medium) and not ends <= comp_keys
+
+        bus = [e for e in edges if is_bus(e)]
         physical = [e for e in edges if e not in bus]
         if bus:
             self._gap("deviation", "controller interfaces",
@@ -411,6 +498,11 @@ class Assembler:
                     self._boundary(end, r)
             src, dst = ident(r.src), ident(r.dst)
             domain = self._medium_domain(r.medium, src)
+            # A wire into or out of a pure signal block (a gain, a setpoint, a schedule) is a
+            # signal whatever its medium column says: "Normalized CO2" is not a gas.
+            ends = [self.m.block(src), self.m.block(dst)]
+            if is_signal_medium(r.medium) or any(b is not None and b.domains == ["signal"] for b in ends):
+                domain = "signal"
             if r.hops:
                 pid = r.id
                 pumped = any("pump" in (self.m.block(ident(h)).kind.lower() if self.m.block(ident(h)) else "")
@@ -568,6 +660,48 @@ class Assembler:
             )
             self.m.signals.append(sig)
             self.signal_block[sid] = loc
+
+        # Instruments the role classifier found -- parts the register types as transmitters or
+        # sensors, with no `location` column of their own. Each one is a reading of a variable
+        # on its host part, which is what the controller's guards compare against.
+        for key in getattr(self, "instrument_roles", []):
+            e, d = self.entities[key], self.roles[key]
+            sid = ident(e.subject)
+            if self.m.signal(sid) is not None:
+                continue
+            host = ident(d.host) if d.host else None
+            blk = self.m.block(host) if host else None
+            usable = blk is not None and not blk.physical_only and blk.abstracted_into is None
+            binding = f"{host}.{d.variable}" if (usable and d.variable) else None
+            if binding is None:
+                why = ("the evidence does not say which part it reads" if not d.host else
+                       f"its host {d.host} is not in the executable model" if not usable else
+                       "what it measures has no conventional variable")
+                self._gap("unextracted", sid, f"instrument {e.subject} is left unbound: {why}", "warn")
+            isa = re.match(r"^[A-Z](S|SH|SL|ISH|ISL)\b", e.subject.upper().replace("-", " "))
+            raw_unit = e.text("unit") or None
+            _, unit, _ = to_si(1.0, raw_unit, temperature=(d.variable == "T"))
+            self.m.signals.append(Signal(
+                id=sid, name=sid, role="sensor",
+                datatype="boolean" if isa else "real", unit=unit, binding=binding,
+                owner="controller",
+                provenance=Provenance(claim_ids=e.claim_ids, note=d.basis),
+            ))
+            self.signal_block[sid] = host
+
+        # Operator inputs: a manual command into the controller. There is nothing in the
+        # plant to bind one to -- its value comes from whoever presses the button, which in a
+        # simulation is the test scenario.
+        for key in getattr(self, "operator_roles", []):
+            e = self.entities[key]
+            sid = ident(e.subject)
+            if self.m.signal(sid) is None:
+                self.m.signals.append(Signal(
+                    id=sid, name=sid, role="sensor", datatype="boolean", owner="manual",
+                    provenance=Provenance(claim_ids=e.claim_ids,
+                                          note="operator input; driven by the test scenario"),
+                ))
+                self.signal_block[sid] = None
 
         # Actuators: every automated owned device. A manual one is never a controller output (F5).
         for key in self.part_keys:
@@ -1053,6 +1187,10 @@ def _title_candidates(docs: list[Document]) -> Counter[str]:
 _CLASS_PATH = re.compile(r"[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)+")
 
 
+def _humanised_kind(e: Entity) -> str:
+    return humanise(" ".join(e.text(p) for p in ("type", "kind", "name")) or e.subject)
+
+
 def _declared_class(e: Entity) -> str | None:
     """A Modelica class the evidence names for this part, if it names one.
 
@@ -1062,8 +1200,23 @@ def _declared_class(e: Entity) -> str | None:
     verifies it against the harvested catalog before using it.
     """
     for pred in ("modelicaclass", "modelclass", "class", "type", "kind"):
-        text = e.text(pred).strip()
-        if text and _CLASS_PATH.fullmatch(text):
+        c = e.get(pred)
+        text = "" if c is None or c.value is None else str(c.value).strip()
+        # Only the packet's own words declare. A model's suggestion is filed separately
+        # (`_suggested_class`): treating it as a declaration exempted two NaCl vessels from
+        # the plant's connector family, and when the suggestion was rejected as unwireable
+        # nothing constrained them any more.
+        if text and _CLASS_PATH.fullmatch(text) and c.extracted_by == "t0_deterministic":
+            return text
+    return None
+
+
+def _suggested_class(e: Entity) -> str | None:
+    """A class path a model-derived claim offers for this part, if any."""
+    for pred in ("modelicaclass", "modelclass"):
+        c = e.get(pred)
+        text = "" if c is None or c.value is None else str(c.value).strip()
+        if text and _CLASS_PATH.fullmatch(text) and c.extracted_by != "t0_deterministic":
             return text
     return None
 

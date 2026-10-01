@@ -472,49 +472,49 @@ def fix_connector_library_mismatch(src: str, diag: Diagnostic, index: Any) -> tu
     if not all(types) or _connector_package(types[0]) == _connector_package(types[1]):
         return None
 
-    # Move the outlier: whichever component's class is used by fewer components here.
+    # Move the outlier first -- whichever component's class fewer components here use --
+    # but fall back to the other side. The outlier can be the one part that is RIGHT: an
+    # electro-magnetic converter is used once and speaks both connector families, so
+    # "moving" it found only itself and the fixer gave up, while the ground beside it,
+    # bound into the wrong library, was the actual fault.
     classes = [_declared_class_of(src, comp) for comp, _ in pairs]
     if not all(classes):
         return None
     usage = [len(re.findall(rf"^\s*{re.escape(c)}\s+\w+", src, re.M)) for c in classes]
-    move = 0 if usage[0] <= usage[1] else 1
-    keep = 1 - move
-    want_pkg = _connector_package(types[keep])
-    leaf = classes[move].rsplit(".", 1)[-1]
+    first = 0 if usage[0] <= usage[1] else 1
+    for move in (first, 1 - first):
+        keep = 1 - move
+        want_pkg = _connector_package(types[keep])
+        leaf = classes[move].rsplit(".", 1)[-1]
+        candidates = [
+            e for e in getattr(index, "entries", [])
+            if e.key.rsplit(".", 1)[-1] == leaf and e.key != classes[move]
+            and any(_connector_package(p.type) == want_pkg for p in e.ports)
+        ]
+        if not candidates:
+            continue
+        peer_parts = classes[keep].split(".")
 
-    candidates = [
-        e for e in getattr(index, "entries", [])
-        if e.key.rsplit(".", 1)[-1] == leaf
-        and any(_connector_package(p.type) == want_pkg for p in e.ports)
-    ]
-    if not candidates:
-        return None
-    # Prefer the candidate sharing the longest package prefix with the peer's own class:
-    # the neighbour's library is the one this component belongs in.
-    peer_parts = classes[keep].split(".")
+        def affinity(key: str) -> tuple[int, int]:
+            parts = key.split(".")
+            return (sum(1 for a, b in zip(parts, peer_parts) if a == b), -len(parts))
 
-    def affinity(key: str) -> tuple[int, int]:
-        parts = key.split(".")
-        common = sum(1 for a, b in zip(parts, peer_parts) if a == b)
-        return (common, -len(parts))
-
-    best = max(sorted(c.key for c in candidates), key=affinity)
-    if best == classes[move]:
-        return None
-    comp = pairs[move][0]
-    patched, n = re.subn(
-        rf"^(\s*){re.escape(classes[move])}(\s+{re.escape(comp)}\b)",
-        rf"\g<1>{best}\g<2>", src, count=1, flags=re.M,
-    )
-    if not n:
-        return None
-    return (
-        patched,
-        f"rebound '{comp}' from {classes[move]} to {best}: its connectors must come from "
-        f"{want_pkg} to mate with {pairs[keep][0]}",
-        IREdit("class", classes[move], best, block=comp,
-               detail=f"connector package {want_pkg} required by {pairs[keep][0]}"),
-    )
+        best = max(sorted(c.key for c in candidates), key=affinity)
+        comp = pairs[move][0]
+        patched, n = re.subn(
+            rf"^(\s*){re.escape(classes[move])}(\s+{re.escape(comp)}\b)",
+            rf"\g<1>{best}\g<2>", src, count=1, flags=re.M,
+        )
+        if not n:
+            continue
+        return (
+            patched,
+            f"rebound '{comp}' from {classes[move]} to {best}: its connectors must come from "
+            f"{want_pkg} to mate with {pairs[keep][0]}",
+            IREdit("class", classes[move], best, block=comp,
+                   detail=f"connector package {want_pkg} required by {pairs[keep][0]}"),
+        )
+    return None
 
 
 CATALOG_FIXERS: tuple[CatalogFixer, ...] = (
