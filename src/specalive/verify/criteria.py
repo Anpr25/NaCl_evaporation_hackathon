@@ -76,6 +76,10 @@ HOW TO CHECK CONTROLLER BEHAVIOUR
 FACTS
   - Boolean signals are logged as 0 (false) and 1 (true); test them with <= 0.5 or >= 0.5.
   - Values are in SI units: convert ppm, degC, mm, kPa etc. yourself before writing VALUE.
+    A column may carry a quantity in a scaled or normalised form (a mass fraction, a value
+    normalised to a nominal); convert the criterion's number into THAT form using a factor
+    the parameters below state, and say which factor in `reason`. A threshold thousands of
+    times outside a column's range is rejected as unconverted.
   - The controller scans every {scan:g} s, so a command takes effect within one scan of its
     stated time: check a commanded state 1 s AFTER the command, and start a "throughout"
     window 1 s after the event that opens it.
@@ -93,6 +97,43 @@ conditions -- answer checkable=false and say why in `reason`. A faithful partial
 NOT acceptable: an expression that checks something weaker than the criterion is worse
 than none. Return JSON only.
 """
+
+_NUM = r"(-?\d+(?:\.\d*)?(?:[eE][-+]?\d+)?)"
+_COL = r"([A-Za-z_][\w.\[\]]*)"
+_OP = r"(?:<=|>=|==|!=|<|>)"
+#: (column, threshold) pairs a check compares, in every form the language allows.
+_COMPARISONS = [
+    re.compile(rf"(?:max|min|final|always|during)\(\s*{_COL}\s*\)?\s*{_OP}\s*{_NUM}"),
+    re.compile(rf"\bat\(\s*{_COL}\s*,\s*{_NUM}\s*\)\s*{_OP}\s*{_NUM}"),
+    re.compile(rf"approx\(\s*(?:abs\()?(?:final|at)\(\s*{_COL}[^)]*\)\)?\s*,\s*{_NUM}"),
+    re.compile(rf"crosses\(\s*{_COL}\s*,\s*{_NUM}"),
+]
+#: How far apart a threshold and the column it is compared with may be before the check is
+#: judged to compare different units. A tank level of 1 mm against a 2.5 m limit is 2.5e3.
+_SCALE_LIMIT = 1e4
+
+
+def scale_mismatch(expr: str, cols: dict[str, list[float]]) -> str:
+    """Why a check compares a column with a threshold in some other unit, or ''.
+
+    'Maximum room CO2 <= 1000 ppm' was formalised as `max(ZON_201.C) <= 1000` against a
+    mass fraction that peaks at 1.5e-3: a check that cannot fail, reported as a pass. A
+    threshold orders of magnitude outside everything the column ever did is not a
+    requirement on that column; it is an unconverted unit.
+    """
+    for rx in _COMPARISONS:
+        for m in rx.finditer(expr):
+            col, val = m.group(1), float(m.groups()[-1])
+            series = cols.get(col) or cols.get(col.replace("_", ".")) or []
+            peak = max((abs(v) for v in series), default=0.0)
+            if not val or not peak:
+                continue
+            ratio = max(abs(val) / peak, peak / abs(val))
+            if ratio > _SCALE_LIMIT:
+                return (f"threshold {val:g} is {ratio:.0e} times the scale of {col} (peak "
+                        f"magnitude {peak:.4g}): the criterion's unit was not converted into "
+                        f"the column's -- use a conversion the parameters state")
+    return ""
 
 
 def _key(criterion: str) -> str:
@@ -122,6 +163,12 @@ def _context(model: SystemModel) -> tuple[str, str, str]:
             tags.append(f"  - {s.name} is the controller command column controller.{s.name}")
     params = [f"  - {p.id} = {p.quantity.value} {p.quantity.unit or ''}".rstrip()
               for p in model.parameters if p.status == "effective"][:40]
+    # Part parameters too: the factor that turns a procedure's unit into a column's is
+    # usually stated against the part that measures it ('nominal concentration 1.519e-3
+    # kg/kg = 1000 ppm' on the CO2 sensor), not as a plant-wide constant.
+    params += [f"  - {p.id} = {p.quantity.value} {p.quantity.unit or ''}".rstrip()
+               for b in model.simulatable_blocks() for p in b.parameters
+               if p.status == "effective" and isinstance(p.quantity.value, (int, float))][:40]
     return ("\n".join(state_lines) + "\n" if state_lines else "",
             ("  Tag map:\n" + "\n".join(tags) + "\n") if tags else "",
             ("  Effective parameters:\n" + "\n".join(params) + "\n") if params else "")
@@ -168,6 +215,9 @@ def formalise(
                     evaluate(expr, cols, tol)
                 except ExpressionError as exc:
                     return False, str(exc)
+                why = scale_mismatch(expr, cols)
+                if why:
+                    return False, why
                 return True, ""
 
             # 1. A translation an earlier run proved -- used only when no model is available.

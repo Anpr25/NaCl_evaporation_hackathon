@@ -89,7 +89,7 @@ MULTI_VALUED = {"connectsto", "connectedto", "feeds", "flowsto", "label"}
 #: part. Promoting them produced thirteen unbindable blocks named after local variables,
 #: including one called `end`.
 NON_PART_KINDS = {
-    "real", "boolean", "integer", "string", "enumeration",
+    "Real", "Boolean", "Integer", "String", "enumeration",
     "model", "package", "class", "block", "connector", "record", "function", "type",
     "parameter", "constant", "input", "output", "within", "end", "import", "extends",
 }
@@ -228,6 +228,7 @@ class Assembler:
         self.build_behaviour()       # B4
         self.build_scenario()        # B5
         self.link_requirements()
+        self.attach_schedules()
         self.describe_from_interfaces()
         self.m.domains = sorted({d for b in self.m.blocks for d in b.domains if d != "unknown"}
                                 | ({"control"} if self.m.state_machines else set())) or ["unknown"]  # type: ignore[assignment]
@@ -290,7 +291,11 @@ class Assembler:
             # identifier check that remains only rules out prose, dates and values.
             if e.key in taken or not looks_like_part_id(e.subject):
                 continue
-            if norm(self._kind_text(e)) in NON_PART_KINDS:
+            # Case-sensitive: these are keywords as code writes them. A register whose type
+            # column says "Constant" is describing a constant SOURCE block, and comparing
+            # case-insensitively against the `constant` keyword threw the IAQ packet's
+            # outdoor-concentration block out of the model.
+            if self._kind_text(e).strip() in NON_PART_KINDS:
                 continue
             has_kind = e.has("type", "kind", "modelclass", "role", "ownership")
             physical = infer_domains(
@@ -355,6 +360,76 @@ class Assembler:
                 rule_id="R-role-by-evidence-shape",
                 rationale=f"{self.entities[key].subject} is an {d.role}, not a component: {d.basis}",
             ))
+
+    def attach_schedules(self) -> None:
+        """Give a schedule part the series its register tabulates.
+
+        An occupancy schedule is a table, not a parameter: 'Schedule Row | Start Time | End
+        Time | Occupants'. Each row reached the IR as a subject with three facts and nothing
+        tied the rows to the part that IS the schedule, so the occupancy block bound with no
+        data and the whole people-to-CO2 chain was idle. A table whose rows have a start time,
+        an end time and exactly one other number is a piecewise-constant series; it belongs
+        to the schedule/profile part when there is exactly one, and when there are several,
+        to the one whose words it shares.
+        """
+        clock = re.compile(r"^\s*(\d{1,2}):(\d{2})(?::(\d{2}))?\s*$")
+
+        def seconds(v: Any) -> float | None:
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                return float(v)
+            m = clock.match(str(v or ""))
+            return int(m.group(1)) * 3600.0 + int(m.group(2)) * 60.0 + int(m.group(3) or 0) if m else None
+
+        # Grouped by WHERE each fact sits -- source, sheet, row -- not by subject. A schedule
+        # keys its rows '1', '2', '3', and so does every other numbered table in the packet;
+        # grouped by subject those rows merged with unrelated ones and dropped out.
+        rows_at: dict[tuple[str, str, int], dict[str, EvidenceClaim]] = defaultdict(dict)
+        for c in self.claims:
+            if c.extracted_by != "t0_deterministic" or not c.locator.cell:
+                continue
+            m = re.match(r"[A-Z]+(\d+)$", c.locator.cell)
+            if m:
+                rows_at[(c.source_id, c.locator.sheet or "", int(m.group(1)))][norm(c.predicate)] = c
+        series: dict[tuple[str, str], list[tuple[float, float, float]]] = defaultdict(list)
+        for (src, sheet, _row), facts in rows_at.items():
+            start = next((c for k, c in facts.items() if "start" in k), None)
+            end = next((c for k, c in facts.items() if "end" in k), None)
+            if start is None or end is None:
+                continue
+            t0, t1 = seconds(start.value), seconds(end.value)
+            if t0 is None or t1 is None:
+                continue
+            values = [(k, c) for k, c in facts.items()
+                      if c is not start and c is not end and isinstance(c.value, (int, float))
+                      and not isinstance(c.value, bool)]
+            if len(values) != 1:
+                continue
+            key, c = values[0]
+            series[(sheet or src, key)].append((t0, t1, float(c.value)))
+        if not series:
+            return
+        targets = [b for b in self.m.blocks
+                   if re.search(r"schedule|profile|timetable|time table", f"{b.name} {b.kind}", re.I)]
+        # The same schedule is often stated twice -- a register sheet and a CSV export -- and
+        # assigning each in turn kept whichever came last, which here was a truncated read.
+        # Keep the most complete series for each part.
+        chosen: dict[str, tuple[str, str, list[tuple[float, float, float]]]] = {}
+        for (sheet, key), rows in series.items():
+            pick = targets if len(targets) == 1 else [
+                b for b in targets if norm(key)[:6] and norm(key)[:6] in norm(f"{b.name} {b.kind} {b.description or ''}")]
+            if len(pick) != 1:
+                continue
+            if pick[0].id not in chosen or len(rows) > len(chosen[pick[0].id][2]):
+                chosen[pick[0].id] = (sheet, key, rows)
+        for bid, (sheet, key, rows) in chosen.items():
+            pick = [self.m.block(bid)]
+            rows.sort()
+            points: list[tuple[float, float]] = []
+            for t0, t1, v in rows:
+                points += [(t0, v), (t1, v)]   # a step: hold each value across its interval
+            pick[0].table = points
+            pick[0].description = "; ".join(x for x in (pick[0].description,
+                f"{len(rows)} intervals of '{key}' from {sheet}") if x)
 
     def describe_from_interfaces(self) -> None:
         """Fold what a part's own connections say about it into its description.
@@ -456,8 +531,21 @@ class Assembler:
 
     def _block_parameters(self, e: Entity, bid: str) -> list[Parameter]:
         # Bookkeeping columns (a source line number, a row index) are numbers, not properties.
-        skip = {"value", "unit", "range", "priority", "revision", "line", "row", "index", "page", "no", "number"}
+        skip = {"value", "unit", "range", "priority", "revision", "line", "row", "index", "page", "no", "number",
+                "notes", "note", "comments", "comment", "remarks"}
         out: list[Parameter] = []
+        # 'Key Parameter | Value | Units' -- a component schedule that states each part's
+        # headline parameter in a name/value pair. The value column was skipped as
+        # bookkeeping, so the room's 100 m3, every gain and the controller's Kp reached the
+        # packet-wide parameter list under the part's TAG and never the part itself.
+        key, val = e.text("keyparameter", "parameter", "property"), e.get("value")
+        if key and val is not None and isinstance(val.value, (int, float)) and not isinstance(val.value, bool):
+            pname = ident(key.lower())
+            unit_c = e.get("unit")
+            unit = val.unit or (str(unit_c.value) if unit_c is not None and unit_c.value else None)
+            value, unit, note = to_si(val.value, unit, temperature="temp" in pname)
+            out.append(Parameter(id=f"{bid}.{pname}", name=pname, quantity=Quantity(value=value, unit=unit),
+                                 scope=bid, provenance=Provenance(claim_ids=[val.id], note=note)))
         for pkey, c in e.facts.items():
             if pkey in skip or not isinstance(c.value, (int, float)) or isinstance(c.value, bool):
                 continue
@@ -1459,6 +1547,13 @@ _DOCUMENT_NOUNS = (
 )
 
 
+def _system_score(text: str) -> int:
+    """>0 when a title fragment sounds like a system, <=0 when like paperwork or nothing."""
+    low = text.lower()
+    score = 2 if any(n in low for n in _SYSTEM_NOUNS) else 0
+    return score - 2 if any(n in low for n in _DOCUMENT_NOUNS) else score
+
+
 def _title_candidates(docs: list[Document]) -> Counter[str]:
     """Title-ish lines from every document, scored by how much they sound like a system name."""
     votes: Counter[str] = Counter()
@@ -1534,10 +1629,15 @@ def _infer_name(docs: list[Document]) -> str:
         first = next((b.text.strip().splitlines()[0] for b in d.blocks if b.text and b.text.strip()), "")
         if " - " not in first:
             continue
-        tail = first.split(" - ", 1)[1]
+        head, tail = first.split(" - ", 1)
         tail = re.split(r",?\s*\bRev(?:ision)?\b", tail)[0].strip(" ,")
-        if 3 <= len(tail) <= 60 and not re.fullmatch(r"[A-Z]?\d*", tail):
-            votes[tail] += 1
+        # 'RM-201 Indoor Air Quality Control - Owner': the convention is usually
+        # '<doc kind> - <system>', but when only the head sounds like a system, the tail is a
+        # role, a date or a remark and the head is the name.
+        if _system_score(tail) <= 0 < _system_score(head):
+            tail = re.sub(r"^[A-Z]{1,5}-?\d+[A-Z]?\s+", "", head.strip(" ,"))
+        if 3 <= len(tail) <= 60 and not re.fullmatch(r"[A-Z]?\d*|[\d\s:/.-]+", tail):
+            votes[tail] += 2 if _system_score(tail) > 0 else 1
     # The ' - ' convention is the strongest signal when a packet follows it, but most do not.
     # Falling straight through to "the first heading over eight characters" is what named a
     # ventilation model `Owner`; ask instead which candidate line sounds like a system.

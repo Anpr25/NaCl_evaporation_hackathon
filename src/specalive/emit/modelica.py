@@ -79,8 +79,59 @@ L1_TEMPLATES: dict[str, dict[str, Any]] = {
     },
     "fluid.transport": {
         "class": "SpecAlive.Transport.Path",
-        "keywords": ["valve", "pipe", "line", "duct", "header", "transfer"],
+        # No "duct": a duct segment with no storage passes a stream on and is
+        # `fluid.duct` below. A Path is a COMMANDED transfer that draws from a storage
+        # outlet, and binding a duct to it put a flow-demanding element downstream of a
+        # flow-imposing source -- two outputs on one connection.
+        "keywords": ["valve", "pipe", "line", "header", "transfer"],
         "params": ["m_flow_nominal", "dz", "dT_loss"],
+    },
+    "fluid.duct": {
+        "class": "SpecAlive.Transport.Duct",
+        "keywords": ["duct segment", "duct", "no dynamic storage", "pass-through", "passthrough"],
+        "params": [],
+    },
+    "fluid.zone": {
+        "class": "SpecAlive.Zones.WellMixedZone",
+        "keywords": ["well-mixed", "well mixed", "room volume", "zone", "room air", "mixing volume",
+                     "perfectly mixed"],
+        "params": ["V", "rho", "C_start", "nIn", "nOut"],
+    },
+    "fluid.supply.commanded": {
+        "class": "SpecAlive.Sources.CommandedSupply",
+        "keywords": ["mass-flow source", "mass flow source", "controlled mass-flow", "flow source",
+                     "air supply", "outdoor air supply", "fresh air"],
+        "params": ["flowSign", "T"],
+    },
+    "fluid.source.trace": {
+        "class": "SpecAlive.Sources.TraceSource",
+        "keywords": ["trace-substance", "trace substance", "contaminant source", "emission source",
+                     "tracer", "co2 generation"],
+        "params": ["C_source", "flowSign", "T"],
+    },
+    "signal.sensor": {
+        "class": "SpecAlive.Sensors.IdealSensor",
+        "keywords": ["trace sensor", "concentration sensor", "ideal sensor", "co2 sensor"],
+        "params": [],
+    },
+    "signal.schedule": {
+        "class": "Modelica.Blocks.Sources.TimeTable",
+        "keywords": ["schedule", "profile", "timetable", "time table"],
+        "params": ["table"],
+        # Only for a part the evidence gave a series to: a schedule with no data would
+        # bind to a table of nothing and output zero all day.
+        "requires_table": True,
+    },
+    "signal.controller.biased_p": {
+        "class": "SpecAlive.Controllers.BiasedProportional",
+        # Evidence-specific: only words that SAY the controller is proportional-with-bias.
+        "keywords": ["bias", "integral disabled", "p controller", "pid/p", "proportional-only",
+                     "proportional only", "integral action shall be disabled"],
+        "params": ["k", "bias", "yMax", "yMin", "directActing"],
+        # Checked before the catalog: a library PID that merely shares the word "PID"
+        # cannot represent an output bias, and with integral action off and no bias the
+        # ventilation command sat at its lower limit all day.
+        "priority": True,
     },
     "fluid.pump": {
         "class": "SpecAlive.Transport.Pump",
@@ -104,7 +155,8 @@ L1_TEMPLATES: dict[str, dict[str, Any]] = {
     },
     "fluid.sink": {
         "class": "SpecAlive.Sources.Drain",
-        "keywords": ["boundary sink", "ideal sink", "drain", "vent", "overflow"],
+        "keywords": ["boundary sink", "ideal sink", "drain", "vent", "overflow", "pressure boundary",
+                     "exhaust sink", "exhaust boundary"],
         "params": ["nIn"],
     },
 }
@@ -319,7 +371,8 @@ class Binder:
         # packet declares beats retrieval; retrieval that is decisive on its own beats a
         # hand-built template; a template beats asking a model to choose; and asking beats
         # taking the top hit on faith. Synthesis is last and off by default.
-        for attempt in (self._try_declared, self._try_learned, self._try_l0, self._try_l1,
+        for attempt in (self._try_declared, self._try_l1_priority, self._try_learned,
+                        self._try_l0, self._try_l1,
                         self._try_suggested, self._try_l0_pick, self._try_l0_best, self._try_l2):
             result = attempt(block)
             if result is not None:
@@ -408,6 +461,19 @@ class Binder:
             return None
         if not _enough_ports(block, entry):
             return None
+        # A class a template knows needs more than parameters -- a TimeTable's `table` --
+        # is only usable through that template. Bound from memory alone it compiled with no
+        # table at all; so take the template's binding when it matches, and nothing when the
+        # template's precondition is missing here.
+        tpls = [t for t in L1_TEMPLATES.values() if t["class"] == cls]
+        if tpls:
+            l1 = self._try_l1(block)
+            if l1 is not None and l1.modelica_class == cls:
+                self.memory.used += 1
+                l1.rationale += f"; also learned from {stats.get('ok', 0)} earlier run(s)"
+                return l1
+            if any(t.get("requires_table") for t in tpls) and not block.table:
+                return None
         self.memory.used += 1
         packets = ", ".join(stats.get("packets", [])[-3:])
         return BindingResult(
@@ -507,15 +573,25 @@ class Binder:
         # a magnetic ground win "unambiguously" for an electric one, because the query's
         # every other word matched it better.
         mine = {d for d in block.domains if d != "unknown"}
+        # The class the register names the part after ('Constant', 'Gain') is exempt from the
+        # domain filters: the part's domain is a guess from the stream it feeds, its name is
+        # what the evidence says it is.
+        named = {re.sub(r"[^a-z0-9]", "", (t or "").lower()) for t in (block.kind, block.name)}
+        named.discard("")
+
+        def is_named(key: str) -> bool:
+            return key.rsplit(".", 1)[-1].lower() in named
+
         if mine:
             adjusted = []
             for h in merged.values():
                 theirs = _library_domains(h.entry.key)
-                if theirs and not (theirs & mine):
+                if theirs and not (theirs & mine) and not is_named(h.entry.key):
                     h = Hit(entry=h.entry, score=h.score * 0.5, why=f"{h.why}; other domain")
                 adjusted.append(h)
-            in_domain = [h for h in adjusted if not (_library_domains(h.entry.key)
-                                                     and not (_library_domains(h.entry.key) & mine))]
+            in_domain = [h for h in adjusted if is_named(h.entry.key)
+                         or not (_library_domains(h.entry.key)
+                                 and not (_library_domains(h.entry.key) & mine))]
             merged = {h.entry.key: h for h in (in_domain or adjusted)}
         # Sorted but NOT truncated yet: the filters below discard most of a shortlist for a
         # multi-port part, so cutting to twelve first left two survivors -- and threw away
@@ -548,8 +624,12 @@ class Binder:
         # well its doc comment happens to score. Without this, a measuring coil bound to
         # `Modelica.Blocks.Logical.Timer` at a score of 35 and called it unambiguous.
         physical = [d for d in block.domains if d not in ("unknown", "signal", "control")]
+        # Unless the register names the causal class itself: the IAQ packet's outdoor-CO2
+        # 'Constant' carries the fluid domain of the stream it feeds, and barring the block
+        # library left it unbound and the outdoor concentration at zero.
         if physical and "signal" not in block.domains:
-            hits = [h for h in hits if not h.entry.key.startswith(_CAUSAL_PACKAGES)]
+            hits = [h for h in hits if not h.entry.key.startswith(_CAUSAL_PACKAGES)
+                    or is_named(h.entry.key)]
         # Classes this kind of part has failed with before, and never once worked with.
         # Offering them again is how the same wrong binding came back every run.
         if self.memory is not None:
@@ -713,11 +793,19 @@ class Binder:
         return any(kw in head for tpl in L1_TEMPLATES.values() for kw in tpl["keywords"])
 
     # ------------------------------------------------------------------ L1
-    def _try_l1(self, block: Block) -> BindingResult | None:
+    def _try_l1_priority(self, block: Block) -> BindingResult | None:
+        """Evidence-specific templates, ahead of the catalog. See `priority` in L1_TEMPLATES."""
+        return self._try_l1(block, priority_only=True)
+
+    def _try_l1(self, block: Block, priority_only: bool = False) -> BindingResult | None:
         text = f"{block.name} {block.kind} {block.description or ''}".lower()
         head = f"{block.name} {block.kind}".lower()
         best: tuple[tuple[bool, int, int], str, dict[str, Any]] | None = None
         for key, tpl in L1_TEMPLATES.items():
+            if priority_only and not tpl.get("priority"):
+                continue
+            if tpl.get("requires_table") and not block.table:
+                continue
             hits = sum(1 for kw in tpl["keywords"] if kw in text)
             if not hits:
                 continue  # specificity ranks matching templates; it is not itself a match
@@ -745,6 +833,9 @@ class Binder:
                 for p in block.parameters
                 if p.name in allowed and p.quantity.value is not None
             }
+        if tpl.get("requires_table") and block.table:
+            rows = "; ".join(f"{t:g}, {v:g}" for t, v in block.table)
+            mods["table"] = f"[{rows}]"
         return BindingResult("L1", tpl["class"], mods, f"matched L1 template '{key}'")
 
     # ------------------------------------------------- L0 again, best effort
@@ -1027,6 +1118,59 @@ def _wanted_side(port: Any, signal_only: bool) -> str:
     return "in" if port.direction == "in" else "out" if port.direction == "out" else "other"
 
 
+#: Port-name tokens that say which end, not which quantity.
+_PORT_FILLER = {"in", "out", "port", "a", "b", "p", "n", "inlet", "outlet", "input", "output",
+                "signal", "cmd", "value", "1", "2"}
+
+
+#: Connectors whose role the library names by convention, and the words a register uses
+#: for that role.
+_CONNECTOR_ROLES = {
+    "u_s": {"setpoint", "sp", "reference", "ref", "target", "demand", "set"},
+    "u_m": {"measurement", "measured", "pv", "feedback", "process", "meas", "actual"},
+}
+
+
+def _name_tokens(name: str) -> list[str]:
+    """`c_room` -> [c, room]; `m_flow_in` -> [m, flow, in]."""
+    return [t for t in re.split(r"[^0-9a-z]+", re.sub(r"\[\d+\]", "", name).lower()) if t]
+
+
+def _named_connector(port: Any, available: dict[str, list[str]], taken: set[str]) -> str | None:
+    """The one connector of the port's direction the port is named after, if exactly one.
+
+    Same name, or one name's quantity tokens contained in the other's: `c_room` ~ `C`,
+    `m_flow` ~ `m_flow_in`, `c` ~ `C_in`. Searched across physical AND signal connectors
+    of that direction, because the IR's domain for a port is a guess from the connection
+    and the name is evidence.
+    """
+    if port.direction == "out":
+        pool = available["out"] + available["signal_out"]
+    elif port.direction == "in":
+        pool = available["in"] + available["signal_in"]
+    else:
+        return None
+    pool = [c for c in pool if c not in taken]
+    ident = (port.id or "").lower()
+    exact = [c for c in pool if c.lower() == ident]
+    if len(exact) == 1:
+        return exact[0]
+    mine = set(_name_tokens(port.id or "")) - _PORT_FILLER
+    if not mine:
+        return None
+    # A controller's two inputs differ by role, not by name: wiring the measurement to
+    # `u_s` inverts the control action, and the register never says `u_s`.
+    roles = [c for c in pool if _CONNECTOR_ROLES.get(c, set()) & mine]
+    if len(roles) == 1:
+        return roles[0]
+    hits = []
+    for c in pool:
+        theirs = set(_name_tokens(c)) - _PORT_FILLER
+        if theirs and (theirs <= mine or mine <= theirs):
+            hits.append(c)
+    return hits[0] if len(hits) == 1 else None
+
+
 def resolve_ports(model: SystemModel, index: CatalogIndex | None) -> list[str]:
     """Rewrite each block port's `name` to a connector that the bound class really has.
 
@@ -1107,6 +1251,11 @@ def resolve_ports(model: SystemModel, index: CatalogIndex | None) -> list[str]:
         # already a connector this class declares, keep it and just count the slot.
         declared = {cp.name for cp in entry.ports}
         by_name = {cp.name: cp.type for cp in entry.ports}
+        is_array = {c: any(n in params for n in _COUNT_PARAM.get(c, ())) for c in declared}
+        # Scalar connectors already given to a port. Arrays are never "taken": each use is
+        # another subscript.
+        taken_names: set[str] = {p.name for p in connected
+                                 if p.name in declared and not is_array.get(p.name)}
         for port in connected:
             base = port.name.split("[")[0]
             # Record the connector class on connected ports too, not just dangling ones. It
@@ -1134,8 +1283,33 @@ def resolve_ports(model: SystemModel, index: CatalogIndex | None) -> list[str]:
                     continue
                 else:
                     continue
+            # A connector the port is named after wins over declaration order, across the
+            # physical and signal connectors of the same direction. The IAQ zone's `c_room`
+            # port is its `C` output, not its fluid outlet; the outdoor-air source's `m_flow`
+            # port is its `m_flow_in` command, not a second stream.
+            named = _named_connector(port, available, taken_names)
+            if named is not None:
+                count_params = [c for c in _COUNT_PARAM.get(named, ()) if c in params]
+                if count_params:
+                    idx = used.get(named, 0) + 1
+                    port.name = f"{named}[{idx}]"
+                    block.modelica_modifiers[count_params[0]] = str(idx)
+                    used[named] = idx
+                else:
+                    port.name = named
+                    taken_names.add(named)
+                port.connector_type = by_name.get(named)
+                continue
             side = _wanted_side(port, signal_only)
             pool = available.get(side) or []
+            if (not pool and side in ("in", "out") and not available["other"]
+                    and (available["in"] or available["out"])):
+                # A physical stream reaching a directional part whose only connector of that
+                # direction is a signal: a sensor's measured quantity, a commanded source's
+                # set value. Same direction beats a physical connector of the wrong one.
+                # (Not for acausal parts -- a flange has no direction to agree with.)
+                side = "signal_out" if side == "out" else "signal_in"
+                pool = available[side]
             if not pool and not side.startswith("signal"):
                 # Acausal components (a rotational flange) have no in/out sense at all, so
                 # fall back to any PHYSICAL connector. Never fall back to a signal connector:
@@ -1166,10 +1340,14 @@ def resolve_ports(model: SystemModel, index: CatalogIndex | None) -> list[str]:
                 if same and set(same) != set(pool):
                     pool, slot = same, f"{side}:{port.domain}"
 
+            # First connector of the pool not yet given to a port; an array already used once
+            # yields to an untouched scalar (an evaporator's `vapor` before `outlet[2]`).
+            free = [c for c in pool if c not in taken_names]
+            fresh = [c for c in free if not (is_array.get(c) and used.get(c))]
             taken = used.get(slot, 0)
-            connector = pool[min(taken, len(pool) - 1)] if len(pool) > 1 else pool[0]
+            connector = (fresh or free or pool)[0]
             count_params = [c for c in _COUNT_PARAM.get(connector, ()) if c in params]
-            if taken >= len(pool) and not count_params:
+            if not free and not count_params:
                 # The class has fewer connectors on this side than the evidence wires to it.
                 # Reusing the last one drives a scalar input twice, and omc reports that as an
                 # over-determined system far from where it came from -- a PID fed by both the
@@ -1193,6 +1371,7 @@ def resolve_ports(model: SystemModel, index: CatalogIndex | None) -> list[str]:
                 used[connector] = idx
             else:
                 port.name = connector
+                taken_names.add(connector)
             port.connector_type = by_name.get(connector) or port.connector_type
             used[slot] = used.get(slot, 0) + 1
 
@@ -2271,6 +2450,17 @@ def map_block_parameters(
             target = _by_symbol(wanted, p.quantity.unit, valid, unit_of)
         if target and target not in out:
             out[target] = _literal(value)
+    # A class with exactly one tunable parameter and a part with exactly one stated value:
+    # a constant source's `k` is whatever the register says the constant is, whatever it
+    # calls it ('Setpoint', 'C_out').
+    tunable = [c for c in params if c.name not in out and not c.name.startswith("n")
+               and _unit_key(getattr(c, "unit", None)) not in ("s",)]
+    stated = [p for p in block.parameters if isinstance(p.quantity.value, (int, float))
+              and not isinstance(p.quantity.value, bool)]
+    if not out and len(params) == 1 and len(tunable) == 1 and len(stated) == 1:
+        out[tunable[0].name] = _literal(stated[0].quantity.value)
+        notes.append(f"{block.id}: the class's only parameter {tunable[0].name} takes the one value "
+                     f"the evidence states ({stated[0].name})")
     # A constant the evidence states only takes effect if the class is told to use it.
     for given, (switch, setting) in _ENABLERS.items():
         if given in out and switch in valid and switch not in out:
@@ -2297,9 +2487,10 @@ _SYMBOLS: dict[str, tuple[str, ...]] = {
     "N": ("turns", "turn", "windings"), "mu_rConst": ("mu r", "relative permeability", "permeability"),
     "mu_r": ("mu r", "relative permeability"), "R": ("resistance",), "C": ("capacitance",),
     "J": ("inertia",), "m": ("mass",), "c": ("stiffness", "spring constant"), "d": ("damping",),
-    "k": ("gain",), "Ti": ("integral time", "reset time"), "Td": ("derivative time",),
-    "yMax": ("upper limit", "maximum output", "max output"),
-    "yMin": ("lower limit", "minimum output", "min output"),
+    "k": ("gain", "kp", "proportional gain"), "Ti": ("integral time", "reset time"),
+    "Td": ("derivative time",),
+    "yMax": ("upper limit", "maximum output", "max output", "maximum command", "maximum"),
+    "yMin": ("lower limit", "minimum output", "min output", "minimum command", "minimum"),
     "V": ("volume",), "T_start": ("initial temperature",), "p_start": ("initial pressure",),
 }
 
@@ -2321,9 +2512,36 @@ def _by_symbol(wanted: str, unit: str | None, valid: set[str], unit_of: dict[str
     return hits[0] if len(hits) == 1 else None
 
 
+#: Port-name words that say nothing about what a part handles.
+_GENERIC_PORT_WORDS = {"port", "inlet", "outlet", "supply", "return", "out", "in", "signal",
+                       "input", "output", "flow", "cmd", "command"}
+
 #: Words too common in part names to tie a packet-wide parameter to one part.
 _GENERIC_PART_WORDS = {"core", "coil", "tank", "valve", "pipe", "line", "path", "source", "sink",
                        "ground", "sensor", "block", "unit", "part", "element", "main", "total"}
+
+
+_INFLOW_NEGATIVE = re.compile(
+    r"negative\b.{0,40}\b(inflow|into|entering|enters)|sign\b.{0,30}\bnegative|"
+    r"negative\s+(?:mass[-\s]?)?flow\s+sign", re.I)
+
+
+def apply_flow_sign(model: SystemModel, index: CatalogIndex | None) -> None:
+    """Set a commanded source's flow sign from what its own evidence says about it.
+
+    'Simulation source sign is negative for inflow' is the Modelica.Fluid source-port
+    convention, stated in the IAQ register against the outdoor-air source: its controller
+    commands a NEGATIVE flow to bring air in. Bound with the default sign, the source
+    pulled air out of the room at the rate the controller asked to push in.
+    """
+    if index is None:
+        return
+    for blk in model.simulatable_blocks():
+        entry = index.get(blk.modelica_class) if blk.modelica_class else None
+        if entry is None or "flowSign" not in {c.name for c in entry.params}:
+            continue
+        if "flowSign" not in blk.modelica_modifiers and _INFLOW_NEGATIVE.search(blk.description or ""):
+            blk.modelica_modifiers["flowSign"] = "-1"
 
 
 def apply_global_parameters(model: SystemModel, index: CatalogIndex | None) -> None:
@@ -2347,6 +2565,9 @@ def apply_global_parameters(model: SystemModel, index: CatalogIndex | None) -> N
         if entry is None:
             continue
         own = {w for w in _param_words(f"{blk.name} {blk.id}") if len(w) > 3} - _GENERIC_PART_WORDS
+        # The part's own port names say what it handles: a controller whose output port is
+        # `ACH_cmd` is the part a "Minimum ACH command" limits.
+        own |= {w for p in blk.ports for w in _param_words(p.id) if len(w) >= 3} - _GENERIC_PORT_WORDS
         if not own:
             continue
         valid = {c.name for c in entry.params}
@@ -2586,6 +2807,7 @@ def emit_modelica(
     apply_parameter_stimuli(model, index)
     apply_scoped_initials(model, index)
     apply_global_parameters(model, index)
+    apply_flow_sign(model, index)
 
     # Anything the safety nets had to move is a binding that did not work. That is the most
     # useful thing a run can teach the memory, because it is the guess most likely to be

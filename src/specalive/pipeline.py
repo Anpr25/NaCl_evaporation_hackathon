@@ -266,9 +266,21 @@ class Pipeline:
                     mem.record_failure(block_signature(blk), edit.old, packet)
         else:
             strength = emission.get("strength", {})
+            emitted = set(emission.get("emitted", []))
+            wired = {ref for c in model.connections
+                     if {c.source.split(".", 1)[0], c.target.split(".", 1)[0]} <= emitted
+                     for ref in (c.source, c.target)}
             for bid in emission.get("emitted", []):
                 blk = model.block(bid)
                 if blk is None or not blk.modelica_class:
+                    continue
+                # A class that could not host a port the evidence wires to it simulated only
+                # because the emitter dropped that wire. The IAQ sensor bound to a trace
+                # source ran -- with the control loop open -- and was remembered as a
+                # success, so the next run repeated it. That is a failure of the class for
+                # this kind of part, whatever omc said about the whole.
+                if any(not p.name and f"{blk.id}.{p.id}" in wired for p in blk.ports):
+                    mem.record_failure(block_signature(blk), blk.modelica_class, packet)
                     continue
                 # A guess that merely compiled proves little -- a voltage ramp compiles in
                 # place of a current ramp. It earns credit only from a run that did

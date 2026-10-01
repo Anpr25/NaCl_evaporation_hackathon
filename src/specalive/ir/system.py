@@ -151,6 +151,9 @@ class Block(BaseModel):
     #: The connector family chosen for this part before binding (see emit/families.py), so
     #: the report can show why a part bound where it did.
     connector_family: str | None = None
+    #: For a schedule or profile part: (time [s], value) points read from the evidence --
+    #: an occupancy table's start/end/occupants rows -- as a piecewise-constant series.
+    table: list[tuple[float, float]] | None = None
     #: True when this part exists only because another record named it as a connection
     #: endpoint -- no register row of its own. Such a part is still offered to the binding
     #: cascade (a coil named only in an interface matrix is still a coil), but if nothing

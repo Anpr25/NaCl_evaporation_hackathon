@@ -92,6 +92,11 @@ def normalise_header(cell: str) -> str | None:
     # is 'id' identifies the row -- that is what the word means.
     if c.endswith(" id") or c.endswith(" no"):
         return "id"
+    # 'Input Value', 'Nominal Value', 'Set Value': the row's value, whatever adjective the
+    # register puts in front of it. A calculations sheet headed 'Input Value' contributed no
+    # values at all, and with it went the controller's bias and output limits.
+    if c.endswith(" value"):
+        return "value"
     return None
 
 

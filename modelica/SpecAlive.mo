@@ -320,7 +320,120 @@ package SpecAlive
         Text(extent = {{-100,105},{100,80}}, textColor = {0,0,255},
           textString = "%name")}));
     end Junction;
+
+    model Duct "Ideal duct: passes a stream on unchanged (no storage, no loss)"
+      Interfaces.Inlet inlet "Stream arriving from upstream"
+        annotation (Placement(transformation(extent = {{-90,-10},{-70,10}})));
+      Interfaces.Discharge outlet "The same stream, delivered downstream"
+        annotation (Placement(transformation(extent = {{70,-10},{90,10}})));
+    equation
+      outlet.m_flow = inlet.m_flow;
+      outlet.w = inlet.w;
+      outlet.T = inlet.T;
+      annotation (Icon(coordinateSystem(preserveAspectRatio = true,
+        extent = {{-100,-100},{100,100}}), graphics = {
+        Rectangle(extent = {{-70,20},{70,-20}}, lineColor = {0,127,255},
+          fillColor = {210,230,255}, fillPattern = FillPattern.Solid),
+        Text(extent = {{-100,105},{100,80}}, textColor = {0,0,255},
+          textString = "%name")}));
+    end Duct;
   end Transport;
+
+  package Zones "Well-mixed volumes that carry a trace substance"
+    extends Modelica.Icons.Package;
+
+    model WellMixedZone "Fixed-mass well-mixed zone with a trace-substance mass balance"
+      import SI = Modelica.Units.SI;
+      parameter SI.Volume V = 100 "Zone volume";
+      parameter SI.Density rho = 1.2 "Nominal density of the zone's carrier (air)";
+      parameter Boolean initFromSupply = true
+        "Start at the concentration of the first supply stream (otherwise C_start)";
+      parameter Real C_start = 0 "Initial trace mass fraction when initFromSupply = false";
+      parameter SI.Temperature T = 293.15 "Zone temperature (isothermal)";
+      parameter Integer nIn = 1 "Number of incoming streams (supply, trace injection)";
+      parameter Integer nOut = 1 "Number of outgoing streams (exhaust)";
+      Interfaces.Inlet inlet[nIn] "Incoming streams, each with its own trace mass fraction"
+        annotation (Placement(transformation(extent = {{-90,-10},{-70,10}})));
+      Interfaces.Discharge outlet[nOut] "Exhaust: leaves at the zone concentration"
+        annotation (Placement(transformation(extent = {{70,-10},{90,10}})));
+      Modelica.Blocks.Interfaces.RealOutput C "Zone trace mass fraction [kg/kg]"
+        annotation (Placement(transformation(extent = {{-10,-10},{10,10}}, rotation = 90,
+          origin = {0,80})));
+      SI.Mass M = V*rho "Carrier mass held in the zone (constant)";
+      SI.MassFlowRate m_in = sum(inlet.m_flow) "Total incoming mass flow";
+    initial equation
+      if initFromSupply then
+        C = inlet[1].w;
+      else
+        C = C_start;
+      end if;
+    equation
+      // Trace balance of a perfectly mixed zone at constant carrier mass: every stream
+      // brings its own concentration in, and the exhaust leaves at the zone's.
+      M*der(C) = sum(inlet[i].m_flow*(inlet[i].w - C) for i in 1:nIn);
+      for j in 1:nOut loop
+        outlet[j].m_flow = m_in/nOut;
+        outlet[j].w = C;
+        outlet[j].T = T;
+      end for;
+      annotation (Icon(coordinateSystem(preserveAspectRatio = true,
+        extent = {{-100,-100},{100,100}}), graphics = {
+        Rectangle(extent = {{-70,70},{70,-70}}, lineColor = {0,127,255},
+          fillColor = {235,245,255}, fillPattern = FillPattern.Solid),
+        Text(extent = {{-60,20},{60,-20}}, textColor = {0,0,0}, textString = "C"),
+        Text(extent = {{-100,105},{100,80}}, textColor = {0,0,255},
+          textString = "%name")}));
+    end WellMixedZone;
+  end Zones;
+
+  package Sensors "Ideal measurements"
+    extends Modelica.Icons.SensorsPackage;
+
+    model IdealSensor "Ideal measurement: the output is the measured signal, unchanged"
+      Modelica.Blocks.Interfaces.RealInput u "Measured quantity"
+        annotation (Placement(transformation(extent = {{-120,-20},{-80,20}})));
+      Modelica.Blocks.Interfaces.RealOutput y "Measurement"
+        annotation (Placement(transformation(extent = {{80,-10},{100,10}})));
+    equation
+      y = u;
+      annotation (Icon(coordinateSystem(preserveAspectRatio = true,
+        extent = {{-100,-100},{100,100}}), graphics = {
+        Ellipse(extent = {{-60,60},{60,-60}}, lineColor = {0,0,0},
+          fillColor = {255,255,255}, fillPattern = FillPattern.Solid),
+        Text(extent = {{-100,105},{100,80}}, textColor = {0,0,255},
+          textString = "%name")}));
+    end IdealSensor;
+  end Sensors;
+
+  package Controllers "Continuous controllers the standard library does not offer as one block"
+    extends Modelica.Icons.Package;
+
+    model BiasedProportional
+      "Proportional controller with an output bias and limits; no integral action"
+      parameter Real k = 1 "Gain on the control error";
+      parameter Real bias = 0 "Output when measurement equals setpoint";
+      parameter Real yMax = 1e10 "Upper output limit";
+      parameter Real yMin = -1e10 "Lower output limit";
+      parameter Boolean directActing = true
+        "true: output rises as the measurement rises above the setpoint (ventilation, cooling)";
+      Modelica.Blocks.Interfaces.RealInput u_s "Setpoint"
+        annotation (Placement(transformation(extent = {{-140,-20},{-100,20}})));
+      Modelica.Blocks.Interfaces.RealInput u_m "Measurement"
+        annotation (Placement(transformation(extent = {{-20,-20},{20,20}}, rotation = 90,
+          origin = {0,-120})));
+      Modelica.Blocks.Interfaces.RealOutput y "Limited command"
+        annotation (Placement(transformation(extent = {{100,-10},{120,10}})));
+    equation
+      y = min(yMax, max(yMin, bias + k*(if directActing then u_m - u_s else u_s - u_m)));
+      annotation (Icon(coordinateSystem(preserveAspectRatio = true,
+        extent = {{-100,-100},{100,100}}), graphics = {
+        Rectangle(extent = {{-100,100},{100,-100}}, lineColor = {0,0,127},
+          fillColor = {255,255,255}, fillPattern = FillPattern.Solid),
+        Text(extent = {{-80,40},{80,-40}}, textColor = {0,0,127}, textString = "P+b"),
+        Text(extent = {{-100,135},{100,110}}, textColor = {0,0,255},
+          textString = "%name")}));
+    end BiasedProportional;
+  end Controllers;
 
   package Sources "Boundary elements"
     extends Modelica.Icons.SourcesPackage;
@@ -343,6 +456,50 @@ package SpecAlive
         Text(extent = {{-100,105},{100,80}}, textColor = {0,0,255},
           textString = "%name")}));
     end FixedSupply;
+
+    model CommandedSupply "Supply whose mass flow and trace concentration are commanded signals"
+      parameter Real flowSign = 1
+        "-1 when a negative command means flow INTO the system (the Modelica.Fluid source-port convention)";
+      parameter Modelica.Units.SI.Temperature T = 293.15;
+      Modelica.Blocks.Interfaces.RealInput m_flow_in "Commanded mass flow [kg/s]"
+        annotation (Placement(transformation(extent = {{-140,40},{-100,80}})));
+      Modelica.Blocks.Interfaces.RealInput C_in "Trace mass fraction of the supplied stream [kg/kg]"
+        annotation (Placement(transformation(extent = {{-140,-80},{-100,-40}})));
+      Interfaces.Discharge outlet
+        annotation (Placement(transformation(extent = {{70,-10},{90,10}})));
+    equation
+      outlet.m_flow = flowSign*m_flow_in;
+      outlet.w = C_in;
+      outlet.T = T;
+      annotation (Icon(coordinateSystem(preserveAspectRatio = true,
+        extent = {{-100,-100},{100,100}}), graphics = {
+        Rectangle(extent = {{-60,60},{60,-60}}, lineColor = {0,140,70},
+          fillColor = {225,245,230}, fillPattern = FillPattern.Solid),
+        Text(extent = {{-50,20},{50,-20}}, textColor = {0,140,70}, textString = "m_flow"),
+        Text(extent = {{-100,105},{100,80}}, textColor = {0,0,255},
+          textString = "%name")}));
+    end CommandedSupply;
+
+    model TraceSource "Carrier stream at a fixed trace concentration, its flow commanded"
+      parameter Real C_source = 1
+        "Trace concentration of the carrier [kg/kg]; values above 1 are a modelling device to keep the carrier flow negligible";
+      parameter Real flowSign = 1 "-1 when a negative command means flow INTO the system";
+      parameter Modelica.Units.SI.Temperature T = 293.15;
+      Modelica.Blocks.Interfaces.RealInput m_flow_in "Commanded carrier mass flow [kg/s]"
+        annotation (Placement(transformation(extent = {{-140,-20},{-100,20}})));
+      Interfaces.Discharge outlet
+        annotation (Placement(transformation(extent = {{70,-10},{90,10}})));
+    equation
+      outlet.m_flow = flowSign*m_flow_in;
+      outlet.w = C_source;
+      outlet.T = T;
+      annotation (Icon(coordinateSystem(preserveAspectRatio = true,
+        extent = {{-100,-100},{100,100}}), graphics = {
+        Ellipse(extent = {{-50,50},{50,-50}}, lineColor = {140,70,0},
+          fillColor = {250,235,215}, fillPattern = FillPattern.Solid),
+        Text(extent = {{-100,105},{100,80}}, textColor = {0,0,255},
+          textString = "%name")}));
+    end TraceSource;
 
     model Drain "Accepts any incoming stream"
       parameter Integer nIn = 1;

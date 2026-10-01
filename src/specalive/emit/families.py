@@ -71,12 +71,22 @@ def plan_families(
                 continue
             for fam in physical_families(entry):
                 per[fam] = max(per[fam], w)
-        if memory is not None:
-            for fam in list(per):
-                for d in b.domains:
-                    per[fam] += 0.5 * memory.family_weight(d, fam)
         if not per:
             continue
+        # Whether the part is a signal block is decided on this packet's evidence alone.
+        # Memory boosts physical families by domain, and a sensor or gain sitting on a fluid
+        # stream carries the 'fluid' domain: boosted first, SpecAlive.Interfaces (remembered
+        # from other process plants) outvoted the IAQ packet's Gain and IdealSensor, required
+        # them into the fluid family and bound them to sources -- an open control loop.
+        raw_best = max(per.values())
+        if per.get(SIGNAL, 0.0) >= raw_best:
+            continue
+        if memory is not None:
+            for fam in list(per):
+                if fam == SIGNAL:
+                    continue
+                for d in b.domains:
+                    per[fam] += 0.5 * memory.family_weight(d, fam)
         # A family covers this part only if it offers one of the part's GOOD candidates.
         # Retrieval returns eight hits spanning half the library, so nearly every part has
         # *some* candidate in every popular family -- and counting those let the first
