@@ -212,6 +212,10 @@ def run(
         help="Use and update the binding memory (what earlier runs proved compiles)",
     ),
     memory: Path = typer.Option(DEFAULT_MEMORY, "--memory", help="Binding memory file"),
+    strict: bool = typer.Option(
+        False, "--strict",
+        help="Exit non-zero unless the gate is fully MET (complete, live, checks pass)",
+    ),
 ) -> None:
     """Run the whole pipeline: evidence in, SysML + Modelica + results + report out."""
     cfg = PipelineConfig(
@@ -248,23 +252,38 @@ def run(
             elif not r.passed:
                 con.print(f"  [red]FAIL[/] {escape(r.check_id)}: {escape(r.detail)}")
 
-    if not result.ok:
+    # Five levels, not two. "Compiles and simulates" alone was passed by models with their
+    # leakage branch, sensor or header pruned away; each level below is a claim the run backs.
+    level, why = result.verdict
+    s = result.gate.get("structure") or {}
+    if level == "NOT_MET":
         con.print("\n[red]HARD GATE NOT MET[/] - the Modelica does not compile and run.")
         raise typer.Exit(1)
-
-    # C10. Three states, not two. A model can compile, simulate to completion, and have
-    # integrated a system in which nothing happens -- which is what printing "HARD GATE MET"
-    # above "0/10 acceptance checks" used to mean. Say so.
-    if result.gate.get("live") is False:
+    if level == "INERT":
         con.print("\n[yellow]HARD GATE MET, BUT THE MODEL IS INERT[/]")
-        con.print(f"  {result.gate.get('liveness', '')}")
+        con.print(f"  {escape(why)}")
         con.print(
-            "  It compiles and simulates, so the gate is met -- but nothing happens in the\n"
-            "  run, so the simulation is not evidence that the system was modelled correctly.\n"
-            "  Usually extraction missed an actuator or a connection: check the report's gap list."
+            "  It compiles and simulates, but nothing happens in the run, so the simulation\n"
+            "  is not evidence that the system was modelled correctly. Usually extraction\n"
+            "  missed an actuator or a connection: check the report's gap list."
         )
-        return
-    con.print("\n[green]HARD GATE MET[/] - the model compiles, simulates and runs its sequence.")
+    elif level == "INCOMPLETE":
+        con.print("\n[yellow]HARD GATE MET, BUT THE MODEL IS INCOMPLETE[/]")
+        con.print(f"  {escape(why)}")
+        for part in s.get("parts_missing", [])[:8]:
+            con.print(f"  [dim]part missing:[/] {escape(part)}")
+        for m in s.get("connections_missing", [])[:8]:
+            con.print(f"  [dim]wire missing:[/] {escape(m['connection'])} -- {escape(m['why'])}")
+    elif level == "UNVERIFIED":
+        con.print("\n[yellow]HARD GATE MET, BUT NOT VERIFIED[/]")
+        con.print(f"  complete and live, but {escape(why)}")
+    else:
+        con.print(f"\n[green]HARD GATE MET[/] - {escape(why)}.")
+    if s.get("inputs_assumed"):
+        con.print(f"  [dim]{s['inputs_assumed']} undriven input(s) were set to an assumed value; "
+                  f"see the report's assumptions[/]")
+    if strict and level != "MET":
+        raise typer.Exit(2)
 
 
 # ------------------------------------------------------------------------------------ gate

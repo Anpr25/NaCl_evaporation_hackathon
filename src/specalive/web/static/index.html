@@ -138,10 +138,26 @@ button.go:not(:disabled):hover{filter:brightness(1.1)}
   display:none}
 .verdict.show{display:block}
 .verdict.pass{border-color:rgba(74,222,128,.4);background:rgba(74,222,128,.07)}
+.verdict.partial{border-color:rgba(251,191,36,.45);background:rgba(251,191,36,.07)}
 .verdict.fail{border-color:rgba(251,113,133,.4);background:rgba(251,113,133,.07)}
-.verdict .h{font-size:1.02rem;font-weight:700;margin-bottom:3px}
-.verdict.pass .h{color:var(--ok)}.verdict.fail .h{color:var(--bad)}
+.verdict .h{font-size:1.02rem;font-weight:700;margin-bottom:3px;display:flex;align-items:center;gap:9px}
+.verdict.pass .h{color:var(--ok)}.verdict.partial .h{color:var(--warn)}.verdict.fail .h{color:var(--bad)}
 .verdict .s{color:var(--mut);font-size:.83rem}
+/* The five gate levels, worst first, as a ladder: where this run landed, and what the next
+   rung would have required. */
+.ladder{display:flex;gap:4px;margin:11px 0 2px}
+.rung{flex:1;text-align:center;font-size:.6rem;letter-spacing:.07em;text-transform:uppercase;
+  padding:5px 2px;border-radius:6px;border:1px solid var(--line2);color:var(--dim);background:var(--bg2)}
+.rung.reached{color:var(--fg);border-color:var(--line2)}
+.rung.here.pass{color:var(--ok);border-color:rgba(74,222,128,.55);background:rgba(74,222,128,.10)}
+.rung.here.partial{color:var(--warn);border-color:rgba(251,191,36,.6);background:rgba(251,191,36,.10)}
+.rung.here.fail{color:var(--bad);border-color:rgba(251,113,133,.6);background:rgba(251,113,133,.10)}
+.vlist{margin:10px 0 0;font-size:.79rem}
+.vlist .lh{font-size:.64rem;letter-spacing:.08em;text-transform:uppercase;color:var(--dim);margin:9px 0 4px}
+.vlist ul{margin:0;padding:0 0 0 2px;list-style:none}
+.vlist li{padding:3px 0;border-top:1px dashed var(--line);color:var(--mut)}
+.vlist li:first-child{border-top:0}
+.vlist code{font-family:var(--mono);font-size:.74rem;color:var(--fg)}
 .links{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .links a{display:inline-flex;align-items:center;gap:6px;padding:7px 13px;border-radius:9px;
   border:1px solid var(--line2);font-size:.8rem;text-decoration:none;color:var(--cy);
@@ -189,6 +205,12 @@ button.go:not(:disabled):hover{filter:brightness(1.1)}
           <button type="button" class="preset" data-p="benchmarks/drivetrain/sources"
                   data-ir="benchmarks/drivetrain/reference_ir.json" data-trace="">
             Geared drive rig</button>
+          <button type="button" class="preset" data-p="testcases/tank_sysmlv2_full_dataset"
+                  data-ir="" data-trace="">Two-tank controller</button>
+          <button type="button" class="preset" data-p="testcases/iaq_sysmlv2_full_dataset"
+                  data-ir="" data-trace="">IAQ ventilation</button>
+          <button type="button" class="preset" data-p="testcases/magnetic_circuit_sysmlv2_full_dataset"
+                  data-ir="" data-trace="">Magnetic circuit</button>
         </div>
         <div class="two">
           <div>
@@ -221,6 +243,8 @@ button.go:not(:disabled):hover{filter:brightness(1.1)}
       <div class="verdict" id="verdict">
         <div class="h" id="vh"></div>
         <div class="s" id="vs"></div>
+        <div class="ladder" id="ladder"></div>
+        <div class="vlist" id="vdetail"></div>
         <div class="links" id="links"></div>
       </div>
     </div>
@@ -254,10 +278,10 @@ const STAGES = [
   ["reconcile", "Reconcile", "resolve conflicts by precedence"],
   ["validate",  "Validate",  "static checks before any code is written"],
   ["sysml",     "SysML v2",  "emit the architecture model"],
-  ["modelica",  "Modelica",  "bind components, emit the executable model"],
+  ["modelica",  "Modelica",  "bind components, check every wire, emit the executable model"],
   ["compile",   "Compile",   "omc, with the repair loop"],
-  ["simulate",  "Simulate",  "run it"],
-  ["verify",    "Verify",    "score the acceptance criteria"],
+  ["simulate",  "Simulate",  "run it, and check that something happens"],
+  ["verify",    "Verify",    "score the acceptance criteria, grade the run"],
   ["report",    "Report",    "build the judge packet"],
 ];
 /* Stage glyphs. Plain characters, so there is no icon font to load and nothing to
@@ -265,8 +289,20 @@ const STAGES = [
 const GLYPH = {ingest:"◧",extract:"⁂",reconcile:"⚖",validate:"✓",sysml:"◈",
                modelica:"∿",compile:"⚙",simulate:"▶",verify:"◉",report:"▤"};
 /* Which agent lights up during which stage. Purely presentational. */
-const BUSY = {extract:["t1_local_small","t2_local_mid"], reconcile:["t3_cloud_reasoning"],
-              modelica:["t1_local_small","t1_local_embed"], compile:["t3_cloud_reasoning"]};
+const BUSY = {extract:["t4_cloud_extract","t5_cloud_deep","t4_cloud_vision","t1_local_small","t2_local_mid"],
+              reconcile:["t3_cloud_reasoning"],
+              modelica:["t4_cloud_extract","t1_local_embed","t1_local_small"],
+              compile:["t5_cloud_deep","t3_cloud_reasoning"],
+              verify:["t5_cloud_deep","t3_cloud_reasoning","t4_cloud_extract"]};
+/* The gate's five levels, worst first (PipelineResult.verdict). `tone` colours the panel. */
+const LEVELS = [
+  ["NOT_MET",    "Not met",      "fail",    "The Modelica does not compile and simulate."],
+  ["INERT",      "Inert",        "partial", "It compiles and simulates, but nothing happens in the run."],
+  ["INCOMPLETE", "Incomplete",   "partial", "It runs, but parts or wires the evidence states are not in it."],
+  ["UNVERIFIED", "Not verified", "partial", "Complete and live, but its acceptance checks fail or none could be run."],
+  ["MET",        "Met",          "pass",    "Complete, live, and every checkable acceptance check passes."],
+];
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 const $ = id => document.getElementById(id);
 let t0 = 0, ticker = null, agentEls = {};
@@ -318,10 +354,12 @@ function resetStages() {
   setMetrics({});
 }
 
+const METRIC_KEYS = ["sources","claims","parts","wires","live","checks","calls","cached"];
 function setMetrics(m) {
   const cells = [
     ["sources", m.sources, ""], ["claims", m.claims, ""],
-    ["blocks", m.blocks, ""], ["checks", m.checks, m.checksCls || ""],
+    ["parts in model", m.parts, m.partsCls || ""], ["wires in model", m.wires, m.wiresCls || ""],
+    ["live", m.live, m.liveCls || ""], ["checks", m.checks, m.checksCls || ""],
     ["model calls", m.calls, ""], ["cached", m.cached, ""],
   ];
   $("metrics").innerHTML = cells.map(([k, v, cls]) =>
@@ -386,7 +424,7 @@ $("form").addEventListener("submit", async e => {
     if (!res.ok) throw new Error((await res.json()).detail || res.statusText);
     runId = (await res.json()).run_id;
   } catch (err) {
-    finish(false, "Could not start: " + err.message, {});
+    finish({level: "NOT_MET", reason: "Could not start: " + err.message}, {});
     return;
   }
 
@@ -398,50 +436,84 @@ $("form").addEventListener("submit", async e => {
       const d = ev.data || {};
       const m2 = {};
       if (d.summary) m2.sources = d.summary.length;
+      if (d.structure) Object.assign(m2, structureMetrics(d.structure));
+      if (typeof d.live === "boolean") Object.assign(m2, {live: d.live ? "yes" : "inert", liveCls: d.live ? "ok" : "bad"});
       if (Object.keys(m2).length) setMetrics(Object.assign(readMetrics(), m2));
       return;
     }
     src.close();
     const d = ev.data || {};
-    const cov = d.coverage || {}, r = d.router || {}, acc = d.acceptance;
-    setMetrics({
+    const cov = d.coverage || {}, r = d.router || {}, acc = d.acceptance, g = d.gate || {};
+    setMetrics(Object.assign(readMetrics(), {
       sources: cov.claims != null ? (cov.sources ?? undefined) : undefined,
-      claims: cov.claims, blocks: cov.blocks,
+      claims: cov.claims,
       checks: acc ? `${acc.passed}/${acc.total}` : "—",
-      checksCls: acc ? (acc.passed === acc.total ? "ok" : "warn") : "",
+      checksCls: acc ? (acc.total && acc.passed === acc.total ? "ok" : acc.total ? "warn" : "") : "",
       calls: r.total_calls ?? 0, cached: r.cache_hits ?? 0,
-    });
-    finish(ev.status === "ok",
-           ev.status === "ok" ? "Hard gate met — the model compiles and simulates."
-                              : "Hard gate not met.",
-           d);
+    }, d.structure ? structureMetrics(d.structure) : {},
+       typeof g.live === "boolean" ? {live: g.live ? "yes" : "inert", liveCls: g.live ? "ok" : "bad"} : {}));
+    finish(d.verdict || {level: ev.status === "ok" ? "UNVERIFIED" : "NOT_MET", reason: ""}, d);
   };
-  src.onerror = () => { src.close(); if ($("go").disabled) finish(false, "Connection to the run was lost.", {}); };
+  src.onerror = () => { src.close(); if ($("go").disabled) finish({level: "NOT_MET", reason: "Connection to the run was lost."}, {}); };
 });
 
 function readMetrics() {
-  const out = {}; const ks = ["sources","claims","blocks","checks","calls","cached"];
+  const out = {};
   document.querySelectorAll("#metrics .met").forEach((el, i) => {
-    const v = el.querySelector(".v").textContent;
-    if (v !== "—") out[ks[i]] = v;
+    const v = el.querySelector(".v");
+    if (v.textContent !== "—") {
+      out[METRIC_KEYS[i]] = v.textContent;
+      const cls = [...v.classList].find(c => c !== "v");
+      if (cls) out[METRIC_KEYS[i] + "Cls"] = cls;
+    }
   });
   return out;
 }
 
-function finish(ok, msg, d) {
+function structureMetrics(s) {
+  const parts = s.parts_emitted === s.parts_total, wires = s.connections_written === s.connections_total;
+  return {
+    parts: `${s.parts_emitted}/${s.parts_total}`, partsCls: parts ? "ok" : "warn",
+    wires: `${s.connections_written}/${s.connections_total}`, wiresCls: wires ? "ok" : "warn",
+  };
+}
+
+/* Render the gate verdict: the level, why, the ladder of levels, and -- when the model is
+   short of the evidence -- exactly which parts and wires are missing and why. */
+function finish(verdict, d) {
   clearInterval(ticker);
   $("go").disabled = false; $("go").textContent = "Transmute";
   Object.values(agentEls).forEach(e => e && e.classList.remove("active"));
-  const acc = d.acceptance;
-  $("verdict").className = "verdict show " + (ok ? "pass" : "fail");
-  $("vh").textContent = ok ? "Compiles and runs" : "Not met";
-  $("vs").textContent = msg + (acc ? `  ${acc.passed} of ${acc.total} acceptance checks passed.` : "");
+  const idx = Math.max(0, LEVELS.findIndex(l => l[0] === verdict.level));
+  const [, title, tone, meaning] = LEVELS[idx];
+  const acc = d.acceptance, s = d.structure || {};
+  $("verdict").className = "verdict show " + tone;
+  $("vh").textContent = idx === 0 ? "Hard gate not met" : `Hard gate met — ${title.toLowerCase()}`;
+  if (idx === LEVELS.length - 1) $("vh").textContent = "Hard gate met";
+  let sub = verdict.reason ? verdict.reason.charAt(0).toUpperCase() + verdict.reason.slice(1) + "." : meaning;
+  if (acc && acc.total && verdict.level !== "UNVERIFIED")
+    sub += `  ${acc.passed} of ${acc.total} checkable acceptance checks passed.`;
+  if (acc && acc.unchecked) sub += `  ${acc.unchecked} more could not be checked.`;
+  $("vs").textContent = sub;
+  $("ladder").innerHTML = LEVELS.map(([id, name, t], i) =>
+    `<div class="rung ${i < idx ? "reached" : ""} ${i === idx ? "here " + t : ""}" title="${esc(LEVELS[i][3])}">${name}</div>`
+  ).join("");
+
+  const blocks = [];
+  const missing = (s.parts_missing || []).map(p => `<li><code>${esc(p)}</code> — evidenced part not in the model</li>`)
+    .concat((s.connections_missing || []).map(m => `<li><code>${esc(m.connection)}</code> — ${esc(m.why)}</li>`));
+  if (missing.length) blocks.push(`<div class="lh">Not in the model</div><ul>${missing.join("")}</ul>`);
+  const edge = (s.connections_at_boundary || []).map(m => `<li><code>${esc(m.connection)}</code> — ${esc(m.why)}</li>`);
+  if (edge.length) blocks.push(`<div class="lh">At the system boundary, by decision</div><ul>${edge.join("")}</ul>`);
+  if (s.inputs_assumed) blocks.push(`<div class="lh">Assumed</div><ul><li>${s.inputs_assumed} undriven input(s) set to an assumed value — listed in the report</li></ul>`);
+  $("vdetail").innerHTML = blocks.join("");
+
   const arts = d.artifacts || {};
   $("links").innerHTML = Object.entries(arts).map(([k, v]) => {
     const name = v.replace(/\\/g, "/").split("/").pop();
     return `<a href="/api/runs/${currentRun(v)}/artifact/${name}" target="_blank">${k}</a>`;
   }).join("");
-  log(ok ? "done" : "failed", ok ? "g" : "r");
+  log(`gate: ${title.toLowerCase()}`, tone === "pass" ? "g" : tone === "fail" ? "r" : "y");
 }
 
 /* Artifact paths are out/runs/<id>/<file>; recover the id so the links resolve. */

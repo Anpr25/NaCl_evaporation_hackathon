@@ -24,6 +24,7 @@ from .emit.modelica import emit_modelica
 from .emit.sysml import emit_sysml, round_trip_check
 from .ingest.base import Document
 from .ingest.registry import load_packet, packet_summary
+from .ir.evidence import EvidenceClaim
 from .ir.system import SystemModel
 from .ir.validate import validate
 from .ir.assumptions import AssumptionLog
@@ -81,6 +82,13 @@ class PipelineConfig:
     #: read from earlier runs and nothing this run learns is kept. The CLI turns it on by
     #: default, next to the catalog; tests and library callers opt in.
     memory_path: Path | None = None
+    #: Flatten the generated plant and every library class it uses (`modelica/SpecAlive.mo`,
+    #: the Modelica Standard Library) into one self-contained file via omc's own
+    #: `saveTotalModel`, so the one Modelica artifact a reader gets is the only file the
+    #: model needs -- no companion library file, no separate `loadModel(Modelica)`. On by
+    #: default; the compile/repair/simulate stages fall back to the original multi-file
+    #: load (and say so) if consolidation itself fails for any reason.
+    consolidate: bool = True
 
 
 #: A pass is only repeated when it added a declared fallback, and each blocked transition is
@@ -104,6 +112,68 @@ class PipelineResult:
     @property
     def ok(self) -> bool:
         return bool(self.gate.get("compiled")) and bool(self.gate.get("simulated"))
+
+    @property
+    def verdict(self) -> tuple[str, str]:
+        """(level, reason). Levels, worst first:
+
+          NOT_MET     it does not compile and simulate;
+          INERT       it simulates and nothing happens;
+          INCOMPLETE  it runs, but parts or connections the evidence states are not in it;
+          UNVERIFIED  complete and live, but its acceptance checks fail or none could be run;
+          MET         complete, live, and every checkable acceptance check passes.
+
+        "Compiles and simulates" used to be the whole gate, and a model could pass it with
+        its leakage branch, its sensor and its header pruned away. Each level here is a
+        claim the run can actually back.
+        """
+        if not self.ok:
+            return "NOT_MET", "the Modelica does not compile and simulate"
+        if self.gate.get("live") is False:
+            return "INERT", str(self.gate.get("liveness", "nothing moves in the run"))
+        s = self.gate.get("structure") or {}
+        if s and (s["parts_emitted"] < s["parts_total"]
+                  or s["connections_written"] < s["connections_total"]):
+            return "INCOMPLETE", (
+                f"{s['parts_emitted']}/{s['parts_total']} evidenced parts and "
+                f"{s['connections_written']}/{s['connections_total']} evidenced connections "
+                f"are in the model")
+        card = self.scorecard
+        if card is None or card.total == 0:
+            return "UNVERIFIED", "no acceptance check could be run against the result"
+        if card.passed < card.total:
+            return "UNVERIFIED", f"{card.total - card.passed} of {card.total} checkable acceptance checks fail"
+        rest = getattr(card, "unchecked", 0)
+        return "MET", (f"complete, live, and all {card.total} checkable acceptance checks pass"
+                       + (f" ({rest} more could not be checked)" if rest else ""))
+
+
+#: Written once, the first time a run writes claims.json: the shape never varies between
+#: runs, so re-deriving it from `model.claims` each time (and for every build pass) would be
+#: pure waste. Kept module-level, not per-Pipeline-instance, because schema generation has
+#: nothing to do with any one run's state.
+_CLAIMS_SCHEMA = EvidenceClaim.model_json_schema()
+
+
+def _write_claims(out_dir: Path, model: SystemModel) -> Path:
+    """The extracted claims as their own structured JSON artifact, schema included.
+
+    Claims already live inside `ir.json` (as `SystemModel.claims`), but a reader who wants
+    just the evidence trail -- what was asserted, from where, with what confidence, before
+    any conflict was resolved -- had to pull it out of the full IR dump themselves. This is
+    that array on its own, plus the JSON Schema it validates against (`claims.schema.json`),
+    so a consumer (a reviewer's script, a second tool) can check its shape without reading
+    EvidenceClaim's Python definition.
+    """
+    path = out_dir / "claims.json"
+    path.write_text(
+        json.dumps([c.model_dump(mode="json") for c in model.claims], indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (out_dir / "claims.schema.json").write_text(
+        json.dumps(_CLAIMS_SCHEMA, indent=2), encoding="utf-8"
+    )
+    return path
 
 
 class Pipeline:
@@ -197,6 +267,7 @@ class Pipeline:
         self.result.model = model
         (cfg.out_dir / "ir.json").write_text(model.model_dump_json(indent=2), encoding="utf-8")
         self.result.artifacts["IR"] = str(cfg.out_dir / "ir.json")
+        self.result.artifacts["Claims"] = str(_write_claims(cfg.out_dir, model))
 
         # ---------------------------------------------------------- 4. validate
         yield self._emit("validate", "start", "static checks on the extracted model")
@@ -452,6 +523,20 @@ class Pipeline:
             f"{mo_path.name}: " + ", ".join(f"{k}={v}" for k, v in tiers.items() if v),
             tiers=tiers,
         )
+        real = emission.get("realised") or {}
+        if real:
+            self.result.gate["structure"] = real
+            complete = (real["parts_emitted"] == real["parts_total"]
+                        and real["connections_written"] == real["connections_total"])
+            yield self._emit(
+                "modelica", "ok" if complete else "warn",
+                f"evidence in the model: {real['parts_emitted']}/{real['parts_total']} parts, "
+                f"{real['connections_written']}/{real['connections_total']} connections"
+                + (f", {real['inputs_assumed']} input(s) assumed" if real["inputs_assumed"] else ""),
+                structure=real,
+            )
+            for miss in real["connections_missing"][:6]:
+                yield self._emit("modelica", "warn", f"  not in the model: {miss['connection']} -- {miss['why']}")
 
         # ---------------------------------------------------------- 7/8. compile + simulate
         scenario = model.scenarios[0] if model.scenarios else None
@@ -459,6 +544,33 @@ class Pipeline:
             f"{cfg.package_name}.{scenario.name}" if scenario else f"{cfg.package_name}.Plant"
         )
         stop_time = cfg.stop_time or (scenario.stop_time if scenario else 1.0)
+        # Everything from here on compiles, repairs and simulates `mo_path` against
+        # `support_files` and `libraries`. Consolidation below may replace all three with
+        # the flattened single-file equivalent (no support files, no stdlib load); nothing
+        # downstream needs to know which happened.
+        support_files: list[Path] = list(cfg.library_files)
+        libraries: tuple[str, ...] = ("Modelica",)
+
+        if cfg.consolidate:
+            total = runner.save_total(
+                model_name, [mo_path, *support_files], mo_path, timeout=max(180, cfg.repair_iterations * 60)
+            )
+            if total.ok and total.path is not None and total.class_name is not None:
+                mo_path, model_name = total.path, total.class_name
+                support_files, libraries = [], ()
+                yield self._emit(
+                    "modelica", "ok",
+                    f"consolidated into one self-contained file ({mo_path.name}, "
+                    f"class {model_name}): no companion library file needed",
+                )
+            else:
+                # Never silent: a reader who later finds two files next to each other
+                # deserves to know this was tried and did not work, not left to guess.
+                yield self._emit(
+                    "modelica", "warn",
+                    f"could not consolidate into a single file ({total.reason or 'see log'}); "
+                    f"continuing with {mo_path.name} alongside {', '.join(f.name for f in support_files)}",
+                )
 
         # `index` is C-AI-2 / C5: without it the agent cannot ask the catalog for a verified
         # class signature and the catalog-grounded fixers all no-op, silently.
@@ -469,8 +581,9 @@ class Pipeline:
         # the stop time the loop exits the moment `check` is clean and a model that cannot
         # actually run reaches the user unrepaired.
         outcome = loop.run(
-            model_name, mo_path, list(cfg.library_files),
+            model_name, mo_path, support_files,
             stop_time=None if cfg.skip_simulation else stop_time,
+            libraries=libraries,
         )
         # Accumulate across passes. A successful write-back means the NEXT pass needs no
         # repair at all, so keeping only the last pass's steps would report "0 fixes" for a
@@ -564,7 +677,8 @@ class Pipeline:
 
         yield self._emit("simulate", "start", f"stopTime={stop_time}")
         sim = runner.simulate(
-            model_name, [mo_path, *cfg.library_files],
+            model_name, [mo_path, *support_files],
+            libraries=libraries,
             stop_time=stop_time,
             interval=(scenario.interval if scenario else None),
             tolerance=(scenario.tolerance if scenario else 1e-6),
@@ -680,6 +794,7 @@ class Pipeline:
         model = self.result.model
         assert model is not None
         (cfg.out_dir / "ir.json").write_text(model.model_dump_json(indent=2), encoding="utf-8")
+        _write_claims(cfg.out_dir, model)
         path = build_report(
             model,
             out_dir=cfg.out_dir,

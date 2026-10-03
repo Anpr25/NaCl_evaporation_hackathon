@@ -113,6 +113,9 @@ class CatalogEntry:
     #: Extra search terms. Deterministic ones are derived from the path and comment; the team
     #: adds hand-written aliases for the vocabulary a brochure would actually use.
     aliases: list[str] = field(default_factory=list)
+    #: Public time-varying variables (`R_m`, `Phi`, `level`): what another part can be fed
+    #: from or a check can read, though no modifier can set it.
+    variables: list[CatalogParam] = field(default_factory=list)
 
     def search_text(self) -> str:
         return " ".join([self.key.replace(".", " "), self.comment, self.domain, *self.aliases]).lower()
@@ -391,6 +394,7 @@ def _build_entries(meta_out: str, restrictions: tuple[str, ...]) -> list[Catalog
             continue
         params: list[CatalogParam] = []
         ports: list[CatalogPort] = []
+        variables: list[CatalogParam] = []
         # A Modelica component usually declares its connectors in a partial base class, so a
         # class's own getComponents() shows parameters but no ports. Walking the inheritance
         # chain is what makes the port signature trustworthy, and the port signature is the
@@ -403,6 +407,9 @@ def _build_entries(meta_out: str, restrictions: tuple[str, ...]) -> list[Catalog
                 params.append(CatalogParam(cname, ctype, _unit_of(ctype), cdesc))
             elif _looks_like_connector(ctype):
                 ports.append(CatalogPort(cname, ctype, cdesc))
+            elif ("protected" not in row and _variability(row) in ("continuous", "unspecified", "discrete")
+                  and not any(x.name == cname for x in variables)):
+                variables.append(CatalogParam(cname, ctype, _unit_of(ctype), cdesc))
         entries.append(
             CatalogEntry(
                 key=key,
@@ -413,6 +420,7 @@ def _build_entries(meta_out: str, restrictions: tuple[str, ...]) -> list[Catalog
                 params=params,
                 ports=ports,
                 aliases=_derive_aliases(key, info["comment"]),
+                variables=variables,
             )
         )
     return entries
@@ -513,5 +521,6 @@ def load_catalog(path: str | Path = "out/catalog.jsonl") -> list[CatalogEntry]:
         raw: dict[str, Any] = json.loads(line)
         raw["params"] = [CatalogParam(**x) for x in raw.get("params", [])]
         raw["ports"] = [CatalogPort(**x) for x in raw.get("ports", [])]
+        raw["variables"] = [CatalogParam(**x) for x in raw.get("variables", [])]
         entries.append(CatalogEntry(**raw))
     return entries

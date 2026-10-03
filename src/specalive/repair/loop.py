@@ -592,6 +592,18 @@ REPAIR_SCHEMA: dict[str, Any] = {
             "items": {"type": "string"},
             "description": "Modelica class names whose verified signature you need before editing.",
         },
+        # Same tool-use contract, answered from a different ground truth: the compiler's own
+        # Scripting API docs, fetched live, for a fix that touches how the model is built,
+        # saved or exported rather than a plant class (e.g. a `saveTotalModel`-produced file).
+        "doc_lookup": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": (
+                "OpenModelica Scripting API function names (saveTotalModel, getErrorString, "
+                "...) whose documented behaviour you need before editing -- never a plant or "
+                "Modelica Standard Library class; use `lookup` for those."
+            ),
+        },
         "explanation": {"type": "string"},
     },
 }
@@ -625,6 +637,10 @@ Rules:
 - Do not invent Modelica classes, parameters or connectors. If you need the real signature of
   a class, put its full name in `lookup` and return an empty `replacements`; you will be shown
   the verified signature and asked again. Guessing an API is always worse than asking.
+- Do not invent OpenModelica Scripting API behaviour either (what `saveTotalModel` names the
+  class it produces, what `getErrorString` returns, and so on). Put the function name in
+  `doc_lookup` instead and return an empty `replacements`; you will be shown its real
+  documentation, fetched from build.openmodelica.org, and asked again.
 - If a previous attempt is listed above, do not repeat it. It was measured and rejected.
 - Answer JSON only.
 """
@@ -713,6 +729,7 @@ class RepairLoop:
         *,
         stop_time: float | None = None,
         catalog_note: str = "",
+        libraries: Iterable[str] = ("Modelica",),
     ) -> RepairOutcome:
         """Iterate until the model checks (and optionally simulates), or the budget runs out."""
         target = Path(target)
@@ -747,9 +764,9 @@ class RepairLoop:
             is given the gate runs the simulation too, and simulate-stage diagnostics become
             repairable like any other.
             """
-            res = self.runner.check(model_name, files)
+            res = self.runner.check(model_name, files, libraries=libraries)
             if res.ok and stop_time:
-                res = self.runner.simulate(model_name, files, stop_time=stop_time)
+                res = self.runner.simulate(model_name, files, libraries=libraries, stop_time=stop_time)
             return res
 
         for it in range(self.max_iterations + 1):
@@ -889,6 +906,20 @@ class RepairLoop:
             out.append(f"{name}\n  parameters: {params or '(none)'}\n  connectors: {ports or '(none)'}")
         return "VERIFIED SIGNATURES (from the harvested catalog)\n" + "\n".join(out)
 
+    @staticmethod
+    def _scripting_docs(names: list[str]) -> str:
+        """Answer a `doc_lookup` request from the OpenModelica Scripting API's own docs.
+
+        Same tool-use contract as `_signature`, a different ground truth: live documentation
+        for the compiler's scripting functions rather than the harvested library catalog.
+        Network failure degrades to "not found" text (see `render_lookup`), never an
+        exception -- a model deprived of this grounding should get a weaker answer, not a
+        crashed repair loop.
+        """
+        from ..llm.scripting_docs import render_lookup
+
+        return render_lookup(names)
+
     def _attempt(
         self,
         source: str,
@@ -987,8 +1018,13 @@ class RepairLoop:
                 return None, "model", f"router failed: {exc}", None
             data = resp.data or {}
             wanted = [w for w in (data.get("lookup") or []) if isinstance(w, str)]
-            if wanted and not data.get("replacements") and round_no == 0:
-                note = self._signature(wanted)
+            wanted_docs = [w for w in (data.get("doc_lookup") or []) if isinstance(w, str)]
+            if (wanted or wanted_docs) and not data.get("replacements") and round_no == 0:
+                answers = [a for a in (
+                    self._signature(wanted) if wanted else "",
+                    self._scripting_docs(wanted_docs) if wanted_docs else "",
+                ) if a]
+                note = "\n\n".join(answers)
                 continue
             break
 

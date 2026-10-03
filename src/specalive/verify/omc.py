@@ -75,6 +75,21 @@ class OmcResult:
         return f"{self.stage}: FAILED -- {first}"
 
 
+@dataclass
+class TotalModelResult:
+    """The outcome of flattening a model and its libraries into one self-contained file."""
+
+    ok: bool
+    path: Path | None = None
+    #: The class to pass to checkModel/simulate against the saved file. `saveTotalModel`
+    #: renames the requested class to avoid colliding with the copy of it still nested inside
+    #: the original package it also preserves ('BAT09' -> 'BAT09_total'), so this is NOT the
+    #: name that was requested.
+    class_name: str | None = None
+    reason: str = ""
+    stdout: str = ""
+
+
 # --------------------------------------------------------------------------- locating omc
 
 _WINDOWS_HINTS = (
@@ -138,6 +153,25 @@ _PATTERNS: tuple[tuple[DiagKind, re.Pattern[str]], ...] = (
 
 _LOCATION = re.compile(r"\[?([A-Za-z]:[^:\]]+|/[^:\]]+):(\d+):(\d+)")
 _SYMBOL_LINE = re.compile(r"^\s*([A-Za-z_][\w.\[\]]*)\s*$")
+
+
+def _pick_total_class(class_names: Iterable[str], requested: str) -> str | None:
+    """Which top-level class in a `saveTotalModel` output is the flattened model.
+
+    `saveTotalModel` keeps the original package (with the requested class still nested
+    inside it) AND adds a new top-level class that `extends` it, so the name is never free:
+    'GeneratedPlant.BAT09' comes back as a sibling top-level `BAT09_total`. Checked against
+    the file's own `getClassNames()` rather than assumed, in case a future OMC version
+    changes or drops the suffix -- a wrong guess here would checkModel a class that does not
+    exist and misreport the consolidation as failed.
+    """
+    names = set(class_names)
+    leaf = requested.rsplit(".", 1)[-1]
+    if f"{leaf}_total" in names:
+        return f"{leaf}_total"
+    if leaf in names and leaf != requested:
+        return leaf
+    return None
 
 
 def parse_diagnostics(text: str) -> list[Diagnostic]:
@@ -242,6 +276,61 @@ class OmcRunner:
             equation_count=int(counts.group(1)) if counts else None,
             variable_count=int(counts.group(2)) if counts else None,
         )
+
+    def save_total(
+        self,
+        model: str,
+        files: Iterable[str | Path],
+        out_path: str | Path,
+        libraries: Iterable[str] = ("Modelica",),
+        timeout: int = 180,
+    ) -> TotalModelResult:
+        """Flatten `model` and every library it uses into one self-contained `.mo` file.
+
+        Wraps OpenModelica's own `saveTotalModel` (see
+        OpenModelica.Scripting.saveTotalModel in the Scripting API) rather than
+        concatenating source text ourselves: it walks the real dependency graph, so a
+        package contributes only the classes actually used (SpecAlive.mo's dozen component
+        templates become the two or three a given plant binds to) and the Modelica Standard
+        Library likewise shrinks to the handful of blocks and units referenced. The saved
+        file loads and simulates with nothing else on the path -- no `loadModel(Modelica)`,
+        no separate library file alongside it.
+
+        Two omc invocations, not one: `saveTotalModel` only writes the file, it does not
+        report what the new top-level class ended up being named (see `_pick_total_class`),
+        so a second, fresh process loads nothing but the saved file and reads its own
+        `getClassNames()` to find out -- which doubles as confirmation that the file is
+        self-contained, since that process never loads Modelica or the support files either.
+        """
+        files = list(files)
+        out_path = Path(out_path)
+        tmp = out_path.with_name(f".{out_path.name}.tmp")
+        body = (
+            f"{self._loads(files, libraries)}\n"
+            f'saveTotalModel("{tmp.resolve().as_posix()}", {model}); getErrorString();\n'
+        )
+        out = self._script(body, timeout)
+        if not tmp.exists() or tmp.stat().st_size == 0:
+            tmp.unlink(missing_ok=True)
+            return TotalModelResult(ok=False, reason="saveTotalModel wrote no file", stdout=out)
+
+        verify = self._script(
+            f'loadFile("{tmp.resolve().as_posix()}"); getErrorString();\ngetClassNames(); getErrorString();\n',
+            timeout,
+        )
+        names_match = re.search(r"\{([^{}]*)\}", verify)
+        names = [n.strip() for n in names_match.group(1).split(",")] if names_match else []
+        class_name = _pick_total_class(names, model)
+        if class_name is None:
+            tmp.unlink(missing_ok=True)
+            return TotalModelResult(
+                ok=False,
+                reason=f"saved file does not resolve to a class derived from {model} "
+                       f"(classes found: {', '.join(names) or 'none'})",
+                stdout=out + "\n" + verify,
+            )
+        tmp.replace(out_path)
+        return TotalModelResult(ok=True, path=out_path, class_name=class_name, stdout=out)
 
     def simulate(
         self,

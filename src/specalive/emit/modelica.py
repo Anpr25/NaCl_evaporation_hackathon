@@ -1118,6 +1118,42 @@ def _wanted_side(port: Any, signal_only: bool) -> str:
     return "in" if port.direction == "in" else "out" if port.direction == "out" else "other"
 
 
+#: Classes that are POTENTIAL sources in a domain, and that domain: they set an across
+#: variable (voltage, magnetic potential difference) between p and n, so flow leaves them at
+#: p. A flow source (current source: i from p to n through the source) leaves at n, which is
+#: the passive convention already. An electro-magnetic converter is a load electrically
+#: (current enters p) and an mmf source magnetically (V_m = N*i).
+_POTENTIAL_SOURCES = (
+    (re.compile(r"ElectroMagneticConverter"), frozenset({"magnetic"})),
+    (re.compile(r"\.Sources\.\w*(Voltage)\w*$"), frozenset({"electrical"})),
+    (re.compile(r"\.Sources\.\w*MagneticPotential\w*$"), frozenset({"magnetic"})),
+)
+
+
+def _source_domains(class_key: str | None) -> frozenset[str]:
+    """The domains in which this class is a potential source (see _POTENTIAL_SOURCES)."""
+    for rx, doms in _POTENTIAL_SOURCES:
+        if class_key and rx.search(class_key):
+            return doms
+    return frozenset()
+
+
+def _is_acausal(type_name: str) -> bool:
+    """A connector whose members are potential/flow pairs, so any number may meet at a node.
+
+    Signal connectors are causal by declaration. SpecAlive's stream connectors are causal by
+    design (each member is an input on one side and an output on the other), so a second
+    wire to one drives an input twice. Everything else this emitter binds -- pins, magnetic
+    ports, flanges, heat ports -- is acausal.
+    """
+    if not type_name or "." not in type_name:
+        return False
+    leaf = type_name.rsplit(".", 1)[-1].lower()
+    if leaf in _SIGNAL_TYPES or type_name.startswith(("SpecAlive.", "Modelica.Fluid.")):
+        return False
+    return bool(_library_domains(type_name) - {"signal", "control", "fluid"})
+
+
 #: Port-name tokens that say which end, not which quantity.
 _PORT_FILLER = {"in", "out", "port", "a", "b", "p", "n", "inlet", "outlet", "input", "output",
                 "signal", "cmd", "value", "1", "2"}
@@ -1211,8 +1247,17 @@ def resolve_ports(model: SystemModel, index: CatalogIndex | None) -> list[str]:
         available: dict[str, list[str]] = {
             "in": [], "out": [], "signal_in": [], "signal_out": [], "other": []
         }
+        flipped = _source_domains(block.modelica_class)
         for cp in entry.ports:
-            available[_side_of(cp.name, cp.type)].append(cp.name)
+            side = _side_of(cp.name, cp.type)
+            if side in ("in", "out") and _library_domains(cp.type) & flipped:
+                # A potential source drives flow OUT of its positive terminal (V = p - n > 0
+                # pushes current, or flux, from p round the circuit back to n). Wired with the
+                # passive-element convention -- positive = in-side -- the exciting coil's flux
+                # entered the core backwards and every flux in the magnetic packet had the
+                # wrong sign, against the register's "positive current creates positive mmf".
+                side = "out" if side == "in" else "in"
+            available[side].append(cp.name)
         available["signal"] = available["signal_in"] + available["signal_out"]
         # A class with nothing but signal connectors is a block, whatever domain the IR gave
         # the stream that reaches it. Insisting on a physical connector there found none,
@@ -1347,6 +1392,18 @@ def resolve_ports(model: SystemModel, index: CatalogIndex | None) -> list[str]:
             taken = used.get(slot, 0)
             connector = (fresh or free or pool)[0]
             count_params = [c for c in _COUNT_PARAM.get(connector, ()) if c in params]
+            if not free and not count_params and all(_is_acausal(by_name.get(c, "")) for c in pool):
+                # An acausal connector is a node, not a slot: a second wire to it is a branch,
+                # and Modelica's connect() semantics (equal potentials, flows summing to zero)
+                # are exactly Kirchhoff's law at that node. The magnetic packet's leakage path
+                # runs parallel to the air gap -- `rightLeg -> (airGap || leakage) -> lowerYoke`
+                # -- so the right leg's out-side port carries two wires. Treating it like a
+                # causal input dropped the leakage branch, stranded LEAK_1, and every flux
+                # came out 2 % high.
+                port.name = connector
+                port.connector_type = by_name.get(connector) or port.connector_type
+                used[slot] = used.get(slot, 0) + 1
+                continue
             if not free and not count_params:
                 # The class has fewer connectors on this side than the evidence wires to it.
                 # Reusing the last one drives a scalar input twice, and omc reports that as an
@@ -1385,7 +1442,7 @@ def resolve_ports(model: SystemModel, index: CatalogIndex | None) -> list[str]:
         for side in ("in", "out"):
             if used.get(side, 0) > len(available[side]) and not any(
                 c in params for c in ("nIn", "nOut", "nPorts", "n")
-            ):
+            ) and not all(_is_acausal(by_name.get(c, "")) for c in available[side]):
                 problems.append(
                     f"{block.id}: {used[side]} {side}-ports but {block.modelica_class} declares "
                     f"{len(available[side])} and is not an array"
@@ -1648,12 +1705,85 @@ class ModelicaEmitter:
                     # against one would be a type error dressed up as evidence.
                     out.append((block.id, cp.name, "false", None))
                     continue
+                peer = self._parallel_reference(block, entry, cp.name)
+                if peer is not None:
+                    out.append((block.id, cp.name, peer[0], peer[1]))
+                    continue
                 prm = find_setpoint_for_input(self.m, block.id, cp.name)
                 if prm is not None:
                     out.append((block.id, cp.name, repr(float(prm.quantity.value)), prm))
                 else:
                     out.append((block.id, cp.name, "0.0", None))
         return out
+
+    def _parallel_reference(self, block: Block, entry: Any, input_name: str) -> tuple[str, str] | None:
+        """Feed an input from the element connected in parallel with this one, if it names it.
+
+        `LeakageWithCoefficient.R_mUsefulTot` is "the total reluctance of the useful flux
+        path": the reluctance `R_m` of whatever runs in parallel with the leakage. The
+        register says so in its own words ("Parallel with GAP-1"), and the topology says it
+        structurally: the gap and the leakage share both magnetic nodes. Pinned to 0 instead,
+        the leakage had zero reluctance and shorted the air gap.
+
+        Taken only when exactly one element shares BOTH of this part's acausal nodes and its
+        class declares a variable the input's name begins with (`R_m` + `UsefulTot`).
+        """
+        if self._index is None:
+            return None
+        parent: dict[str, str] = {}
+
+        def find(x: str) -> str:
+            parent.setdefault(x, x)
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        for c in self.m.connections:
+            if c.source in self._connected and c.target in self._connected:
+                parent[find(self._ref(c.source))] = find(self._ref(c.target))
+        # An ideal through-variable sensor has no drop across it: its two terminals are one
+        # node as far as "in parallel" is concerned. The magnetic packet's flux sensor sits in
+        # series with the gap, and without this the gap no longer looked parallel to the
+        # leakage it is parallel to.
+        from .wiring import _THROUGH_SENSOR
+        for b in self.m.simulatable_blocks():
+            e = self._index.get(b.modelica_class or "")
+            if e is None or not _THROUGH_SENSOR.search(b.modelica_class or ""):
+                continue
+            ends = [f"{_mid(b.id)}.{cp.name}" for cp in e.ports if _is_acausal(cp.type)]
+            if len(ends) == 2 and all(x in parent for x in ends):
+                parent[find(ends[0])] = find(ends[1])
+
+        def nodes(b: Block, e: Any) -> frozenset[str] | None:
+            acausal = [cp.name for cp in e.ports if _is_acausal(cp.type)]
+            refs = [f"{_mid(b.id)}.{n}" for n in acausal]
+            if len(refs) != 2 or not all(r in parent for r in refs):
+                return None
+            got = frozenset(find(r) for r in refs)
+            return got if len(got) == 2 else None
+
+        mine = nodes(block, entry)
+        if mine is None:
+            return None
+        hits: list[tuple[str, str]] = []
+        for other in self.m.simulatable_blocks():
+            if other.id == block.id or other.id in self._omitted or not other.modelica_class:
+                continue
+            oentry = self._index.get(other.modelica_class)
+            if oentry is None or nodes(other, oentry) != mine:
+                continue
+            names = [v.name for v in getattr(oentry, "variables", [])
+                     if len(v.name) >= 2 and input_name.startswith(v.name)
+                     and input_name[len(v.name):][:1].isupper()]
+            if names:
+                hits.append((other.id, max(names, key=len)))
+        if len(hits) != 1:
+            return None
+        pid, var = hits[0]
+        return (f"{_mid(pid)}.{var}",
+                f"{block.id}.{input_name} is the {var} of {pid}, which runs in parallel with "
+                f"{block.id} (both share its two nodes)")
 
     def _layout(self) -> dict[str, str]:
         """Place components on the diagram canvas so OMEdit renders a block diagram.
@@ -1980,7 +2110,9 @@ class ModelicaEmitter:
         # Component signal inputs nothing drives.
         for comp, connector, value, prm in self._unbound_signal_inputs():
             ref = f"{comp}.{connector}"
-            if prm is not None:
+            if isinstance(prm, str):
+                self._w(2, f"// {prm}")
+            elif prm is not None:
                 # Evidence-backed, so this is a recovered fact and not an assumption. Cite it.
                 unit = f" {prm.quantity.unit}" if prm.quantity.unit else ""
                 self._w(2, f"// {ref} driven from {prm.id} = {prm.quantity.value}{unit} "
@@ -2244,6 +2376,10 @@ def _enough_ports(block: Block, entry: Any) -> bool:
     want_physical = len(block.ports) - want_signal
     if physical == 0 and signal:          # a pure block library: every port is a signal
         return signal >= len(block.ports)
+    phys_types = [cp.type for cp in getattr(entry, "ports", [])
+                  if not _side_of(cp.name, cp.type).startswith("signal")]
+    if phys_types and all(_is_acausal(t) for t in phys_types):
+        physical = max(physical, want_physical)   # a node takes any number of wires
     return physical >= want_physical and (signal >= want_signal or want_signal == 0)
 
 
@@ -2260,16 +2396,15 @@ def enforce_connectable(
     read. It compiled as far as the first signal binding and then failed a hundred lines
     from the cause.
 
-    The rule is structural, not stylistic: within a domain, a connector package used by one
-    part alone while another is used by two or more is an outlier, and the outlier is
-    re-bound with its package forbidden. If the second attempt finds nothing, the part is
+    The rule is structural, not stylistic: a part whose connectors share no package with
+    any confidently bound part it is wired to is re-bound, required to speak its neighbours'
+    package. If the second attempt finds nothing, the part is
     left unbound and declared -- an honest gap beats a part wired to nothing.
 
     Returns one line per part moved, for the report.
     """
     if index is None:
         return []
-    packages: dict[str, Counter[str]] = defaultdict(Counter)
     entries: dict[str, Any] = {}
     for b in model.simulatable_blocks():
         if not b.modelica_class or b.binding_tier == "unbound":
@@ -2278,9 +2413,6 @@ def enforce_connectable(
         if entry is None:
             continue
         entries[b.id] = entry
-        for d in b.domains:
-            if d not in ("unknown", "signal", "control"):
-                packages[d].update(_connector_packages(entry))
 
     neighbours: dict[str, set[str]] = defaultdict(set)
     for c in model.connections:
@@ -2349,19 +2481,10 @@ def enforce_connectable(
                 peer_packages |= _connector_packages(peer_entry)
         if peer_packages and not (peer_packages & mine):
             want |= peer_packages
-        # The domain-wide vote is only a fallback for a part with no bound neighbours to ask.
-        # Where the neighbours already speak this part's connectors, they are the evidence:
-        # an air gap wired flux-tube to flux-tube must not be "corrected" into the electrical
-        # library because it also touches a measuring coil. And a class the packet itself
-        # declares is never overruled by a vote.
-        if not peer_packages and not b.declared_class:
-            for d in b.domains:
-                counts = packages.get(d)
-                if not counts:
-                    continue
-                best, n = counts.most_common(1)[0]
-                if n >= 2 and best not in mine:
-                    want.add(best)
+        # No domain-wide majority vote for a part with no bound neighbours: the connector
+        # family plan (`plan_families`) has already chosen each part's library from what it
+        # can connect to, before binding. The vote only ever overruled that plan -- moving
+        # an electrical ground into the magnetic library because more parts were magnetic.
         if not want:
             continue
         retry = binder.bind(b, require_connector_packages=want)
@@ -2401,6 +2524,12 @@ _LIQUID_DENSITY = 1000.0
 #: made while binding, so `emit_modelica` can file each one as an assumption once the
 #: assumption log exists.
 _CONVERSIONS: list[tuple[str, str, str]] = []
+
+
+#: '<words> = <number>' or '<words> = <expression> = <number>' in a description.
+_STATED_VALUE = re.compile(
+    r"([A-Za-z][A-Za-z/ _-]{2,60}?)\s*=\s*(?:[^=;.]{0,40}?=\s*)?"
+    r"(-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)(?![\w*/^.])")
 
 
 def map_block_parameters(
@@ -2461,6 +2590,23 @@ def map_block_parameters(
         out[tunable[0].name] = _literal(stated[0].quantity.value)
         notes.append(f"{block.id}: the class's only parameter {tunable[0].name} takes the one value "
                      f"the evidence states ({stated[0].name})")
+    # A value the part's own description states as an equation: 'useful/core flux ratio =
+    # 1-sigma = 0.92' is the leakage element's `c_usefulFlux`. Taken only when every content
+    # word of the class parameter's name is in the phrase, and both sides are unique.
+    phrases = [(set(_param_words(m.group(1))), float(m.group(2)))
+               for m in _STATED_VALUE.finditer(block.description or "")]
+    for c in params:
+        if c.name in out or c.name.startswith("n"):
+            continue
+        words = {w for w in _param_words(c.name) if len(w) >= 3}
+        hits = {v for ws, v in phrases if words and words <= ws}
+        if len(hits) == 1:
+            others = [o.name for o in params if o.name != c.name and o.name not in out
+                      and (ow := {w for w in _param_words(o.name) if len(w) >= 3})
+                      and any(ow <= ws for ws, _ in phrases)]
+            if not others:
+                out[c.name] = _literal(hits.pop())
+                notes.append(f"{block.id}: {c.name} = {out[c.name]} as the part's description states")
     # A constant the evidence states only takes effect if the class is told to use it.
     for given, (switch, setting) in _ENABLERS.items():
         if given in out and switch in valid and switch not in out:
@@ -2863,6 +3009,16 @@ def emit_modelica(
             Gap(id=f"GAP-PORT-{len(model.gaps):02d}", kind="unmapped_component",
                 subject=problem.split(":")[0], detail=problem, severity="warn")
         )
+    from .wiring import check_wiring, insert_series_sensors
+
+    for note in insert_series_sensors(model, index):
+        model.gaps.append(Gap(id=f"GAP-SERIES-{len(model.gaps):02d}", kind="deviation",
+                              subject=note.split(":")[0], detail=note, severity="info"))
+    # What the evidence wires and what the bound classes can carry, judged before writing a
+    # line -- so the gate can report a model that compiles with evidence missing as exactly
+    # that, instead of the emitter quietly dropping what it cannot place.
+    wiring = check_wiring(model, index)
+    report["wiring"] = wiring.as_dict()
 
     emitter = ModelicaEmitter(model, package, index, log)
     text = emitter.emit()
@@ -2877,6 +3033,28 @@ def emit_modelica(
     )
     report["strength"] = {b.id: b.binding_strength for b in model.simulatable_blocks()}
     report["memory_used"] = getattr(memory, "used", 0)
+    # What the written model actually carries of the evidence, for the gate. Counted from
+    # the emitter's output, not from intentions: a connection is realised only if a
+    # connect() for it was written.
+    written = [c.id for c in model.connections
+               if c.source in emitter._connected and c.target in emitter._connected]
+    report["realised"] = {
+        "parts_total": wiring.parts_total,
+        "parts_emitted": len(report["emitted"]),
+        "parts_missing": sorted({b.id for b in model.simulatable_blocks()} - set(report["emitted"])),
+        "connections_total": wiring.connections_total,
+        "connections_written": len(written),
+        "connections_missing": [
+            {"connection": cid, "why": why} for cid, why in wiring.issues
+        ] + [{"connection": c.id, "why": "dropped while writing the model"}
+             for c in model.connections
+             if c.id not in written and c.id not in {i for i, _ in wiring.issues}
+             and c.id not in {i for i, _ in wiring.at_boundary}
+             and any(r.split(".", 1)[0] in {b.id for b in model.simulatable_blocks()}
+                     for r in (c.source, c.target))],
+        "connections_at_boundary": [{"connection": c, "why": w} for c, w in wiring.at_boundary],
+        "inputs_assumed": text.count("(ASM via SA-03)"),
+    }
     # Attach AFTER emission: the emitter is the last stage that can invent a value, so
     # anything it assumed has to be in the IR before the report reads it.
     log.attach(model)

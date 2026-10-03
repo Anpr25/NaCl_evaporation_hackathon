@@ -111,6 +111,21 @@ def build_report(
         ("Modelica compiles", "PASS" if compiled else "FAIL", "pass" if compiled else "fail"),
         ("Simulation runs", "PASS" if simulated else "FAIL", "pass" if simulated else "fail"),
     ]
+    # Compiling and simulating is not the whole claim: a model can do both with nothing
+    # happening in it, or with evidenced parts and wires left out of it.
+    if "live" in gate:
+        cards.append(("Model is live", "YES" if gate["live"] else "INERT",
+                      "pass" if gate["live"] else "fail"))
+    structure = gate.get("structure") or {}
+    if structure:
+        whole = (structure["parts_emitted"] == structure["parts_total"]
+                 and structure["connections_written"] == structure["connections_total"])
+        cards.append((
+            "Evidence in model",
+            f"{structure['parts_emitted']}/{structure['parts_total']} parts, "
+            f"{structure['connections_written']}/{structure['connections_total']} wires",
+            "pass" if whole else "warn",
+        ))
     if scorecard:
         good = scorecard.ok
         cards.append(
@@ -150,6 +165,17 @@ def build_report(
     for k, v, cls in cards:
         p.append(f'<div class="card"><div class="k">{_e(k)}</div><div class="v {cls}">{_e(v)}</div></div>')
     p.append("</div>")
+    missing = [[_e(m["connection"]), _e(m["why"])] for m in structure.get("connections_missing", [])]
+    missing += [[_e(part), "evidenced part not in the model"] for part in structure.get("parts_missing", [])]
+    boundary = [[_e(m["connection"]), _e(m["why"])] for m in structure.get("connections_at_boundary", [])]
+    if missing or boundary:
+        p.append("<h2>What the evidence states that the model does not carry</h2>")
+        if missing:
+            p.append(_rows(["Element", "Why it is not in the model"], missing))
+        if boundary:
+            p.append('<p class="sub">At the system boundary by decision (the far end is outside '
+                     'the executable model):</p>')
+            p.append(_rows(["Connection", "Boundary"], boundary))
 
     # ---------------------------------------------------------------- honesty first
     #

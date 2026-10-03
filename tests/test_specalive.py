@@ -27,7 +27,7 @@ from specalive.llm.router import NoTierSucceeded, Router
 from specalive.reconcile.precedence import build_supersession_map
 from specalive.repair.loop import fix_discrete_loop
 from specalive.verify.acceptance import evaluate, screen_reference
-from specalive.verify.omc import Diagnostic, crossing_time, parse_diagnostics
+from specalive.verify.omc import Diagnostic, _pick_total_class, crossing_time, parse_diagnostics
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKET = ROOT / "nacl_evaporation_sysmlv2_full_dataset"
@@ -593,6 +593,61 @@ def test_hard_gate_reference_model_compiles_and_simulates():
         "GeneratedPlant.BAT09", [REF_MO, LIB_MO], stop_time=3000, interval=5, prefix="pytest"
     )
     assert sim.ok, sim.stdout[-2000:]
+
+
+def test_pick_total_class_finds_the_flattened_model_not_the_original():
+    # saveTotalModel keeps GeneratedPlant.BAT09 nested inside the copied package AND adds a
+    # new top-level sibling for it -- the sibling is the one that is actually self-contained.
+    names = ["GeneratedPlant", "SpecAlive", "ModelicaServices", "Modelica", "BAT09_total"]
+    assert _pick_total_class(names, "GeneratedPlant.BAT09") == "BAT09_total"
+
+
+def test_pick_total_class_falls_back_to_the_bare_leaf():
+    assert _pick_total_class(["GeneratedPlant", "BAT09"], "GeneratedPlant.BAT09") == "BAT09"
+
+
+def test_pick_total_class_is_none_when_nothing_matches():
+    # Never guess: a wrong name here would checkModel a class that does not exist and the
+    # caller would misreport a real failure as "consolidation worked".
+    assert _pick_total_class(["GeneratedPlant"], "GeneratedPlant.BAT09") is None
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not (REF_MO.exists() and LIB_MO.exists()), reason="reference model not present")
+def test_save_total_produces_one_self_contained_file_that_simulates(tmp_path):
+    """The whole point of `saveTotalModel`: load and simulate ONE file, no companion
+    library, no separate `loadModel(Modelica)` -- the single-file deliverable this
+    wraps for the pipeline."""
+    from specalive.verify.omc import OmcRunner
+
+    runner = OmcRunner(workdir=str(ROOT / "out" / "work"))
+    out = tmp_path / "Total.mo"
+    total = runner.save_total("GeneratedPlant.BAT09", [REF_MO, LIB_MO], out)
+    assert total.ok, total.reason
+    assert total.path == out and out.exists()
+    assert total.class_name and total.class_name != "GeneratedPlant.BAT09"
+
+    # A FRESH runner call, no library argument at all: if this needed Modelica or
+    # SpecAlive.mo loaded alongside it, it would fail here.
+    sim = runner.simulate(total.class_name, [out], libraries=(), stop_time=3000, interval=5,
+                          prefix="pytest_total")
+    assert sim.ok, sim.stdout[-2000:]
+
+
+@pytest.mark.slow
+@pytest.mark.skipif(not (REF_IR.exists() and PACKET.exists()), reason="fixtures not present")
+def test_full_pipeline_consolidates_to_one_mo_file(tmp_path):
+    """The pipeline's own consolidation step, not a hand-driven omc call: after a real run,
+    exactly one `.mo` file sits in the output directory and it is the artifact handed to
+    the reader."""
+    from specalive.pipeline import Pipeline, PipelineConfig
+
+    cfg = PipelineConfig(packet=PACKET, out_dir=tmp_path, reference_ir=REF_IR, reference_trace=TRACE)
+    result = Pipeline(cfg, router=None).run()
+    assert result.gate.get("compiled"), [e.line() for e in result.events]
+    mo_files = list(tmp_path.glob("*.mo"))
+    assert len(mo_files) == 1, mo_files
+    assert str(mo_files[0]) == result.artifacts["Modelica"]
 
 
 @pytest.mark.slow

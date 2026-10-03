@@ -71,6 +71,8 @@ def health() -> dict[str, Any]:
             "t1_local_small": "Extractor", "t1_local_embed": "Retriever",
             "t2_local_mid": "Extractor+", "t3_cloud_reasoning": "Adjudicator",
             "t4_cloud_vision": "Diagram reader", "t4_local_vision": "Diagram reader (local)",
+            "t4_cloud_extract": "Extractor (cloud)", "t5_cloud_deep": "Whole-packet reader",
+            "t3_openrouter": "Adjudicator (fallback)", "t4_openrouter_vision": "Diagram reader (fallback)",
         }
         for tier, spec in r.cfg["tiers"].items():
             if spec.get("kind") == "deterministic":
@@ -167,6 +169,9 @@ def stream_events(run_id: str) -> StreamingResponse:
                 {"stage": "report", "status": "fail", "message": f"pipeline crashed: {exc!r}"}
             ) + "\n\n"
         result = pipeline.result
+        # The same five-level verdict the CLI prints (PipelineResult.verdict), so the browser
+        # can never show "met" for a model the command line calls incomplete or inert.
+        level, reason = result.verdict
         yield "data: " + json.dumps(
             {
                 "stage": "done",
@@ -175,10 +180,13 @@ def stream_events(run_id: str) -> StreamingResponse:
                 "data": {
                     "artifacts": result.artifacts,
                     "gate": result.gate,
+                    "verdict": {"level": level, "reason": reason},
+                    "structure": result.gate.get("structure"),
                     "coverage": result.model.coverage() if result.model else None,
                     "router": pipeline.router.stats() if pipeline.router else None,
                     "acceptance": (
-                        {"passed": result.scorecard.passed, "total": result.scorecard.total}
+                        {"passed": result.scorecard.passed, "total": result.scorecard.total,
+                         "unchecked": result.scorecard.unchecked}
                         if result.scorecard
                         else None
                     ),

@@ -9,7 +9,60 @@ know about; everything else is FYI.
 
 ---
 
-## 2026-09-24 (latest) — extraction: recover what the evidence already said
+## 2026-10-04 (latest) — showing the five-level gate instead of pass/fail, and a claims-only artifact
+
+**Status: implemented.** `cli.py`, `web/app.py`, `web/static/index.html`, `verify/report.py`
+changed; no new files on my side (C owns the new `emit/wiring.py` and `llm/scripting_docs.py`
+this round — see [C.md](C.md) for the wiring/consolidation work this surfaces). Same housekeeping
+note as C's entry: this is the first Decisions/ entry for anything on Dev-D; steps 1-3
+landed without one.
+
+**The gate stopped being a bool.** C's `PipelineResult.verdict` now returns one of five
+levels (NOT_MET/INERT/INCOMPLETE/UNVERIFIED/MET) plus why. Every surface that used to print
+"HARD GATE MET" off `result.ok` now prints the level:
+
+- **CLI** (`cli.py`): a ladder of which level was reached, which parts/connections are
+  missing and why, `--strict` to fail CI on anything short of MET.
+- **Web UI** (`index.html`): the same five-level ladder as a small horizontal strip, amber for
+  the three "met but not clean" levels so INERT/INCOMPLETE/UNVERIFIED read as distinct from
+  both MET (green) and NOT_MET (red) rather than being lumped into one or the other. New run
+  metrics (parts in model, wires in model, live) populate mid-run as soon as the modelica and
+  simulate stages report them, not only at the end.
+  **⚠ Affects you (C):** the agent-highlighting map (`BUSY`) now lights up the cloud tiers
+  during `modelica`/`compile`/`verify`, not just a placeholder set — if the actual call graph
+  for which tier runs in which stage changes, that map will say the wrong thing again and is
+  worth a look.
+- **HTML report** (`verify/report.py`): two new gate cards ("Model is live", "Evidence in
+  model") and a table of what the evidence states that the model does not carry, split from
+  what is at the system boundary by decision — the distinction C's wiring check now makes
+  (`GAP-WIRE-*` vs `connections_at_boundary`) was being lost by the time it reached the page.
+
+**New artifact: `claims.json` + `claims.schema.json`.** `model.claims` (B's `EvidenceClaim`,
+frozen contract, untouched) written on its own, plus its JSON Schema generated straight from
+the pydantic model (`EvidenceClaim.model_json_schema()`) — so a consumer can validate the
+shape without reading our Python. Registered in `result.artifacts["Claims"]` exactly like
+every other artifact; the CLI table, the web app's SSE payload, and the HTML report all
+iterate that dict generically, so all three picked it up with zero code changes on their
+side. The one place I did add code was the write itself (`pipeline.py`, D's shared
+orchestration file) and a fast test (`test_claims_artifact.py`) checking the file is a flat
+array, the schema's `required` fields are actually present on a written claim, and an empty
+claims list still writes valid (empty) JSON.
+
+**One grounding note added to my formaliser prompt, at C's request.** `verify/criteria.py`'s
+`TRANSLATE_PROMPT` now states Modelica's own sign convention for a source's flow variable
+(negative while it delivers) and says to read a *passive* element's column instead for a
+circuit-carried quantity. Four lines; closes one of the magnetic circuit's acceptance checks
+that C's wiring fix made numerically correct but which the formaliser was still reading off
+the wrong column.
+
+### Numbers
+
+232 fast + 11 slow tests green (shared total with C's entry — one test run covers both
+halves of this round). `bench`: drivetrain 7/7, nacl 11/12 (unchanged), hvac still NO PACKET.
+
+---
+
+## 2026-09-24 — extraction: recover what the evidence already said
 
 **3/10 → 8/10** on the autonomous packet. Semantic recall **83% → 92%**. No ownership
 boundaries any more: A/B/C's areas were fair game and most of this lands in theirs.

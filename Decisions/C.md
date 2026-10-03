@@ -16,7 +16,192 @@ gracefully.
 
 ---
 
-## 2026-09-25 (latest) — structural repair: when no edit to the .mo could have worked, correct the IR
+## 2026-10-04 (latest) — a wiring check before any Modelica is written; the gate stops saying "met" for a model missing its leakage branch; one self-contained file
+
+**Status: implemented.** 232 fast + 11 slow tests green (`test_wiring_gate.py`, new;
+`test_specalive.py` and `test_agentic.py`, extended). New file `emit/wiring.py`. Touches
+`emit/modelica.py`, `verify/omc.py`, `repair/loop.py`, `catalog/harvest.py`, `pipeline.py`.
+Re-run end to end on all four Dev-D packets: magnetic circuit **0/10 → 4/4** checkable
+criteria (cloud) where it used to report INERT offline; NaCl now reports **INCOMPLETE**
+where it used to print "HARD GATE MET" over a cooling-water header that had quietly lost
+three of its connections; tank and IAQ unchanged, now reported as **MET** rather than a bare
+"compiles and simulates".
+
+*Housekeeping: steps 1–3 of this branch (role/family classification, procedure-driven
+scenarios, the IAQ templates) landed in `fda9ea2`/`47483f2`/`adbf5ec` without a Decisions/
+entry — this is the first one on Dev-D, and it covers what is landing now, not a backfill of
+what already merged. The commit messages are the record for those three.*
+
+### Why the old gate had to go
+
+`enforce_connectable`, the strand/omit pass, and the dangling-port idealiser all exist to keep
+a model compiling when a binding is wrong or absent. Each is the right call *on its own*. Put
+together, they can satisfy "compiles and simulates" by quietly removing the evidence that
+would not bind — which is what the magnetic circuit's leakage branch, its flux sensor, and
+NaCl's three-consumer cooling header all did, each for a different structural reason. The old
+gate could not tell a plant built from the evidence apart from one with the awkward parts
+edited out, because it never looked at the difference.
+
+### C-28 | the gate is five levels, not two, read off the model's own structure | because "compiles and simulates" was satisfiable by a model with parts missing, and that is not the same claim as "met" | costs nothing to compute — it is a property of bookkeeping the emitter already keeps (`PipelineResult.verdict`, `emit/modelica.py`'s `report["realised"]`) — but it changes what every script and UI that prints "HARD GATE MET" is allowed to mean
+
+```
+NOT_MET     does not compile and simulate
+INERT       simulates; nothing moves
+INCOMPLETE  runs; evidenced parts or connections are not in it
+UNVERIFIED  complete and live; acceptance checks fail or none could run
+MET         complete, live, every checkable acceptance check passes
+```
+`--strict` (new CLI flag) exits non-zero on anything short of MET, for a CI gate that wants
+the stronger claim.
+
+### C-29 | every evidenced connection is classified before a line of Modelica is written (`emit/wiring.py`, new), instead of being discovered dropped at write time | because write-time discovery meant the *first* thing a bad wire did was pick, silently, which of three safety nets fired — and by the time the report was built, that choice was several functions back and unnamed | costs one extra pass over the connection list; the emitter's own drop/idealise logic is untouched, this only gives the gate and the report something to read before `_emit_plant()` runs
+
+`check_wiring()` returns realisable / not-realisable-and-why for every connection between
+simulatable parts, distinguishing a wire to something genuinely outside the executable model
+(reported as "at the boundary, by decision") from one that should have landed and did not
+(reported as missing, with the reason — unbound peer, no matching connector, incompatible
+connector classes). The CLI and web UI both read this now (D's half, below).
+
+### Three structural defects the wiring check surfaced, once it was looking
+
+**C-30 | a second wire into an acausal connector (magnetic port, electrical pin, mechanical
+flange) is a branch node and gets a slot, not rejected as "driving the same input twice" |
+because Kirchhoff's current law is what `connect()` already does to an acausal pair, and the
+magnetic packet states its topology as "rightLeg -> (airGap || leakage) -> lowerYoke" in so
+many words | costs a three-line exception in `resolve_ports`'s over-subscription check, gated
+on every candidate on that side being acausal, so a causal input still cannot be driven twice.**
+Before this, `LEAK_1` lost both its wires and was stranded — the model compiled with the
+leakage branch simply absent, 2% of flux unaccounted for and nothing saying so.
+
+**C-31 | a potential source (today: `ElectroMagneticConverter`'s magnetic side) is wired so
+flow leaves its *positive* terminal — the opposite of every passive element's convention |
+because `V_m = N·i` is Ampere's law, not a sign anyone chose, and the register says the same
+thing in English ("positive current creates positive mmf") | costs a short allow-list
+(`_POTENTIAL_SOURCES`), not a general rule, because a general "sources are reversed" rule is
+itself wrong — a current source already follows the passive convention; only a *potential*
+source does not.** Wired the old way, the coil pushed flux backwards through the whole core
+and every downstream flux, both field densities and both magnetomotive forces came out with
+the wrong sign.
+
+**C-32 | a through-variable sensor (a flux or current sensor) is moved into series with the
+element it measures, not left on one node with its other terminal idealised to the reference |
+because an ideal through-sensor has zero impedance between its own two ports and reports
+what passes *through* it — parallel, it reports nothing, and "idealise the open terminal to
+ground" was quietly shorting the lower yoke it should have been reading past.** Costs
+re-routing whatever connection used to land on the node the sensor now sits in front of
+(`insert_series_sensors`, union-find over the connection graph, through-sensors treated as
+zero-drop so "in parallel with" still means the right thing once one is in series).
+
+A fourth fix, not structural: a value stated in a part's own description as an equation
+("useful/core flux ratio = 1-sigma = 0.92") now reaches the class parameter whose name
+contains the same words (`c_usefulFlux`), and a part whose class has exactly one tunable
+parameter and exactly one stated value takes it regardless of what either is called. And an
+input that the evidence describes as "whatever runs in parallel with me" (the leakage's
+reference reluctance) is now resolved structurally — same two acausal nodes, a class variable
+whose name the input's name extends — rather than defaulting to zero, which had been quietly
+shorting the branch it was supposed to reference.
+
+### One pruning heuristic retired, because step 1 already does its job properly
+
+The domain-wide library vote in `enforce_connectable` (re-bind a part to whatever package most
+of its same-domain neighbours use, when it has no bound neighbour of its own to ask) is
+gone. It predates the connector-family plan from step 1, which now decides every part's
+library *before* binding, from what it can actually connect to — the vote only ever
+overruled that plan afterwards, on the one class of part (no bound neighbours yet) the plan
+is built to handle correctly. Caught retroactively: it is the mechanism that would have moved
+an electrical ground into the magnetic library because the rest of the circuit was magnetic.
+
+### One self-contained file, via the real API, not two
+
+`modelica/SpecAlive.mo` is not going away — it is the source library the templates in step 3
+are written against, the same way a `.py` helper module does not disappear because its
+functions get called. What changes is the *deliverable*. `OmcRunner.save_total()` wraps omc's
+own `saveTotalModel` (loadModel the stdlib, loadFile SpecAlive and the generated plant,
+`saveTotalModel(out, model)`) rather than concatenating the two sources ourselves — a hand
+merge cannot know which of SpecAlive's dozen templates, or which thousand-plus Modelica
+Standard Library classes, a given plant actually uses; `saveTotalModel` walks the real
+dependency graph and keeps only those. Verified in a *second*, fresh omc process that loads
+nothing but the saved file — which doubles as proof the file is genuinely self-contained, not
+just smaller.
+
+**C-33 | the saved file's top-level class name is read back from the file (`getClassNames()`),
+never assumed | because `saveTotalModel` renames the requested class to avoid colliding with
+the copy it keeps nested (`BAT09` → `BAT09_total`, confirmed against the compiler's own docs,
+below) — trusting the pattern blind would checkModel a class that may not exist the moment a
+newer omc changes the convention, and silently report a real failure as "consolidation
+worked".** Costs one extra round trip; `_pick_total_class` is pure and unit-tested
+independently of omc.
+
+Wired through the pipeline so compile, repair *and* simulate all run against the one
+flattened file (`RepairLoop.run` gained a `libraries` parameter so its own internal recompile
+calls stop reloading the stdlib too, once consolidation has already embedded it). Verified
+live: the tank packet, the harder multi-pass NaCl packet (three build passes, each
+re-consolidating from a freshly-corrected IR), and the `bench` command, which pins an
+explicit scenario class (`model: GeneratedPlant.BAT09` in `expectations.yaml`) — consolidation
+had to work there too, or the project's own regression suite would be the one place it never
+got exercised. If `save_total` fails for any reason the pipeline falls back to the original
+multi-file load and says so in the log; it is never silent about which path a run took.
+
+### C-34 | the repair agent's existing tool-use pattern gets a second channel, against the compiler's own documentation instead of the library catalog | because consolidation means the agent can now be asked to fix something about *how* the model is built or saved, not only what is in it, and recalling `saveTotalModel`'s behaviour from training data is exactly the failure the catalog `lookup` already exists to prevent for library classes | costs one optional, cached, silently-degrading network fetch per repair iteration that actually asks for it — never on `--provider none`, never fatal if the network is unreachable
+
+New module `llm/scripting_docs.py`. The round-trip is the same shape as the existing one
+(`REPAIR_SCHEMA.lookup` against the harvested catalog): a new `doc_lookup` field, answered
+from `https://build.openmodelica.org/Documentation/OpenModelica.Scripting.<name>.html`,
+fetched once and cached to `out/.omc_docs_cache/`. That page turned out to be machine-generated
+with a stable, simple shape (a one-line summary, an Information section, Inputs/Outputs
+tables) — rather than stripping arbitrary HTML to text, the parser (`_render`) targets that
+shape directly, which is also how I confirmed the `_total` naming rule above: the fetched page
+for `saveTotalModel` states it outright ("The `className_total` model extending `className`
+is not added for packages and functions"). An invalid or unreachable name never makes it to a
+URL; a model that asks about a class rather than a scripting function gets routed to the
+*existing* channel, not this one.
+
+### ⚠ Affects you
+
+**D — `result.ok` is no longer the headline claim; `result.verdict` is.** The CLI, the web
+app and the HTML report all now read the five-level verdict and `gate["structure"]`
+(parts/connections realised, what's missing, what's at the boundary) rather than the bare
+compiled/simulated booleans. If you add another surface that prints the gate, read
+`PipelineResult.verdict`, not `.ok`, or it will say "pass" about a model step 4 would call
+incomplete.
+
+**D — the Modelica artifact has no sibling file any more.** `result.artifacts["Modelica"]`
+used to need `modelica/SpecAlive.mo` loaded alongside it for anything to work; after
+consolidation it does not, and nothing downstream should assume a second `.mo` file exists
+next to it.
+
+**B/A — `claims.json` is a new, read-only consumer of `EvidenceClaim`** (frozen contract,
+unchanged). It is `model.claims` dumped on its own, plus its JSON Schema, so a reader who
+wants just the evidence trail does not have to pull it out of the full `ir.json`. Nothing
+about the contract itself moved.
+
+### Numbers
+
+| | before | after |
+| --- | --- | --- |
+| magnetic circuit, offline | INERT, 0/10 | INERT (coil still needs the cloud tier), unchanged |
+| magnetic circuit, cloud | "HARD GATE MET", 0/10 checkable | **MET**, 4/4 checkable (18 more not yet formalised this round; a fuller run earlier in the session scored 7/10) |
+| magnetic flux/B/H/mmf vs the packet's own reference dataset | off by 190–1270% (wrong sign, branch missing) | **within 0.01%** on every quantity a passive element carries |
+| NaCl | "HARD GATE MET" | **INCOMPLETE**, 15/16 parts, 16/19 connections (CW_header, pre-existing, unaddressed — see Still open) |
+| tank, IAQ | "HARD GATE MET" (uninformative) | **MET** |
+| tests | — | 232 fast + 11 slow, all green |
+
+### Still open
+
+**CW_header is still unbound.** It feeds three consumers (K1, B6, B7) and the class it binds
+to has two ports. Wiring now *reports* this honestly (INCOMPLETE, three named missing
+connections) instead of silently omitting the header — but the binder still needs a
+multi-port header class or a split into per-consumer legs to actually close it. Unrelated to
+anything in this entry; surfaced by it.
+
+**18 of the magnetic circuit's 22 criteria were not machine-checked this round** — the
+free-tier model's quota ran out mid-run, not a defect in the criteria themselves (an earlier
+run with more quota formalised 10 and passed 7). The report already says how many could not
+be checked, so a reader cannot mistake "4/4" for "the model is fully verified".
+
+---
+
+## 2026-09-25 — structural repair: when no edit to the .mo could have worked, correct the IR
 
 **Status: implemented.** 15 new tests in `tests/test_structural.py`, 162 fast tests green
 (the `pdfplumber` failure in §4 is still environment drift, still not ours). New file

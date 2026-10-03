@@ -75,6 +75,10 @@ HOW TO CHECK CONTROLLER BEHAVIOUR
 
 FACTS
   - Boolean signals are logged as 0 (false) and 1 (true); test them with <= 0.5 or >= 0.5.
+  - Modelica sign convention: a source's or converter's own flow variable (its i, Phi,
+    m_flow) counts flow INTO its positive connector, so it is negative while it delivers.
+    For a quantity the circuit carries (core flux, branch current), read the column of a
+    passive element that carries it (a core, a gap, a resistor), not the source's.
   - Values are in SI units: convert ppm, degC, mm, kPa etc. yourself before writing VALUE.
     A column may carry a quantity in a scaled or normalised form (a mass fraction, a value
     normalised to a nominal); convert the criterion's number into THAT form using a factor

@@ -117,6 +117,40 @@ def test_a_lookup_for_a_class_that_does_not_exist_says_so():
     assert "area" in loop._signature(["SpecAlive.Vessels.Reservoir"])
 
 
+def test_the_agent_can_ask_for_the_scripting_api_instead_of_guessing(monkeypatch):
+    """The same tool-use contract as the catalog `lookup`, for the compiler's own Scripting
+    API: a `doc_lookup` request is answered from the (here, stubbed) live documentation, and
+    that answer -- not a recollection -- is what reaches the second prompt."""
+    monkeypatch.setattr(
+        "specalive.llm.scripting_docs.fetch_function_doc",
+        lambda name, **kw: f"{name}(fileName: String, className: TypeName) -> success: Boolean"
+        if name == "saveTotalModel" else None,
+    )
+    router = FakeRouter([
+        {"diagnosis": "unsure what saveTotalModel returns", "strategy": "look it up",
+         "doc_lookup": ["saveTotalModel"], "replacements": [], "explanation": ""},
+        {"diagnosis": "wrong class name used", "strategy": "use the real output name",
+         "replacements": [{"find": "WrongName", "replace": "success"}], "explanation": "fixed"},
+    ])
+    loop = RepairLoop(runner=None, router=router, index=FakeIndex())
+    src = "model P\n  Boolean WrongName;\nend P;\n"
+    diag = Diagnostic(kind="undeclared", message="WrongName not found", line=2, raw="")
+    patched, method, _, _edit = loop._attempt(src, diag, Path("P.mo"), "", None)
+
+    assert method == "model" and patched is not None and "success" in patched
+    assert len(router.prompts) == 2, "the loop must ask again after answering the doc_lookup"
+    assert "VERIFIED OPENMODELICA SCRIPTING API DOCUMENTATION" in router.prompts[1]
+    assert "saveTotalModel(fileName" in router.prompts[1]
+
+
+def test_a_doc_lookup_for_a_function_that_does_not_exist_says_so(monkeypatch):
+    monkeypatch.setattr(
+        "specalive.llm.scripting_docs.fetch_function_doc", lambda name, **kw: None
+    )
+    loop = RepairLoop(runner=None, router=FakeRouter([]), index=FakeIndex())
+    assert "NOT FOUND" in loop._scripting_docs(["notARealScriptingFunction"])
+
+
 def test_rejected_attempts_are_fed_back_so_the_next_pass_is_a_refinement():
     """Multi-pass refinement is only refinement if the next pass can see the last one. Without
     this the agent re-proposes the patch the compiler already rejected and burns the budget."""
@@ -517,7 +551,7 @@ def test_a_grounded_fix_survives_uncovering_the_next_error():
     class Runner:
         omc = "omc"
 
-        def check(self, model, files):
+        def check(self, model, files, libraries=("Modelica",)):
             src = Path(files[0]).read_text(encoding="utf-8")
             calls["n"] += 1
             if "Bad" in src:
@@ -577,7 +611,7 @@ def test_the_same_rejected_patch_is_not_derived_twice():
     class Runner:
         omc = "omc"
 
-        def check(self, model, files):
+        def check(self, model, files, libraries=("Modelica",)):
             seen["n"] += 1
             r = OmcResult(ok=False, stage="check")
             # Always worse after the patch, so the patch is always rejected.
