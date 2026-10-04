@@ -180,6 +180,13 @@ routes:
   #: are busy, that tier walks down to flash-lite, whose translations were loose enough to
   #: check the wrong thing.
   formalise_criterion:   [t5_cloud_deep, t3_cloud_reasoning, t4_cloud_extract]
+  #: Independent review of a formalised criterion: does the expression actually say what the
+  #: criterion says? Routed through Groq FIRST, Gemini second -- the opposite order from
+  #: formalise_criterion above, which tries Gemini first -- so the common case has a
+  #: different vendor's model checking the first one's work, not the same model re-reading
+  #: its own answer. Cheap and small (the criterion and the expression, nothing else), so
+  #: this doubling the call count per criterion stays affordable.
+  verify_criterion:      [t3_cloud_reasoning, t4_cloud_extract, t5_cloud_deep]
   adjudicate_conflict:   [t3_cloud_reasoning, t2_local_mid]
   equation_synthesis:    [t3_cloud_reasoning, t4_cloud_vision]
   repair_modelica:       [t0_deterministic, t5_cloud_deep, t3_cloud_reasoning, t4_cloud_vision]

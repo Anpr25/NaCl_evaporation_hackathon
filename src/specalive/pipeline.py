@@ -82,6 +82,12 @@ class PipelineConfig:
     #: read from earlier runs and nothing this run learns is kept. The CLI turns it on by
     #: default, next to the catalog; tests and library callers opt in.
     memory_path: Path | None = None
+    #: Normalised-RMSE pass/fail bound for an auto-matched reference-trace signal comparison
+    #: (`verify/acceptance.py:build_signal_map`/`compare_signals`). Only ever applied to a
+    #: pair the matcher found with no ambiguity, and only once the trace itself has passed
+    #: `screen_reference` -- so loosening this does not let a bad reference trace through,
+    #: it only changes how closely a *trusted* one must be tracked.
+    reference_tolerance: float = 0.1
     #: Flatten the generated plant and every library class it uses (`modelica/SpecAlive.mo`,
     #: the Modelica Standard Library) into one self-contained file via omc's own
     #: `saveTotalModel`, so the one Modelica artifact a reader gets is the only file the
@@ -714,6 +720,7 @@ class Pipeline:
             model, cfg.out_dir / "results.csv",
             reference_csv=cfg.reference_trace,
             signal_map=None,
+            reference_tolerance=cfg.reference_tolerance,
             router=self.router,
             memory=self.memory,
         )

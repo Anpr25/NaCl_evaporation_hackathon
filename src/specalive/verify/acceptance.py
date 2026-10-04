@@ -39,6 +39,12 @@ class CheckResult:
     #: checks derived from the evidence's own numbers, because a wrong translation can fail
     #: a model that behaved correctly, and the reader must be able to tell which is which.
     formalised: bool = False
+    #: "procedure" is the ordinary case -- a criterion extracted from a test procedure.
+    #: "reference_trace" is a check this scorer manufactured itself, from a numeric
+    #: comparison against a supplied reference trace. The two must never be confused: a
+    #: trace-derived check did not come from the evidence, it came from how well our own
+    #: simulation tracks someone else's spreadsheet, and the report must say which is which.
+    source: str = "procedure"
 
     def icon(self) -> str:
         if not self.checkable:
@@ -72,12 +78,16 @@ class Scorecard:
         return self.total > 0 and self.passed == self.total
 
     def summary(self) -> str:
-        own = [r for r in self.results if r.checkable and not r.formalised]
-        prose = [r for r in self.results if r.checkable and r.formalised]
+        checkable = [r for r in self.results if r.checkable]
+        own = [r for r in checkable if r.source == "procedure" and not r.formalised]
+        prose = [r for r in checkable if r.source == "procedure" and r.formalised]
+        trace = [r for r in checkable if r.source == "reference_trace"]
         parts = [f"{self.passed}/{self.total} acceptance checks passed"]
         if prose:
             parts.append(f"evidence checks {sum(r.passed for r in own)}/{len(own)}, "
                          f"procedure criteria (model-formalised) {sum(r.passed for r in prose)}/{len(prose)}")
+        if trace:
+            parts.append(f"reference-trace agreement {sum(r.passed for r in trace)}/{len(trace)}")
         if self.unchecked:
             parts.append(f"{self.unchecked} criteria not machine-checkable")
         return "; ".join(parts)
@@ -397,6 +407,7 @@ def score(
     *,
     reference_csv: str | Path | None = None,
     signal_map: dict[str, str] | None = None,
+    reference_tolerance: float = 0.1,
     router: Any | None = None,
     memory: Any | None = None,
 ) -> Scorecard:
@@ -404,6 +415,13 @@ def score(
 
     Procedure criteria with no expression yet are formalised first, against these columns
     (see verify/criteria.py); one that cannot be is reported as not machine-checkable.
+
+    A reference trace adds real, scored checks -- not just a number nobody gates on -- but
+    only once it has earned that trust. `signal_map` is built automatically when not
+    supplied (`build_signal_map`); each pair's normalised RMSE becomes a `CheckResult` with
+    `source="reference_trace"`, passing when it is within `reference_tolerance`, but only
+    when the trace itself passed `screen_reference` first. Scoring a pair against a trace
+    that fails conservation would grade the simulation on how well it reproduces a mistake.
     """
     cols = read_result(result_csv)
     card = Scorecard()
@@ -440,12 +458,37 @@ def score(
         consistent, notes = screen_reference(reference_csv, model)
         card.reference_consistent = consistent
         card.reference_notes = notes
+        auto_mapped = False
+        if signal_map is None:
+            ref_cols = _load_columns(reference_csv)
+            signal_map = build_signal_map(cols, ref_cols)
+            auto_mapped = True
         if consistent and signal_map:
             card.signal_errors = compare_signals(cols, reference_csv, signal_map)
+            for sim_name, err in card.signal_errors.items():
+                ok = err <= reference_tolerance
+                card.results.append(CheckResult(
+                    check_id=f"TRACE-{sim_name}",
+                    description=f"{sim_name} tracks the reference trace",
+                    passed=ok,
+                    detail=f"normalised RMSE against {signal_map[sim_name]} = {err:.2%}, "
+                           f"required <= {reference_tolerance:.0%}",
+                    source="reference_trace",
+                ))
+            if auto_mapped and signal_map:
+                card.reference_notes.append(
+                    f"{len(signal_map)} column(s) matched to the reference trace automatically "
+                    f"by shared tag and quantity word: {', '.join(sorted(signal_map))}"
+                )
         elif signal_map:
             card.reference_notes.append(
                 "signal-level comparison suppressed: the reference trace failed the "
                 "conservation screen, so RMSE against it would not be meaningful"
+            )
+        elif auto_mapped:
+            card.reference_notes.append(
+                "no simulated column could be matched to the reference trace by tag and "
+                "quantity word; signal-level comparison skipped"
             )
     return card
 
@@ -697,6 +740,103 @@ def _screen_energy_sign(cols: dict[str, list[float]], facts: dict[str, Any]) -> 
                 f"cooler is commanded on. Energy is flowing the wrong way."
             )
     return ok, notes, ran
+
+
+#: Reference-trace column words that mean the same physical quantity as a sim column's
+#: attribute, spelled out only -- never a bare one- or two-letter token (`w`, `T`, `m`, `p`,
+#: `i`, `v`...), because those collide with trailing unit abbreviations (`B1_level_m`'s `m`
+#: is metres, not mass) and with each other across domains (`w` is mass fraction in one
+#: packet, angular velocity in another). A bare short attribute is still matched -- see
+#: `_acceptable_ref_tokens` -- just by exact token equality, never by synonym expansion.
+_QUANTITY_SYNONYMS: tuple[frozenset[str], ...] = (
+    frozenset({"level", "lvl"}),
+    # "t" is deliberately here, unlike the other short Modelica attribute letters: it is
+    # SpecAlive.Interfaces' own name for temperature (`Outlet.T`, `modelica/SpecAlive.mo`),
+    # not an abbreviation this matcher has to guess at, and nothing in this codebase's
+    # conventions uses a bare per-block "t" attribute for anything else (time columns are
+    # always the literal column "time", filtered out before this ever runs).
+    frozenset({"temp", "temperature", "t"}),
+    frozenset({"heater", "heat"}),
+    frozenset({"cooler", "cool", "chill"}),
+    frozenset({"flow", "rate", "mflow", "massflow"}),
+    frozenset({"open", "cmd", "command"}),
+    frozenset({"pressure", "pres"}),
+    frozenset({"speed", "omega", "rpm"}),
+    frozenset({"torque", "trq"}),
+    frozenset({"voltage", "volt"}),
+    frozenset({"current", "amp", "amps"}),
+)
+_IGNORED_SIM_COLS = re.compile(r"^der\(|^\$|^time$")
+
+
+def _acceptable_ref_tokens(sim_attr: str) -> set[str]:
+    sim_attr = sim_attr.lower()
+    out = {sim_attr}
+    for group in _QUANTITY_SYNONYMS:
+        if sim_attr in group:
+            out |= group
+    return out
+
+
+def build_signal_map(sim_cols: Any, ref_cols: Any) -> dict[str, str]:
+    """Pair simulated result columns with reference-trace columns, without being told how.
+
+    A reference trace is free to name its columns however its author liked
+    (`B5_level_m`, an instrument tag, anything); the simulated result is named by the
+    Modelica path the emitter chose (`B5.level`). Matched on two things only: the leading
+    tag both conventionally share (`B5`), and a quantity word in common -- and a reference
+    column's OWN trailing word is dropped before that comparison, because the reference
+    convention here appends a unit (`_m`, `_C`) that would otherwise collide with an
+    unrelated sim attribute that happens to share that same short token (a vessel's total
+    mass `B1.m` is not its level `B1_level_m`, even though both contain the token `m`).
+
+    Never guesses: a sim column with zero or more than one plausible match is left
+    unmapped, and a reference column two sim columns both want is dropped from both rather
+    than assigned to either. Low recall is the intended trade for never pairing the wrong
+    two columns -- a wrong pairing would report a false numeric disagreement, or a false
+    agreement, under the banner of a verified comparison.
+    """
+    ref_attr: dict[str, set[str]] = {}
+    ref_block: dict[str, str] = {}
+    for ref in ref_cols:
+        toks = re.split(r"[_.]+", ref.lower())
+        if len(toks) < 2:
+            continue
+        ref_block[ref] = toks[0]
+        ref_attr[ref] = set(toks[1:-1] if len(toks) >= 3 else toks[1:])
+
+    claims: dict[str, list[str]] = {}
+    for sim in sim_cols:
+        if _IGNORED_SIM_COLS.search(sim):
+            continue
+        block, _, attr = sim.rpartition(".")
+        if not block or not attr:
+            continue
+        block_segs = set(re.split(r"[_.]+", block.lower()))
+        acceptable = _acceptable_ref_tokens(attr)
+        hits = [ref for ref in ref_attr
+                if ref_block[ref] in block_segs and acceptable & ref_attr[ref]]
+        if len(hits) == 1:
+            claims.setdefault(hits[0], []).append(sim)
+
+    def plain(sim: str) -> bool:
+        # The bulk/top-level state of a component ("B5.T") versus one of its port-level
+        # values ("B5.inlet[1].T", "B5.vapor.T") -- both share the same trailing token and
+        # the same block tag, and a reference trace measuring "B5" almost always means the
+        # former. Preferred only when it is the SOLE plain candidate; two plain candidates
+        # (or none) is genuine ambiguity, not resolved by this rule.
+        block = sim.rpartition(".")[0]
+        return "." not in block and "[" not in block
+
+    out: dict[str, str] = {}
+    for ref, sims in claims.items():
+        if len(sims) == 1:
+            out[sims[0]] = ref
+            continue
+        plains = [s for s in sims if plain(s)]
+        if len(plains) == 1:
+            out[plains[0]] = ref
+    return out
 
 
 def compare_signals(

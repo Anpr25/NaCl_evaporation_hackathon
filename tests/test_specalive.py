@@ -852,6 +852,104 @@ def test_a_trace_with_nothing_screenable_is_not_silently_endorsed(tmp_path):
     ok, notes = screen_reference(_csv(tmp_path, "opaque.csv", ["time", "some_column"], rows))
     assert ok, "we cannot reject what we cannot check"
     assert any("neither endorsed nor rejected" in n for n in notes), notes
+
+
+# ------------------------------------------------------------ build_signal_map / reference checks
+
+
+def test_signal_map_pairs_by_tag_and_quantity_word_not_by_spelling():
+    from specalive.verify.acceptance import build_signal_map
+
+    sim = ["time", "B5.level", "B5.T", "B5.w", "B5.heater", "L_V8.open", "der(B5.level)"]
+    ref = ["time_s", "B5_level_m", "B5_temp_C", "B5_w_NaCl", "B5_heater_cmd", "V8_open"]
+    assert build_signal_map(sim, ref) == {
+        "B5.level": "B5_level_m", "B5.T": "B5_temp_C", "B5.w": "B5_w_NaCl",
+        "B5.heater": "B5_heater_cmd", "L_V8.open": "V8_open",
+    }
+
+
+def test_signal_map_never_confuses_a_unit_suffix_for_a_different_attribute():
+    """B1.m (total mass) and B1_level_m (level in metres) share the token 'm' for two
+    unrelated reasons -- a short attribute name and a trailing unit. Must not pair."""
+    from specalive.verify.acceptance import build_signal_map
+
+    assert build_signal_map(["B1.m", "B1.level"], ["B1_level_m"]) == {"B1.level": "B1_level_m"}
+
+
+def test_signal_map_declines_genuine_ambiguity_rather_than_guess():
+    from specalive.verify.acceptance import build_signal_map
+
+    # Two sim columns could both be "B5's level" -- neither is assigned.
+    assert build_signal_map(["B5.level", "B5.lvl"], ["B5_level_m"]) == {}
+    # Two reference columns could both be "B5's level" -- neither is assigned.
+    assert build_signal_map(["B5.level"], ["B5_level_m", "B5_lvl_ft"]) == {}
+
+
+def test_signal_map_prefers_the_bulk_state_over_a_port_level_one():
+    """B5.T (the vessel's own temperature) and B5.vapor.T (one of its port temperatures)
+    both end in the same token and share the same block tag -- but only one of them is the
+    'plain' top-level state, which is what an instrument reading of 'B5' means."""
+    from specalive.verify.acceptance import build_signal_map
+
+    assert build_signal_map(["B5.T", "B5.vapor.T", "B5.inlet[1].T"], ["B5_temp_C"]) == {
+        "B5.T": "B5_temp_C"
+    }
+
+
+def test_reference_trace_checks_are_scored_once_the_trace_is_trusted(tmp_path):
+    from specalive.ir.system import SystemModel
+    from specalive.verify.acceptance import score
+
+    times = [i * 1.0 for i in range(30)]
+    sim_level = [0.1 + 0.01 * i for i in range(30)]
+    ref_level = [v + 0.002 for v in sim_level]  # close, within tolerance
+    _csv(tmp_path, "sim.csv", ["time", "B5.level"], list(zip(times, sim_level)))
+    ref = _csv(tmp_path, "ref.csv", ["time_s", "B5_level_m"], list(zip(times, ref_level)))
+    result = tmp_path / "sim.csv"
+
+    card = score(SystemModel(name="t"), result, reference_csv=ref)
+    assert card.reference_consistent is True  # nothing in this trace fails a screen
+    trace_checks = [r for r in card.results if r.source == "reference_trace"]
+    assert len(trace_checks) == 1 and trace_checks[0].passed
+    assert trace_checks[0].check_id == "TRACE-B5.level"
+    assert card.total == 1 and card.passed == 1
+
+
+def test_a_reference_trace_the_simulation_disagrees_with_fails_its_check(tmp_path):
+    from specalive.ir.system import SystemModel
+    from specalive.verify.acceptance import score
+
+    times = [i * 1.0 for i in range(30)]
+    sim_level = [0.1 + 0.01 * i for i in range(30)]
+    ref_level = [v + 0.2 for v in sim_level]  # far off
+    _csv(tmp_path, "sim2.csv", ["time", "B5.level"], list(zip(times, sim_level)))
+    ref = _csv(tmp_path, "ref2.csv", ["time_s", "B5_level_m"], list(zip(times, ref_level)))
+    result = tmp_path / "sim2.csv"
+
+    card = score(SystemModel(name="t"), result, reference_csv=ref)
+    trace_checks = [r for r in card.results if r.source == "reference_trace"]
+    assert len(trace_checks) == 1 and not trace_checks[0].passed
+
+
+def test_an_inconsistent_reference_trace_never_produces_a_scored_check(tmp_path):
+    """The NaCl packet's own reference trace is the motivating case: it fails the solute
+    conservation screen, and must never silently become a 'passed' or 'failed' check."""
+    from specalive.ir.system import SystemModel
+    from specalive.verify.acceptance import score
+
+    rows = [[i * 1.0, lvl, conc] for i, (lvl, conc) in enumerate(zip(
+        [0.18 - 0.001 * i for i in range(60)], [0.08 + 0.002 * i for i in range(60)]))]
+    ref = _csv(tmp_path, "badref.csv", ["time_s", "B5_level_m", "B5_w_NaCl"], rows)
+    sim_rows = list(zip([i * 1.0 for i in range(60)], [0.18 - 0.001 * i for i in range(60)],
+                        [0.08 + 0.002 * i for i in range(60)]))
+    result = _csv(tmp_path, "badsim.csv", ["time", "B5.level", "B5.w"], sim_rows)
+
+    card = score(SystemModel(name="t"), result, reference_csv=ref)
+    assert card.reference_consistent is False
+    assert not [r for r in card.results if r.source == "reference_trace"]
+    assert card.total == 0
+
+
 def test_partial_classes_are_excluded_by_the_compiler_not_by_their_name():
     """C7. Name heuristics catch `*.BaseClasses.*` and `Partial*`, but MSL has partial classes
     that match neither -- Modelica.Thermal.HeatTransfer.Interfaces.Element1D is partial, is not

@@ -11,6 +11,11 @@ that translation; it cannot be trusted to make it correctly, so the design is:
   * every expression it writes is evaluated against the real result before it is accepted,
     so one that does not parse, or reads a missing column, is rejected and the model is
     asked once more with the reason;
+  * a SEPARATE model call then reviews the translation against the original prose, routed
+    through a different tier first where possible -- the mechanical check above only proves
+    the expression is valid and computable, never that it means the same thing as the
+    criterion. A reviewer that disagrees reverts the translation to NOT MACHINE-CHECKABLE;
+    one that cannot be reached leaves the translation exactly as unreviewed as it always was;
   * a criterion that still cannot be formalised is reported as NOT MACHINE-CHECKABLE --
     never silently passed, never silently dropped;
   * a translation that worked is remembered (catalog/memory.py) and reused on later runs,
@@ -140,6 +145,84 @@ def scale_mismatch(expr: str, cols: dict[str, list[float]]) -> str:
     return ""
 
 
+VERIFY_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "required": ["agrees", "reason"],
+    "properties": {
+        "agrees": {"type": "boolean"},
+        "reason": {"type": "string"},
+    },
+}
+
+VERIFY_PROMPT = """\
+Someone else translated an acceptance criterion from a test procedure into a machine-checkable
+expression. Check their work; do not write your own translation, only judge theirs.
+
+CRITERION (the engineering prose, the ground truth)
+{criterion}
+
+PROPOSED EXPRESSION
+{expression}
+
+EXPRESSION LANGUAGE (for reference -- crosses/before/final/at/always/during/max/min/approx/
+approx(abs(...))/ratio/state/enters/elapsed/exclusive, joined with && when the criterion has
+more than one part; OP is one of <= >= < > == !=)
+
+CONVENTIONS THE FIRST TRANSLATION WAS ALSO TOLD, SO THEY ARE NOT A DISAGREEMENT BY THEMSELVES
+  - A Boolean column is logged as 0 (false) or 1 (true), never exactly mid-scale, so
+    `open <= 0.5` IS "closed" and `open >= 0.5` IS "open" -- not a loosened, partial check.
+  - A quantity may be converted into SI units or into a scaled/normalised form the column
+    itself uses (a mass fraction, a value normalised to a nominal); a stated unit not
+    matching the column's literally is not itself a disagreement, only a wrong NUMBER is.
+  - A column's own name is often not descriptive (`CTL_CO2_201.y`, not `ach_command`). Use
+    the context below -- state names, instrument tag bindings, and effective parameters --
+    the same way the first translation did, before judging that a column is the wrong one.
+{context}
+Does the expression check EXACTLY what the criterion states -- same quantity, same direction,
+same bound, same timing -- no more and no less, the conventions above aside? A partial match
+(checks something related but weaker, omits part of a conjunctive criterion, or gets the
+direction/sign backwards) is a disagreement, not a pass. Set `agrees` to true only if you
+would have written the same check yourself from the criterion alone. Say why in `reason`, one
+sentence. Return JSON only.
+"""
+
+
+def _independent_review(
+    criterion: str, expression: str, context: str, router: Any
+) -> tuple[bool, str] | None:
+    """A second, independent model call that checks the first model's translation against
+    the original prose, instead of trusting the pass that wrote it.
+
+    Routed (config/models.yaml) through a different tier first than `formalise_criterion`
+    uses first, so the common case is a different vendor's model reviewing the answer, not
+    the same one re-reading its own work -- closer to a real second opinion than a second
+    rendering of the first.
+
+    `context` is the SAME state/tag/parameter text the first translation was shown
+    (`_context(model)`). Without it, a column whose name does not read as what it is
+    (`CTL_CO2_201.y` for "the ACH command") looks wrong to a reviewer who cannot see why it
+    is right -- which is a gap in the reviewer's information, not a defect in the
+    translation, and must not be allowed to masquerade as one.
+
+    Never raises and never blocks: a review that could not be obtained (no router, a quota
+    error, a malformed reply) is reported as None -- "not reviewed" -- and the original
+    translation stands exactly as it did before this existed. Only an EXPLICIT disagreement
+    changes anything.
+    """
+    try:
+        resp = router.run(
+            "verify_criterion",
+            VERIFY_PROMPT.format(criterion=criterion, expression=expression, context=context),
+            schema=VERIFY_SCHEMA,
+        )
+    except Exception:
+        return None
+    data = resp.data or {}
+    if "agrees" not in data:
+        return None
+    return bool(data["agrees"]), str(data.get("reason") or "")[:200]
+
+
 def _key(criterion: str) -> str:
     return hashlib.sha256(criterion.strip().lower().encode("utf-8")).hexdigest()[:16]
 
@@ -202,7 +285,7 @@ def formalise(
     grace = round(2 * scan + 2 * step, 6)
     command_times = sorted({t for sc in model.scenarios for st in sc.stimuli
                             if st.kind == "pulses" for t in st.times})
-    done = from_memory = 0
+    done = from_memory = rejected_on_review = 0
 
     for sc in model.scenarios:
         for chk in sc.checks:
@@ -262,9 +345,37 @@ def formalise(
             if not data.get("checkable") or not str(data.get("expression") or "").strip():
                 chk.provenance.note = f"not machine-checkable: {str(data.get('reason') or '')[:200]}"
                 continue
-            chk.expression = _with_reaction_grace(str(data["expression"]).strip(), command_times, grace)
-            chk.tolerance = data.get("tolerance")
-            chk.provenance.note = f"formalised by {resp.tier} ({resp.model}): {str(data.get('reason') or '')[:160]}"
+            raw_expr = str(data["expression"]).strip()
+            proposed_tol = data.get("tolerance")
+            formalised_by = f"formalised by {resp.tier} ({resp.model}): {str(data.get('reason') or '')[:160]}"
+
+            # 3. An independent second opinion, before the translation is trusted. The
+            # mechanical checks in `works()` above only prove the expression is valid and
+            # computable -- they cannot catch one that is syntactically fine and simply
+            # means something else than the criterion. This is the only check on THAT.
+            #
+            # Reviewed as the model wrote it, BEFORE `_with_reaction_grace` below shifts a
+            # command-instant time by one scan period. That shift is our own deterministic
+            # convention, not something the model decided or the criterion's prose varies
+            # on, and a reviewer shown '220.295' against a criterion that says '220 s' has
+            # no way to know the 0.295 is intentional -- it correctly (by its own lights)
+            # calls that a mismatch, and a provably right translation gets discarded. The
+            # reviewer sees exactly the comparison that matters: what the model proposed
+            # against what the criterion states.
+            review = _independent_review(text, raw_expr, state_map + tag_map + params, router)
+            if review is not None and not review[0]:
+                chk.provenance.note = (
+                    f"not machine-checkable: a translation was proposed ({raw_expr}) "
+                    f"but an independent review disagreed -- {review[1]}"
+                )
+                rejected_on_review += 1
+                continue
+
+            proposed_expr = _with_reaction_grace(raw_expr, command_times, grace)
+            chk.expression, chk.tolerance = proposed_expr, proposed_tol
+            chk.provenance.note = formalised_by + (
+                f"; independently confirmed ({review[1]})" if review else ""
+            )
             done += 1
             if remembered is not None:
                 remembered[_key(text)] = {"expression": chk.expression, "tolerance": chk.tolerance,
@@ -273,7 +384,9 @@ def formalise(
     total = sum(1 for sc in model.scenarios for c in sc.checks if c.kind == "procedure")
     if total:
         notes.append(f"{done + from_memory}/{total} procedure criteria formalised"
-                     + (f" ({from_memory} from earlier runs)" if from_memory else ""))
+                     + (f" ({from_memory} from earlier runs)" if from_memory else "")
+                     + (f"; {rejected_on_review} rejected on independent review"
+                        if rejected_on_review else ""))
     return notes
 
 

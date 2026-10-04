@@ -9,7 +9,112 @@ know about; everything else is FYI.
 
 ---
 
-## 2026-10-04 (latest) — showing the five-level gate instead of pass/fail, and a claims-only artifact
+## 2026-10-04 (latest) — a reference trace earns real scored checks, and a formalised criterion gets a second opinion before anyone trusts it
+
+**Status: implemented.** `verify/acceptance.py`, `verify/criteria.py`, `pipeline.py`,
+`config/models.yaml` changed; new test file `tests/test_criterion_review.py`, 12 new cases in
+`test_specalive.py`. 244 fast + 11 slow tests green.
+
+Prompted by being asked, plainly, "how do we know the simulation is correct" -- and the
+honest answer at the time was: liveness, the acceptance checks a procedure actually states,
+and a *self*-consistency screen on a reference trace, nothing more. Two real gaps sat behind
+that answer and both are closed now, each confirmed against a live cloud run, not just a
+unit test.
+
+### A reference trace stops being an unscored number
+
+`compare_signals` already computed a normalised RMSE against a reference trace. Nothing
+gated on it -- `signal_map` had to be supplied by the caller, and the real pipeline never
+supplied one, so the number was computed, if anyone called it with a map, and then nobody
+looked at it.
+
+**New: `build_signal_map(sim_cols, ref_cols)`.** Auto-pairs a simulated column
+(`B5.level`) with a reference column (`B5_level_m`) by two things only -- a shared leading
+tag, and a shared quantity word -- and each matched pair becomes a real `CheckResult`
+(`source="reference_trace"`) against a stated tolerance (default 10% normalised RMSE),
+counted in `Scorecard.total`/`passed` like any other check. Gated exactly the way the
+existing `screen_reference` rule already insists: only once the trace itself has passed
+conservation/sign/spin-up screening. A trace that fails those (the NaCl packet's own trace
+does -- see `screen_reference`'s docstring) still adds nothing; verified this leaves
+`nacl_evaporation`'s benchmark at exactly 12 total criteria, unchanged.
+
+Never guesses: a sim column with zero or more than one plausible reference match is left
+unmapped, and a reference column two sim columns both want is dropped from both. Run
+against the real NaCl files, this finds 18 clean pairs (level, temperature, mass fraction,
+heater/cooler commands, five valve opens) with nothing wrong among them.
+
+**One real bug, caught before it shipped.** A first version matched `B1.m` (a vessel's
+total mass) to `B1_level_m` (its level) -- both contain the token `m`, one as a genuine
+short attribute name, the other as a trailing unit abbreviation the reference convention
+appends. Fixed by dropping a reference column's own trailing token before comparing quantity
+words, which also fixes the symmetric case for free: `B5.T` only matches `B5_temp_C`
+because "t" is SpecAlive's own spelled convention for temperature, added to the synonym
+table deliberately and alone among the short attributes -- `w`/`m`/`p`/`i` stay
+exact-match-only, because they are genuinely ambiguous across domains (`w` is mass fraction
+in one packet, angular velocity in another) in a way "t" for temperature never is here.
+Also added: when two sim columns can each plausibly be "B5's T" (`B5.T` the bulk state,
+`B5.vapor.T`/`B5.inlet[1].T` port-level ones), prefer the one with no further port path --
+an instrument reading of "B5" means the bulk state, not an arbitrary port -- but ONLY when
+exactly one candidate is that plain; two plain candidates is still genuine ambiguity and
+still gets nothing.
+
+### A formalised criterion is reviewed, not just trusted
+
+The honest gap from the verification audit: `formalise()`'s only objective check on an
+LLM-written expression was mechanical -- does it parse, does it read a real column, is it
+in scale. Nothing checked that the expression means the same thing as the English criterion
+it came from.
+
+**New: `_independent_review`, a second, separate model call** (`verify_criterion`, routed
+through Groq first where `formalise_criterion` tries Gemini first, so the common case is a
+different vendor's model checking the answer rather than the same one re-reading its own
+work). Shown the original criterion and the proposed expression, asked only whether it would
+have written the same check. A disagreement reverts the translation to NOT
+MACHINE-CHECKABLE -- the same honest tri-state the scorer already has, no new category
+invented -- and is never written to memory, so a rejected translation cannot outlive the run
+that rejected it. Agreement, or a review that could not be reached (no router, a quota
+error), leaves the original translation exactly as it was.
+
+**Two false rejections, both found by actually running it against real packets, both
+fixed before being called done:**
+
+1. The reviewer was shown the time value AFTER `_with_reaction_grace` shifts a
+   command-instant by one scan period (`220` → `220.295`), against a criterion that states
+   `220 s`, and reasonably called that a mismatch -- it is our own deterministic
+   convention, not something the model wrote or the prose varies on. Fixed by reviewing the
+   expression exactly as proposed, before that shift is applied; the shift still happens
+   afterward, unconditionally, for whatever the review accepts.
+2. The reviewer had no context tying a bare column name (`CTL_CO2_201.y`) to what the
+   criterion calls "the ACH command," and rejected a translation that was in fact correct
+   (confirmed against the block's own description: "Air-change command; IF-SIG-08: Limited
+   to 0.2..6 ACH"). Fixed by giving the reviewer the same state/tag/parameter context
+   `formalise_criterion` already had -- it had been reviewing with strictly less
+   information than the translation it was judging.
+
+**⚠ Affects you (whoever touches `formalise()` or `TRANSLATE_PROMPT` next):** any fact
+added to the translator's context that changes what a column name is understood to mean
+(a new tag-map entry, a new parameter) belongs in `VERIFY_PROMPT`'s context too, or the
+reviewer will start rejecting correct translations again for the same reason as bug 2
+above -- it is reviewing with less information than the thing it is reviewing.
+
+### Numbers, from a live cloud run on the tank packet (not a mock)
+
+| | before this entry | after |
+| --- | --- | --- |
+| checkable procedure criteria | 5 | **7** (two false rejections fixed) |
+| reference-trace checks scored | 0 (number computed, never gated) | **scored**, tolerance-gated |
+| NaCl benchmark `acceptance_total` | 12 | **12**, unchanged (trace still fails the screen) |
+
+One criterion (tank's AC-04, a delay between two controller-state entries) is still
+rejected by review after both fixes -- plausibly a genuine catch of the wrong state pair,
+though nothing here independently proves the reviewer right; reported honestly rather than
+suppressed. A separate, pre-existing formalisation-quality issue surfaced on the IAQ packet
+(AC-05's `ratio` check divides by a column that reaches exactly zero) is unrelated to this
+feature and not fixed here.
+
+---
+
+## 2026-10-04 — showing the five-level gate instead of pass/fail, and a claims-only artifact
 
 **Status: implemented.** `cli.py`, `web/app.py`, `web/static/index.html`, `verify/report.py`
 changed; no new files on my side (C owns the new `emit/wiring.py` and `llm/scripting_docs.py`
