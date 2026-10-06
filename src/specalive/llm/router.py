@@ -142,7 +142,9 @@ class Router:
         mode: str = "auto",
         cache_dir: str | Path | None = None,
     ) -> None:
-        self.cfg: dict[str, Any] = yaml.safe_load(Path(config_path).read_text(encoding="utf-8"))
+        from ..settings import repo_path
+
+        self.cfg: dict[str, Any] = yaml.safe_load(repo_path(config_path).read_text(encoding="utf-8"))
         self.mode = mode
         modes = self.cfg.get("modes", {})
         if mode not in modes:
@@ -152,7 +154,7 @@ class Router:
 
         cache_cfg = self.cfg.get("cache", {})
         self.cache = DiskCache(
-            dir=Path(cache_dir or cache_cfg.get("dir", ".specalive_cache")),
+            dir=Path(cache_dir) if cache_dir else repo_path(cache_cfg.get("dir", ".specalive_cache")),
             enabled=bool(cache_cfg.get("enabled", True)),
         )
         limits = {

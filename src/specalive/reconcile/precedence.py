@@ -37,7 +37,9 @@ class Candidate:
 
 class PrecedenceEngine:
     def __init__(self, config_path: str | Path = "config/precedence.yaml") -> None:
-        cfg = yaml.safe_load(Path(config_path).read_text(encoding="utf-8")) or {}
+        from ..settings import repo_path
+
+        cfg = yaml.safe_load(repo_path(config_path).read_text(encoding="utf-8")) or {}
         self.rules = {r["id"]: r for r in cfg.get("rules", [])}
         self.status_order: list[str] = self.rules.get("P2-approval-status", {}).get("order", [])
         self.authority_order: list[str] = self.rules.get("P3-authority-class", {}).get("order", [])

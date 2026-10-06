@@ -21,14 +21,16 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 from ..pipeline import Pipeline, PipelineConfig
-from ..settings import load_env
+from ..settings import REPO_ROOT, load_env, repo_path
 
 load_env()
 
 app = FastAPI(title="ModelAlchemist", docs_url="/api/docs")
 
 STATIC = Path(__file__).parent / "static"
-RUNS = Path("out/runs")
+#: Anchored to the repo, like the catalog and memory beside it: a server started from
+#: another folder must still read the same catalog and write runs where it serves them.
+RUNS = REPO_ROOT / "out" / "runs"
 RUNS.mkdir(parents=True, exist_ok=True)
 
 #: run_id -> {"packet": Path, "out": Path, "options": {...}}
@@ -58,11 +60,12 @@ def health() -> dict[str, Any]:
     from ..verify.omc import describe_environment
 
     env = describe_environment()
-    catalog = Path("out/catalog.jsonl")
+    catalog = REPO_ROOT / "out" / "catalog.jsonl"
     agents: list[dict[str, Any]] = [
         {"tier": "t0_deterministic", "label": "Parsers", "model": "deterministic",
          "up": True, "kind": "code"}
     ]
+    router_error: str | None = None
     try:
         from ..llm.router import Router
 
@@ -84,8 +87,10 @@ def health() -> dict[str, Any]:
                 "up": r.is_available(tier),
                 "kind": "local" if "ollama" in spec.get("kind", "") else "cloud",
             })
-    except Exception:
-        pass
+    except Exception as exc:
+        # Said, not swallowed: a missing config/models.yaml used to leave just "Parsers" in
+        # the agents panel, which reads as "no models configured" rather than "broken".
+        router_error = f"{type(exc).__name__}: {exc}"
 
     return {
         "omc": env.get("omc_version"),
@@ -93,6 +98,9 @@ def health() -> dict[str, Any]:
         "catalog_classes": sum(1 for _ in catalog.open(encoding="utf-8")) if catalog.exists() else 0,
         "provider": os.getenv("SPECALIVE_PROVIDER", "auto"),
         "agents": agents,
+        "router_error": router_error,
+        "repo_root": str(REPO_ROOT),
+        "env_files": load_env(),
     }
 
 
@@ -109,9 +117,12 @@ async def create_run(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     if packet_path:
-        packet = Path(packet_path)
+        # A preset ("benchmarks/drivetrain/sources") is repo-relative; a path someone typed
+        # may be relative to wherever the server was started. Try theirs, then the repo's.
+        packet = repo_path(packet_path)
         if not packet.exists():
-            raise HTTPException(400, f"packet path does not exist: {packet}")
+            raise HTTPException(400, f"packet path does not exist: {packet_path} "
+                                     f"(looked in {Path.cwd()} and {REPO_ROOT})")
     else:
         packet = out_dir / "packet"
         packet.mkdir(exist_ok=True)
@@ -126,8 +137,8 @@ async def create_run(
     _RUNS[run_id] = {
         "packet": packet,
         "out": out_dir,
-        "reference_ir": Path(reference_ir) if reference_ir else None,
-        "reference_trace": Path(reference_trace) if reference_trace else None,
+        "reference_ir": repo_path(reference_ir) if reference_ir else None,
+        "reference_trace": repo_path(reference_trace) if reference_trace else None,
     }
     return {"run_id": run_id}
 
@@ -146,7 +157,7 @@ def stream_events(run_id: str) -> StreamingResponse:
             reference_ir=info["reference_ir"],
             reference_trace=info["reference_trace"],
             # The web app learns like the CLI does; see catalog/memory.py.
-            memory_path=Path("out/binding_memory.json"),
+            memory_path=REPO_ROOT / "out" / "binding_memory.json",
         )
         pipeline = Pipeline(cfg, _router())
         try:

@@ -31,7 +31,7 @@ def escape(text: str) -> str:
 from rich.table import Table
 
 from .pipeline import Pipeline, PipelineConfig, PipelineEvent
-from .settings import load_env
+from .settings import REPO_ROOT, load_env, repo_path
 
 # Providers read os.getenv in their constructor, so the env file has to be in place before
 # any of them is built. Doing it here means every command gets it, including `doctor`.
@@ -98,7 +98,7 @@ def doctor() -> None:
         good = state.startswith("set (")
         t.add_row(f"  {var}", "[green]ok[/]" if good else "[dim]--[/]", state)
 
-    cat = Path("out/catalog.jsonl")
+    cat = REPO_ROOT / "out" / "catalog.jsonl"
     n = sum(1 for _ in cat.open(encoding="utf-8")) if cat.exists() else 0
     t.add_row(
         "Modelica catalog",
@@ -134,8 +134,9 @@ def doctor() -> None:
 @app.command()
 def harvest(
     libraries: str = typer.Option("Modelica", help="Comma-separated libraries to introspect"),
-    include: Optional[str] = typer.Option("modelica/SpecAlive.mo", help="Extra .mo files"),
-    out: Path = typer.Option(Path("out/catalog.jsonl")),
+    include: Optional[str] = typer.Option(str(REPO_ROOT / "modelica" / "SpecAlive.mo"),
+                                          help="Extra .mo files"),
+    out: Path = typer.Option(REPO_ROOT / "out" / "catalog.jsonl"),
 ) -> None:
     """Introspect the installed Modelica libraries into a searchable catalog.
 
@@ -146,7 +147,7 @@ def harvest(
     from .verify.omc import find_omc
 
     libs = [x.strip() for x in libraries.split(",") if x.strip()]
-    extra = [Path(x.strip()) for x in (include or "").split(",") if x.strip()]
+    extra = [repo_path(x.strip()) for x in (include or "").split(",") if x.strip()]
     con.print(f"harvesting {libs} (+{len(extra)} local file(s)) ... this takes a minute")
     path = do_harvest(libs, omc=find_omc(), extra_files=extra, out_path=out)
     n = sum(1 for _ in path.open(encoding="utf-8"))
@@ -157,7 +158,7 @@ def harvest(
 
 #: Next to the harvested catalog, and machine-local like it: both describe what works with
 #: the libraries installed on this machine.
-DEFAULT_MEMORY = Path("out/binding_memory.json")
+DEFAULT_MEMORY = REPO_ROOT / "out" / "binding_memory.json"
 
 
 @app.command("memory")
@@ -321,7 +322,7 @@ def gate(
 
 @app.command()
 def bench(
-    root: Path = typer.Option(Path("benchmarks")),
+    root: Path = typer.Option(REPO_ROOT / "benchmarks"),
     provider: str = typer.Option("auto"),
     only: Optional[str] = typer.Option(None, help="Run just this benchmark"),
 ) -> None:
@@ -441,7 +442,7 @@ def _check_expectations(name, expect, res, card) -> list[str]:
 
 @app.command()
 def models(
-    catalog: Path = typer.Option(Path("out/catalog.jsonl")),
+    catalog: Path = typer.Option(REPO_ROOT / "out" / "catalog.jsonl"),
     base_url: str = typer.Option("http://localhost:11434"),
     only: Optional[str] = typer.Option(None, help="Bench just this model tag"),
 ) -> None:
@@ -645,12 +646,12 @@ def faults(
     target: Path = typer.Argument(..., help="A generated .mo that already compiles"),
     model: str = typer.Option(..., "--model", "-m", help="Fully qualified model to check"),
     library: list[Path] = typer.Option(
-        [Path("modelica/SpecAlive.mo")], "--library", "-l", help="Support .mo files"
+        [REPO_ROOT / "modelica" / "SpecAlive.mo"], "--library", "-l", help="Support .mo files"
     ),
     provider: str = typer.Option("auto", help="auto | local | cloud | replay | none"),
     stop_time: Optional[float] = typer.Option(None, "--stop-time",
                                               help="Also require the model to simulate"),
-    catalog: Path = typer.Option(Path("out/catalog.jsonl")),
+    catalog: Path = typer.Option(REPO_ROOT / "out" / "catalog.jsonl"),
     iterations: int = typer.Option(4, help="Repair budget per fault"),
     out: Optional[Path] = typer.Option(None, "--out", help="Write the matrix as JSON"),
 ) -> None:

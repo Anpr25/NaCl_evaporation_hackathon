@@ -27,7 +27,9 @@ from pathlib import Path
 
 #: The real API, fetched live: https://build.openmodelica.org/Documentation/OpenModelica.Scripting.html
 BASE_URL = "https://build.openmodelica.org/Documentation"
-DEFAULT_CACHE_DIR = Path("out/.omc_docs_cache")
+from ..settings import REPO_ROOT
+
+DEFAULT_CACHE_DIR = REPO_ROOT / "out" / ".omc_docs_cache"
 #: A function name becomes part of a URL and a cache filename; anything else is refused before
 #: either happens, model-supplied or not.
 _VALID_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")

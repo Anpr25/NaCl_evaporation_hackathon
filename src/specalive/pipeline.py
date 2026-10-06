@@ -25,6 +25,7 @@ from .emit.sysml import emit_sysml, round_trip_check
 from .ingest.base import Document
 from .ingest.registry import load_packet, packet_summary
 from .ir.evidence import EvidenceClaim
+from .settings import REPO_ROOT, repo_path
 from .ir.system import SystemModel
 from .ir.validate import validate
 from .ir.assumptions import AssumptionLog
@@ -64,8 +65,10 @@ class PipelineEvent:
 class PipelineConfig:
     packet: Path
     out_dir: Path = Path("out")
-    library_files: list[Path] = field(default_factory=lambda: [Path("modelica/SpecAlive.mo")])
-    catalog: Path = Path("out/catalog.jsonl")
+    #: Shipped with the repo and kept between runs respectively, so anchored to it rather
+    #: than to wherever the command was started (see settings.REPO_ROOT).
+    library_files: list[Path] = field(default_factory=lambda: [REPO_ROOT / "modelica" / "SpecAlive.mo"])
+    catalog: Path = REPO_ROOT / "out" / "catalog.jsonl"
     reference_ir: Path | None = None
     reference_trace: Path | None = None
     package_name: str = "GeneratedPlant"
@@ -402,9 +405,9 @@ class Pipeline:
             ("type", "kind", "class", "modelclass", "role", "name")
         })
         index = None
-        if self.cfg.catalog.exists():
+        if repo_path(self.cfg.catalog).exists():
             try:
-                index = CatalogIndex.from_file(self.cfg.catalog)
+                index = CatalogIndex.from_file(repo_path(self.cfg.catalog))
             except Exception:
                 index = None
         extra, notes = extract_skeleton(
@@ -473,9 +476,9 @@ class Pipeline:
         # ---------------------------------------------------------- 6. Modelica
         yield self._emit("modelica", "start", "binding components and emitting Modelica")
         index = None
-        if cfg.catalog.exists():
+        if repo_path(cfg.catalog).exists():
             try:
-                index = CatalogIndex.from_file(cfg.catalog)
+                index = CatalogIndex.from_file(repo_path(cfg.catalog))
             except Exception as exc:
                 yield self._emit("modelica", "warn", f"catalog unavailable: {exc}")
         source = model
@@ -554,7 +557,7 @@ class Pipeline:
         # `support_files` and `libraries`. Consolidation below may replace all three with
         # the flattened single-file equivalent (no support files, no stdlib load); nothing
         # downstream needs to know which happened.
-        support_files: list[Path] = list(cfg.library_files)
+        support_files: list[Path] = [repo_path(f) for f in cfg.library_files]
         libraries: tuple[str, ...] = ("Modelica",)
 
         if cfg.consolidate:

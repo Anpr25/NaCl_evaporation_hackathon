@@ -21,6 +21,32 @@ from pathlib import Path
 #: Search order for the env file. First hit wins; later files do not override earlier ones.
 CANDIDATES = (".env", ".env.local")
 
+#: The repository root (src/specalive/settings.py -> two levels up from the package).
+#: Everything the code ships with -- config/*.yaml, modelica/SpecAlive.mo, the benchmark
+#: packets -- and the state it keeps between runs -- out/catalog.jsonl,
+#: out/binding_memory.json, .specalive_cache/ -- lives here. Resolving those against the
+#: current directory instead meant that starting the CLI or the web app one folder up
+#: failed in four places at once, and quietly: the catalog read as "not built", the router
+#: found no models.yaml and dropped every cloud tier, .env was never found, and
+#: modelica/SpecAlive.mo raised FileNotFoundError. Assumes the editable install the README
+#: describes (`pip install -e .`), which is the only install this repo supports.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def repo_path(p: str | Path) -> Path:
+    """`p` as given if it is absolute or exists from here; otherwise the repo's copy.
+
+    For paths the code itself names (a shipped config file, the catalog, a preset packet).
+    A path a user typed still works relative to where they typed it -- it is only when that
+    does not exist that the repo is tried -- so this never hides a real file behind the
+    repo's, it only finds the repo's when the caller's directory has none.
+    """
+    p = Path(p)
+    if p.is_absolute() or p.exists():
+        return p
+    return REPO_ROOT / p
+
+
 _loaded: list[str] = []
 
 
@@ -39,7 +65,10 @@ def load_env(start: str | Path | None = None, *, override: bool = False) -> list
         return []
 
     here = Path(start or Path.cwd()).resolve()
-    for directory in (here, *here.parents):
+    # The repo root last: walking up from the current directory never reaches it when the
+    # command was started from a folder ABOVE the repo, and the keys then silently did not
+    # load -- every cloud tier reported down with nothing saying why.
+    for directory in (here, *here.parents, REPO_ROOT):
         for name in CANDIDATES:
             path = directory / name
             if path.is_file():

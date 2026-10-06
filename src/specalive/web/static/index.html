@@ -324,7 +324,10 @@ fetch("/api/health").then(r => r.json()).then(h => {
   $("env").innerHTML =
       chip(h.omc_ok ? "on" : "err", "OpenModelica", h.omc_ok ? h.omc.replace("OpenModelica ", "") : "missing")
     + chip(h.catalog_classes ? "on" : "off", "Catalog", h.catalog_classes ? h.catalog_classes + " classes" : "not built")
-    + chip("on", "Mode", h.provider);
+    + chip("on", "Mode", h.provider)
+    + chip((h.env_files || []).length ? "on" : "off", "API keys",
+           (h.env_files || []).length ? ".env loaded" : "no .env found")
+    + (h.router_error ? chip("err", "Models", esc(h.router_error).slice(0, 90)) : "");
   $("mode").textContent = h.provider;
 
   $("agents").innerHTML = (h.agents || []).map(a => `
@@ -513,7 +516,11 @@ function finish(verdict, d) {
     const name = v.replace(/\\/g, "/").split("/").pop();
     return `<a href="/api/runs/${currentRun(v)}/artifact/${name}" target="_blank">${k}</a>`;
   }).join("");
-  log(`gate: ${title.toLowerCase()}`, tone === "pass" ? "g" : tone === "fail" ? "r" : "y");
+  // The reason goes in the log too, not only in the verdict panel below the fold: a run
+  // refused before it starts ("packet path does not exist ...") used to show nothing here
+  // but "gate: not met", which tells the reader that something failed and not what.
+  log(`gate: ${title.toLowerCase()}${verdict.reason ? " — " + esc(verdict.reason) : ""}`,
+      tone === "pass" ? "g" : tone === "fail" ? "r" : "y");
 }
 
 /* Artifact paths are out/runs/<id>/<file>; recover the id so the links resolve. */

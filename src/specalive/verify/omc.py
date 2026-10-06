@@ -222,9 +222,11 @@ class OmcRunner:
     artefact we can ship for reproducibility.
     """
 
-    def __init__(self, omc: str | None = None, workdir: str | Path = "out/work") -> None:
+    def __init__(self, omc: str | None = None, workdir: str | Path | None = None) -> None:
+        from ..settings import REPO_ROOT
+
         self.omc = find_omc(omc)
-        self.workdir = Path(workdir)
+        self.workdir = Path(workdir) if workdir else REPO_ROOT / "out" / "work"
         self.workdir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ low level
